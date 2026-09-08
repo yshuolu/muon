@@ -1,0 +1,11 @@
+import { useState } from 'react';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
+import type { RetryTaskInput, Task } from '../../shared/domain';
+import { Button } from './ui/button';
+
+export function TaskRecovery({ task, busy, onRetry }: { task: Task; busy: boolean; onRetry: (input: RetryTaskInput) => Promise<boolean> }) {
+  const [mode, setMode] = useState<NonNullable<RetryTaskInput['mode']>>('retry');
+  const [feedback, setFeedback] = useState('');
+  const canFix = ['building', 'verification'].includes(task.phase) && task.plans.at(-1)?.status === 'approved';
+  return <div className="task-recovery"><div className="task-error"><AlertTriangle size={17} /><div><strong>This task needs your help</strong><p>{task.error || 'The previous attempt did not complete.'}</p></div></div><form onSubmit={event => { event.preventDefault(); void onRetry({ mode, feedback: feedback.trim() || undefined }); }}><label className="form-label">Next step<select value={mode} onChange={event => setMode(event.target.value as typeof mode)}><option value="retry">Retry the interrupted or failed step</option>{canFix && <option value="fix">Fix the implementation, then verify again</option>}<option value="replan">Revise the plan for my review</option></select></label><p className="field-hint">{mode === 'retry' ? 'Use after resolving a sign-in, network, or local setup problem. The agent repeats the current step.' : mode === 'fix' ? 'The agent corrects the implementation within your approved plan, then runs verification again.' : 'The agent writes a new RFC. You must approve it before building resumes.'}</p><label className="form-label">{mode === 'retry' ? 'Additional context (optional)' : 'What should the agent address?'}<textarea rows={3} maxLength={20000} placeholder={mode === 'fix' ? 'Describe the failed behavior or test…' : mode === 'replan' ? 'Describe what needs to change in the plan…' : 'Describe what changed since the last attempt…'} value={feedback} onChange={event => setFeedback(event.target.value)} /></label><Button type="submit" variant="secondary" size="sm" disabled={busy}><RotateCcw size={13} />{busy ? 'Queuing…' : mode === 'fix' ? 'Fix and verify' : mode === 'replan' ? 'Request new plan' : 'Retry step'}</Button></form></div>;
+}

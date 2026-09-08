@@ -1,0 +1,54 @@
+{
+  "name": "muon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"tsx watch src/server/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev:server": "tsx watch src/server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx src/server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "npm run build && node --import tsx scripts/browser-live-check.ts",
+    "test:live:codex": "node --import tsx scripts/codex-live-check.ts",
+    "test:live:claude": "node --import tsx scripts/claude-live-check.ts",
+    "test:live:chief": "node --import tsx scripts/chief-live-check.ts",
+    "test:live:dependencies": "node --import tsx scripts/dependency-live-check.ts",
+    "test:watch": "vitest",
+    "demo": "MUON_DEMO=1 npm run dev"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@openai/codex": "^0.153.4",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-slot": "^1.2.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "hono": "^4.9.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.3.1",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.1.12",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "tailwindcss": "^4.1.12",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4"
+  }
+}

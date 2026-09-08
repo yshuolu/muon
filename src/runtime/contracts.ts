@@ -1,0 +1,52 @@
+export type AgentProvider = 'claude' | 'codex';
+export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief';
+
+export interface AgentRequest {
+  provider: AgentProvider;
+  phase: AgentPhase;
+  prompt: string;
+  cwd: string;
+  sessionId?: string;
+  signal?: AbortSignal;
+}
+
+export interface AgentResult {
+  text: string;
+  sessionId?: string;
+}
+
+export interface AgentAdapter {
+  provider: AgentProvider;
+  run(request: AgentRequest): Promise<AgentResult>;
+  available(): Promise<boolean>;
+}
+
+export interface TaskWorkspace {
+  path: string;
+  branch: string;
+  baseCommit: string;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface WorkspaceChanges {
+  format: 'git-patch';
+  baseCommit: string;
+  headCommit: string;
+  sha256: string;
+  patchEncoding: 'utf8' | 'base64';
+  patch: string;
+  files: ChangedFile[];
+}
+
+export interface WorkspaceProvider {
+  validateRepository?(repositoryPath: string): Promise<void>;
+  ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;
+  changedFiles(input: { path: string; baseCommit: string }): Promise<ChangedFile[]>;
+  exportChanges?(input: TaskWorkspace & { maxBytes?: number }): Promise<WorkspaceChanges>;
+}
