@@ -42,6 +42,7 @@ export class JsonProcess {
     args: string[];
     cwd: string;
     signal?: AbortSignal;
+    env?: NodeJS.ProcessEnv;
     onRecord: (value: unknown) => void;
     onFault: (error: Error) => void;
   }) {
@@ -52,6 +53,7 @@ export class JsonProcess {
       windowsHide: true,
       detached: process.platform !== 'win32',
       shell: false,
+      ...(input.env ? { env: { ...process.env, ...input.env } } : {}),
     });
     const fault = (error: Error) => {
       if (!this.stopping) input.onFault(error);

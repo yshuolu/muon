@@ -15,6 +15,12 @@ export interface Plan {
   reviewedAt?: string; reviewedBy?: string; feedback?: string;
   dependencyInputs?: DependencyInput[];
 }
+export interface PlanDiscussionMessage {
+  id: string; role: 'user' | 'assistant'; content: string; createdAt: string;
+  /** The RFC being discussed by the owner, or the new RFC returned with an agent reply. */
+  planId: string;
+  userId?: string;
+}
 export interface Evidence {
   id: string; kind: 'test' | 'screenshot' | 'recording' | 'note'; title: string;
   description: string; result?: 'passed' | 'failed' | 'skipped';
@@ -38,6 +44,7 @@ export interface Task {
   worktree?: { path: string; branch: string; baseCommit: string };
   error?: string;
   runs?: AgentRun[];
+  planDiscussion?: PlanDiscussionMessage[];
   kind?: 'coding' | 'group';
   recovery?: { mode: 'retry' | 'fix' | 'replan'; feedback: string; requestedAt: string };
 }

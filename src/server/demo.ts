@@ -10,10 +10,14 @@ export class DemoAdapter implements AgentAdapter {
       const timer = setTimeout(resolve, 1700);
       request.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Demo run canceled.')); }, { once: true });
     });
-    if (request.phase === 'planning') return { text: '# RFC: A focused, reviewable implementation\n\n> Demo content — no agent has run against your repository.\n\n## Problem\nMake the requested workflow clear, reliable, and easy to verify.\n\n## Proposed approach\nKeep task state in the domain layer, expose it through the local API, and render the final results in the workspace.\n\n## Implementation plan\n1. Extend the domain contract.\n2. Implement the behavior behind its existing interface.\n3. Connect the interface and cover meaningful edge cases.\n\n## Verification\nRun the focused tests and inspect the user flow. Attach observed results and screenshots.\n\n## Risks\nConcurrent updates must preserve the current approval and task state.' };
+    if (request.phase === 'planning') {
+      const result = { text: '# RFC: A focused, reviewable implementation\n\n> Demo content — no agent has run against your repository.\n\n## Problem\nMake the requested workflow clear, reliable, and easy to verify.\n\n## Proposed approach\nKeep task state in the domain layer, expose it through the local API, and render the final results in the workspace.\n\n## Implementation plan\n1. Extend the domain contract.\n2. Implement the behavior behind its existing interface.\n3. Connect the interface and cover meaningful edge cases.\n\n## Verification\nRun the focused tests and inspect the user flow. Attach observed results and screenshots.\n\n## Risks\nConcurrent updates must preserve the current approval and task state.' };
+      if (request.prompt.includes('Return ONLY a JSON object with exactly {\"reply\":')) result.text = JSON.stringify({ reply: 'Demo reply: your comment is saved and a new illustrative RFC is ready. No real agent has run; use the local workspace to discuss your project with Claude or Codex.', content: result.text });
+      return result;
+    }
     if (request.phase === 'building') return { text: 'Demo implementation prepared. No repository files were changed.' };
     if (request.phase === 'verification') return { text: JSON.stringify({ summary: 'Demo workflow completed. These are illustrative results; no real tests were executed.', evidence: [{ kind: 'test', title: 'Illustrative workflow check', description: 'Demo evidence only. No real tests were executed.', result: 'passed', steps: ['Demo: create a task', 'Demo: approve the RFC', 'Demo: inspect the final results'] }] }) };
-    return { text: JSON.stringify({ message: 'This is the demo workspace. I can show how tasks move through planning, approval, and verification. Create a task and enable the dispatcher to try the workflow. Run Muon without `MUON_DEMO=1` to use your local Claude Code and Codex agents.', actions: [] }) };
+    return { text: 'This is the demo workspace. I can show how tasks move through planning, approval, and verification. Create a task and enable the dispatcher to try the workflow. Run Muon without `MUON_DEMO=1` to use your local Claude Code and Codex agents.' };
   }
 }
 export const demoWorkspaces: WorkspaceProvider = {

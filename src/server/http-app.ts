@@ -5,21 +5,17 @@ import { z } from 'zod';
 import { resolve } from 'node:path';
 import { DomainError, ConflictError, type ArtifactStore } from './ports';
 import type { TaskService } from './task-service';
+import type { Task } from '../shared/domain';
+import {
+  chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema,
+  listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema,
+} from '../shared/api-contract';
 
-const priority = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
-const createSchema = z.strictObject({
-  title: z.string().trim().min(1).max(240), description: z.string().max(30_000).optional(),
-  provider: z.enum(['claude', 'codex']).optional(), priority: priority.optional(),
-  status: z.enum(['backlog', 'todo']).optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
-  parentId: z.string().nullable().optional(), blockedByIds: z.array(z.string()).max(100).optional(),
-  kind: z.enum(['coding', 'group']).optional(),
-});
-const editSchema = createSchema.omit({ kind: true }).partial().extend({ status: z.enum(['backlog', 'todo', 'canceled']).optional() });
-const settingsSchema = z.strictObject({
-  maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
-  defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
-});
-export function createHttpApp(service: TaskService, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string } = {}) {
+export interface HttpRequestAccess {
+  authorize(request: Request): void | Promise<void>;
+  observe?(request: Request, response: Response): void | Promise<void>;
+}
+export function createHttpApp(service: TaskService, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string; access?: HttpRequestAccess } = {}) {
   const app = new Hono();
   const hosts = new Set([`127.0.0.1:${options.port ?? 4310}`, `localhost:${options.port ?? 4310}`, '127.0.0.1:5173', 'localhost:5173']);
   app.use('/api/*', async (c, next) => {
@@ -32,7 +28,12 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     }
     if (!['GET', 'HEAD'].includes(c.req.method) && !c.req.header('content-type')?.includes('application/json')) return c.json({ error: 'Use application/json for mutations.' }, 415);
     if (options.ready && !options.ready()) return c.json({ error: 'Muon is starting. Try again shortly.' }, 503);
+    // Body-limit middleware may replace c.req.raw while buffering a stream.
+    // Keep the admitted request identity for the successful-write observer.
+    const accessRequest = c.req.raw;
+    await options.access?.authorize(accessRequest);
     await next();
+    if (c.res.ok) await options.access?.observe?.(accessRequest, c.res);
     c.header('Cache-Control', 'no-store');
     c.header('X-Content-Type-Options', 'nosniff');
   });
@@ -47,23 +48,113 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
   });
   app.get('/api/health', c => c.json({ ok: true }));
   app.get('/api/state', async c => c.json(await service.snapshot()));
-  app.post('/api/tasks', async c => c.json(await service.createTask(createSchema.parse(await c.req.json())), 201));
-  app.patch('/api/tasks/:id', async c => c.json(await service.editTask(c.req.param('id'), editSchema.parse(await c.req.json()))));
+  // All resource lookups use the service's project scope. Identifiers are a convenience;
+  // stable UUIDs remain the canonical references in returned records.
+  const resolveTask = (tasks: Task[], reference: string) => {
+    const task = tasks.find(item => item.id === reference) ?? tasks.find(item => item.identifier.toLowerCase() === reference.toLowerCase());
+    if (!task) throw new DomainError('Task not found.', 404);
+    return task;
+  };
+  const taskByReference = async (reference: string) => resolveTask((await service.snapshot()).tasks, reference);
+  const resolveRelations = async <T extends { parentId?: string | null; blockedByIds?: string[] }>(input: T): Promise<T> => {
+    if (!input.parentId && !input.blockedByIds?.length) return input;
+    const tasks = (await service.snapshot()).tasks;
+    const relationId = (reference: string) => {
+      try { return resolveTask(tasks, reference).id; }
+      catch { throw new DomainError('Related tasks must belong to this project.'); }
+    };
+    return {
+      ...input,
+      ...(input.parentId ? { parentId: relationId(input.parentId) } : {}),
+      ...(input.blockedByIds ? { blockedByIds: input.blockedByIds.map(relationId) } : {}),
+    };
+  };
+  app.get('/api/project', async c => c.json((await service.snapshot()).project));
+  app.get('/api/settings', async c => c.json((await service.snapshot()).settings));
+  app.get('/api/runtime', async c => c.json((await service.snapshot()).runtime));
+  app.get('/api/attention', async c => {
+    const query = listAttentionQuerySchema.parse(c.req.query());
+    const items = (await service.snapshot()).attention;
+    return c.json(query.unread === undefined ? items : items.filter(item => !item.readAt === query.unread));
+  });
+  app.get('/api/chief/messages', async c => c.json((await service.snapshot()).messages));
+  app.get('/api/tasks', async c => {
+    const query = listTasksQuerySchema.parse(c.req.query());
+    const tasks = (await service.snapshot()).tasks;
+    const parentId = query.parentId == null ? query.parentId : resolveTask(tasks, query.parentId).id;
+    const blockedById = query.blockedById ? resolveTask(tasks, query.blockedById).id : undefined;
+    const search = query.search?.toLowerCase();
+    return c.json(tasks.filter(task =>
+      (query.status === undefined || task.status === query.status) &&
+      (parentId === undefined || task.parentId === parentId) &&
+      (blockedById === undefined || task.blockedByIds.includes(blockedById)) &&
+      (query.provider === undefined || task.provider === query.provider) &&
+      (query.kind === undefined || (task.kind ?? 'coding') === query.kind) &&
+      (!search || [task.identifier, task.title, task.description, ...task.labels].some(value => value.toLowerCase().includes(search)))));
+  });
+  app.get('/api/tasks/:id', async c => c.json(await taskByReference(c.req.param('id'))));
+  for (const [resource, property] of [['plans', 'plans'], ['evidence', 'evidence'], ['files', 'changedFiles'], ['activity', 'activity'], ['runs', 'runs']] as const) {
+    app.get(`/api/tasks/:id/${resource}`, async c => c.json((await taskByReference(c.req.param('id')))[property] ?? []));
+  }
+  app.get('/api/tasks/:id/plan-discussion', async c => c.json((await taskByReference(c.req.param('id'))).planDiscussion ?? []));
+  app.get('/api/tasks/:id/subtasks', async c => {
+    const tasks = (await service.snapshot()).tasks;
+    const task = resolveTask(tasks, c.req.param('id'));
+    return c.json(tasks.filter(item => item.parentId === task.id));
+  });
+  app.get('/api/tasks/:id/dependencies', async c => {
+    const tasks = (await service.snapshot()).tasks;
+    const task = resolveTask(tasks, c.req.param('id'));
+    return c.json(task.blockedByIds.map(id => resolveTask(tasks, id)));
+  });
+  const planByReference = async (taskReference: string, planId: string) => {
+    const task = await taskByReference(taskReference);
+    const plan = task.plans.find(item => item.id === planId);
+    if (!plan) throw new DomainError('RFC not found.', 404);
+    return plan;
+  };
+  app.get('/api/tasks/:id/plans/:planId', async c => c.json(await planByReference(c.req.param('id'), c.req.param('planId'))));
+  app.get('/api/tasks/:id/plans/:planId/dependencies/:dependencyId/patch', async c => {
+    const plan = await planByReference(c.req.param('id'), c.req.param('planId'));
+    const reference = c.req.param('dependencyId');
+    const dependency = plan.dependencyInputs?.find(item => item.taskId === reference || item.identifier.toLowerCase() === reference.toLowerCase());
+    if (!dependency) throw new DomainError('RFC dependency snapshot not found.', 404);
+    const data = Buffer.from(dependency.changes.patch, dependency.changes.patchEncoding === 'base64' ? 'base64' : 'utf8');
+    const filename = `${dependency.identifier}-${dependency.changes.sha256.slice(0, 12)}.patch`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    return new Response(data, { headers: {
+      'Content-Type': 'application/octet-stream', 'Content-Length': String(data.byteLength),
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff',
+    } });
+  });
+  app.post('/api/tasks', async c => c.json(await service.createTask(await resolveRelations(createTaskSchema.parse(await c.req.json()))), 201));
+  app.patch('/api/tasks/:id', async c => {
+    const input = editTaskSchema.parse(await c.req.json());
+    return c.json(await service.editTask((await taskByReference(c.req.param('id'))).id, await resolveRelations(input)));
+  });
+  app.post('/api/tasks/:id/cancel', async c => {
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(await service.editTask((await taskByReference(c.req.param('id'))).id, { status: 'canceled' }));
+  });
   app.post('/api/tasks/:id/approve', async c => {
-    const { planId } = z.strictObject({ planId: z.string().min(1) }).parse(await c.req.json());
-    return c.json(await service.approve(c.req.param('id'), planId));
+    const { planId } = reviewSchema.parse(await c.req.json());
+    return c.json(await service.approve((await taskByReference(c.req.param('id'))).id, planId));
   });
   app.post('/api/tasks/:id/request-changes', async c => {
-    const body = z.strictObject({ planId: z.string().min(1), feedback: z.string().trim().min(1).max(20_000) }).parse(await c.req.json());
-    return c.json(await service.requestChanges(c.req.param('id'), body.planId, body.feedback));
+    const body = requestChangesSchema.parse(await c.req.json());
+    return c.json(await service.requestChanges((await taskByReference(c.req.param('id'))).id, body.planId, body.feedback));
+  });
+  app.post('/api/tasks/:id/plan-discussion', async c => {
+    const body = planCommentSchema.parse(await c.req.json());
+    return c.json(await service.commentOnPlan((await taskByReference(c.req.param('id'))).id, body.planId, body.content));
   });
   app.post('/api/tasks/:id/retry', async c => {
-    const input = z.strictObject({ mode: z.enum(['retry', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() }).parse(await c.req.json());
-    return c.json(await service.retry(c.req.param('id'), input));
+    const input = retryTaskSchema.parse(await c.req.json());
+    return c.json(await service.retry((await taskByReference(c.req.param('id'))).id, input));
   });
   app.post('/api/attention/:id/read', async c => { await service.markRead(c.req.param('id')); return c.json({ ok: true }); });
   app.post('/api/chief/messages', async c => {
-    const { content } = z.strictObject({ content: z.string().trim().min(1).max(30_000) }).parse(await c.req.json());
+    const { content } = chiefMessageSchema.parse(await c.req.json());
     return c.json(await service.sendChief(content), 202);
   });
   app.patch('/api/settings', async c => {

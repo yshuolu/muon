@@ -80,3 +80,7 @@ The prerequisite was an independently verified, host-created fixture. The integr
 This run required verification recovery. An optional inline diagnostic command was denied and accurately retained in the earlier evidence; all prior failed runs and evidence remained unchanged. A subsequent attempt exposed a service bug that treated a skipped optional note as a skipped required test. The corrected gate evaluates test evidence, while preserving notes. The final verification reran every required check successfully and disclosed the optional limitation. Required failed or skipped tests still block completion.
 
 See [dependency integration](dependency-integration.md) for the repeatable acceptance and recovery commands.
+
+## REST/CLI chief follow-up
+
+The chief was subsequently migrated from final-response action batches to direct Muon CLI commands against the REST service. Two authenticated turns passed on Claude Code 2.1.265 with the required sandbox and its HTTP proxy. See [system-of-record validation](record-system-validation.md) for exact results, retained records, and authority boundaries. The earlier chief check above documents the implementation at that earlier point.

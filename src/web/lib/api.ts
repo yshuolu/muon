@@ -1,14 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppSnapshot } from '../../shared/domain';
+import { ApiClient } from '../../shared/api-client';
 
+const client = new ApiClient();
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || data?.message || `Request failed (${response.status})`);
-  return data as T;
+  return client.request<T>(path, method, body);
 }
 
 export function useWorkspace() {

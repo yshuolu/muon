@@ -8,6 +8,7 @@ export interface AgentRequest {
   cwd: string;
   sessionId?: string;
   signal?: AbortSignal;
+  chiefCli?: { command: string; apiUrl: string; token: string };
 }
 
 export interface AgentResult {

@@ -8,15 +8,17 @@ import { createHttpApp } from './http-app';
 import { DemoAdapter, demoWorkspaces, seedDemo } from './demo';
 import { LocalIdentityProvider } from './local-identity';
 import { acquireLocalInstance } from './local-instance-lock';
+import { LocalChiefCommands } from './local-chief-commands';
 
 const demo = process.env.MUON_DEMO === '1';
 const port = Number(process.env.PORT ?? 4310);
 const dataRoot = resolve(process.env.MUON_DATA_DIR ?? '.muon', demo ? 'demo' : 'local');
 const releaseInstance = await acquireLocalInstance(dataRoot);
 const scope = new LocalIdentityProvider().currentScope();
+const chiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
 const repository = new SqliteRepository(resolve(dataRoot, 'muon.sqlite'));
 const artifacts = new LocalArtifactStore(resolve(dataRoot, 'artifacts'));
-const service = new TaskService({ scope, repository, artifacts, demo,
+const service = new TaskService({ scope, repository, artifacts, demo, chiefCommands,
   adapters: demo ? { claude: new DemoAdapter('claude'), codex: new DemoAdapter('codex') } : {
     claude: new ClaudeCodeAdapter(process.env.MUON_CLAUDE_EXECUTABLE, {
       allowedNetworkDomains: process.env.MUON_CLAUDE_ALLOWED_DOMAINS?.split(',').map(domain => domain.trim()).filter(Boolean),
@@ -27,7 +29,7 @@ const service = new TaskService({ scope, repository, artifacts, demo,
   workspaces: demo ? demoWorkspaces : new LocalWorktreeProvider(resolve(dataRoot, 'worktrees')),
 });
 let ready = false;
-const app = createHttpApp(service, artifacts, { port, ready: () => ready });
+const app = createHttpApp(service, artifacts, { port, ready: () => ready, access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
   void (async () => {
     await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, name: demo ? 'Muon' : 'My project', identifier: 'MUO', repositoryPath: demo ? '/demo/project' : process.env.MUON_REPOSITORY_PATH ?? '', ownerUserId: scope.userId }, { maxConcurrentAgents: 2, dispatcherEnabled: !demo, defaultProvider: 'claude' });

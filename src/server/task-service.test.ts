@@ -1,10 +1,12 @@
-import { setImmediate } from 'node:timers/promises';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
 import type { Scope, Settings, Task } from '../shared/domain';
 import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService, type ServiceOptions } from './task-service';
+import { createHttpApp } from './http-app';
+import { LocalChiefCommands } from './local-chief-commands';
 
 interface ControlledCall {
   request: AgentRequest;
@@ -45,6 +47,7 @@ interface Fixture {
   options: ServiceOptions;
   workspaces: WorkspaceProvider;
   artifacts: ArtifactStore;
+  app: ReturnType<typeof createHttpApp>;
 }
 const fixtures: Fixture[] = [];
 
@@ -65,10 +68,12 @@ async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
     importFile: vi.fn(async () => '/api/artifacts/actual-screenshot.png'),
     read: vi.fn(async () => undefined),
   };
-  const options = { scope, repository: repo, artifacts, workspaces, adapters: { claude, codex } };
+  const commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
+  const options = { scope, repository: repo, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands };
   const service = new TaskService(options);
   await service.initialize();
-  const result = { repo, service, claude, codex, options, workspaces, artifacts };
+  const app = createHttpApp(service, artifacts, { access: commands });
+  const result = { repo, service, claude, codex, options, workspaces, artifacts, app };
   fixtures.push(result);
   return result;
 }
@@ -83,9 +88,10 @@ afterEach(async () => {
 });
 
 async function eventually(predicate: () => boolean | Promise<boolean>, description: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
     if (await predicate()) return;
-    await setImmediate();
+    await delay(5);
   }
   throw new Error(`Did not observe ${description}`);
 }
@@ -107,6 +113,16 @@ async function waitForState(fixture: Fixture, taskId: string, status: Task['stat
     return task.status === status && (!phase || task.phase === phase);
   }, `${status}${phase ? ` / ${phase}` : ''}`);
   return fixture.service.getTask(taskId);
+}
+async function chiefRequest<T = Task>(fixture: Fixture, call: ControlledCall, path: string, method: string, body: unknown, status = 200): Promise<T> {
+  expect(call.request.chiefCli?.token).toBeTruthy();
+  const response = await fixture.app.request(`http://127.0.0.1:4310/api${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${call.request.chiefCli!.token}` },
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(status);
+  return response.json() as Promise<T>;
 }
 const verification = (result: 'passed' | 'failed' | 'skipped') => JSON.stringify({
   summary: `Regression check ${result}`,
@@ -225,7 +241,7 @@ describe('TaskService workflow', () => {
     await Promise.all(Array.from({ length: 25 }, () => f.service.tick()));
     expect(f.claude.calls).toHaveLength(2);
     expect((await f.service.snapshot()).runtime).toMatchObject({ activeRuns: 2, chiefRunning: true });
-    chief.finish(JSON.stringify({ message: 'The project is organized.', actions: [] }));
+    chief.finish('The project is organized.');
     await waitForCall(f, 2, 'planning');
     expect((await f.service.snapshot()).runtime).toMatchObject({ activeRuns: 2, chiefRunning: false });
     expect((await f.repo.messages(scope)).map(item => item.content)).toEqual(['Organize the project', 'The project is organized.']);
@@ -235,28 +251,24 @@ describe('TaskService workflow', () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Prioritize this', status: 'backlog', priority: 4 });
     await f.service.sendChief('Make this task urgent');
-    (await waitForCall(f, 0, 'chief')).finish(JSON.stringify({
-      message: 'Moved the task to urgent priority.',
-      actions: [{ type: 'update_task', taskId: task.id, priority: 1 }],
-    }));
-    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief action applied');
+    const chief = await waitForCall(f, 0, 'chief');
+    await chiefRequest(f, chief, `/tasks/${task.id}`, 'PATCH', { priority: 1 });
+    chief.finish('Moved the task to urgent priority.');
+    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief result saved');
     expect(await f.service.getTask(task.id)).toMatchObject({ priority: 1, status: 'backlog', phase: 'idle' });
     const response = (await f.repo.messages(scope)).at(-1)!;
     expect(response.taskIds).toEqual([task.id]);
     expect(response.content).not.toContain('could not be applied');
   });
 
-  it('creates a parent and linked child from references in a single chief result', async () => {
+  it('creates a parent and linked child using IDs returned by the REST record API', async () => {
     const f = await fixture(2);
     await dispatch(f);
     await f.service.sendChief('Break the feature into a parent task and implementation task');
-    (await waitForCall(f, 0, 'chief')).finish(JSON.stringify({
-      message: 'Created the feature and its implementation task.',
-      actions: [
-        { type: 'create_task', kind: 'group', ref: 'feature', title: 'Feature outcome', status: 'todo' },
-        { type: 'create_task', title: 'Implement the feature', parentId: '@feature', status: 'todo' },
-      ],
-    }));
+    const chief = await waitForCall(f, 0, 'chief');
+    const createdGroup = await chiefRequest(f, chief, '/tasks', 'POST', { kind: 'group', title: 'Feature outcome', status: 'todo' }, 201);
+    await chiefRequest(f, chief, '/tasks', 'POST', { title: 'Implement the feature', parentId: createdGroup.id, status: 'todo' }, 201);
+    chief.finish('Created the feature and its implementation task.');
     await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief task decomposition');
     const tasks = await f.repo.tasks(scope);
     expect(tasks).toHaveLength(2);
@@ -270,6 +282,30 @@ describe('TaskService workflow', () => {
     expect((await f.repo.messages(scope)).at(-1)).toMatchObject({ taskIds: [parent.id, child.id] });
   });
 
+  it('never executes task actions embedded in a chief final response', async () => {
+    const f = await fixture();
+    await f.service.sendChief('Discuss task organization');
+    const chief = await waitForCall(f, 0, 'chief');
+    const text = JSON.stringify({ message: 'Only text.', actions: [{ type: 'create_task', title: 'Must not be created', status: 'todo' }] });
+    chief.finish(text);
+    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'display-only chief response');
+    expect(await f.repo.tasks(scope)).toEqual([]);
+    expect((await f.repo.messages(scope)).at(-1)).toMatchObject({ content: text, taskIds: [] });
+  });
+
+  it('retains successful REST mutations if the chief provider fails before its final result', async () => {
+    const f = await fixture();
+    await f.service.sendChief('Prepare the release backlog');
+    const chief = await waitForCall(f, 0, 'chief');
+    const task = await chiefRequest(f, chief, '/tasks', 'POST', { title: 'Persist before final response', status: 'backlog' }, 201);
+    chief.fail(new Error('Provider disconnected'));
+    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'failed chief cleanup');
+    expect(await f.service.getTask(task.id)).toMatchObject({ title: 'Persist before final response', status: 'backlog' });
+    expect((await f.repo.messages(scope)).at(-1)).toMatchObject({ content: expect.stringContaining('Any task changes already saved through the CLI are retained.'), taskIds: [task.id] });
+    await chiefRequest(f, chief, '/tasks', 'POST', { title: 'Expired session cannot write', status: 'backlog' }, 401);
+    expect(await f.repo.tasks(scope)).toHaveLength(1);
+  });
+
   it('regenerates an RFC from review feedback and requires approval of the new revision', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Iterate on the proposal' });
@@ -279,8 +315,8 @@ describe('TaskService workflow', () => {
     await f.service.requestChanges(task.id, firstReview.plans[0].id, 'Include keyboard navigation and accessibility tests.');
     const replanning = await waitForCall(f, 1, 'planning');
     expect(replanning.request.prompt).toContain('Include keyboard navigation and accessibility tests.');
-    expect(replanning.request.sessionId).toBeUndefined();
-    replanning.finish('# RFC v2\nIncludes keyboard navigation and accessibility tests.');
+    expect(replanning.request.sessionId).toBe(firstReview.sessionId);
+    replanning.finish(JSON.stringify({ reply: 'Added keyboard navigation and accessibility coverage to the plan.', content: '# RFC v2\nIncludes keyboard navigation and accessibility tests.' }));
     const secondReview = await waitForState(f, task.id, 'in_review');
     expect(secondReview.plans.map(plan => [plan.version, plan.status])).toEqual([[1, 'changes_requested'], [2, 'pending']]);
     expect(secondReview.plans[1].id).not.toBe(secondReview.plans[0].id);
@@ -288,6 +324,164 @@ describe('TaskService workflow', () => {
     expect(f.claude.calls.filter(call => call.request.phase === 'building')).toHaveLength(0);
     await f.service.approve(task.id, secondReview.plans[1].id);
     expect((await waitForCall(f, 2, 'building')).request.prompt).toContain('Includes keyboard navigation and accessibility tests.');
+  });
+
+  it('keeps multiple owner and agent review turns with full context, versions, session, and worktree', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Accessible counter' });
+    await dispatch(f);
+    const initial = await waitForCall(f, 0, 'planning');
+    initial.finish('# RFC v1\nA counter with increment and reset controls.');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.service.commentOnPlan(task.id, first.plans[0].id, '  How will keyboard users reset the counter?  ');
+    const revision = await waitForCall(f, 1, 'planning');
+    expect(revision.request.sessionId).toBe(first.sessionId);
+    expect(revision.request.cwd).toBe(initial.request.cwd);
+    expect(revision.request.prompt).toContain('A counter with increment and reset controls.');
+    expect(revision.request.prompt).toContain('How will keyboard users reset the counter?');
+    revision.finish(JSON.stringify({ reply: 'The Reset button is reachable with Tab and activates with Enter or Space.', content: '# RFC v2\nUse a native Reset button with visible keyboard focus and Enter/Space activation.' }));
+    const second = await waitForState(f, task.id, 'in_review', 'plan_review');
+    expect(second.planDiscussion).toMatchObject([
+      { role: 'user', content: 'How will keyboard users reset the counter?', planId: first.plans[0].id, userId: scope.userId },
+      { role: 'assistant', content: 'The Reset button is reachable with Tab and activates with Enter or Space.', planId: second.plans[1].id },
+    ]);
+    await f.service.commentOnPlan(task.id, second.plans[1].id, 'Also announce the reset value to screen readers.');
+    const another = await waitForCall(f, 2, 'planning');
+    expect(another.request.sessionId).toBe(second.sessionId);
+    expect(another.request.cwd).toBe(initial.request.cwd);
+    for (const fragment of ['How will keyboard users reset the counter?', 'The Reset button is reachable with Tab', 'Also announce the reset value', 'Use a native Reset button with visible keyboard focus']) expect(another.request.prompt).toContain(fragment);
+    another.finish(JSON.stringify({ reply: 'Added a polite live region that announces the value after reset, while preserving keyboard behavior.', content: '# RFC v3\nNative Reset button, visible focus, Enter/Space activation, and a polite live region announcing the reset value.' }));
+    const third = await waitForState(f, task.id, 'in_review', 'plan_review');
+    expect(third.planDiscussion?.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(third.planDiscussion?.slice(0, 2)).toEqual(second.planDiscussion);
+    expect(new Set(third.planDiscussion?.map(message => message.id)).size).toBe(4);
+    expect(third.plans.map(plan => [plan.version, plan.status])).toEqual([[1, 'changes_requested'], [2, 'changes_requested'], [3, 'pending']]);
+    expect(third.plans[0].content).toBe(first.plans[0].content);
+    expect(third.plans[1].content).toBe(second.plans[1].content);
+    expect(third.worktree).toEqual(first.worktree);
+    expect((await f.repo.task(scope, task.id))?.planDiscussion).toEqual(third.planDiscussion);
+    expect(f.claude.calls.every(call => call.request.phase === 'planning')).toBe(true);
+    await expect(f.service.approve(task.id, first.plans[0].id)).rejects.toMatchObject({ status: 409 });
+    await expect(f.service.commentOnPlan(task.id, second.plans[1].id, 'Stale comment')).rejects.toMatchObject({ status: 409 });
+    await f.service.approve(task.id, third.plans[2].id);
+    const build = await waitForCall(f, 3, 'building');
+    expect(build.request.prompt).toContain('polite live region announcing the reset value');
+    expect(build.request.sessionId).toBe(third.sessionId);
+    expect((await f.service.getTask(task.id)).planDiscussion).toEqual(third.planDiscussion);
+  });
+
+  it('retains an unanswered review comment on malformed agent output and retries with the same context', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Recover review discussion' });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'planning')).finish('# Original RFC\nUse a native control.');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.service.commentOnPlan(task.id, first.plans[0].id, 'Explain the focus behavior.');
+    (await waitForCall(f, 1, 'planning')).finish('# Revised RFC without the required answer envelope');
+    const failed = await waitForState(f, task.id, 'blocked', 'planning');
+    expect(failed.planDiscussion).toMatchObject([{ role: 'user', content: 'Explain the focus behavior.' }]);
+    expect(failed.plans).toHaveLength(1);
+    expect(failed.plans[0].status).toBe('changes_requested');
+    expect(failed.error).toContain('Your comment is saved');
+    await expect(f.service.approve(task.id, first.plans[0].id)).rejects.toMatchObject({ status: 409 });
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'failed revision releasing capacity');
+    await f.service.retry(task.id);
+    const retry = await waitForCall(f, 2, 'planning');
+    expect(retry.request.prompt).toContain('Explain the focus behavior.');
+    expect(retry.request.prompt).toContain('Use a native control.');
+    expect(retry.request.prompt).toContain('exactly {"reply"');
+    retry.finish(JSON.stringify({ reply: 'Focus stays on the triggering control after the value changes.', content: '# Revised RFC\nUse a native control and preserve focus after changes.' }));
+    const recovered = await waitForState(f, task.id, 'in_review', 'plan_review');
+    expect(recovered.planDiscussion?.[0]).toEqual(failed.planDiscussion?.[0]);
+    expect(recovered.planDiscussion?.map(message => message.role)).toEqual(['user', 'assistant']);
+    expect(recovered.plans).toHaveLength(2);
+    expect(recovered.runs?.map(run => run.status)).toEqual(['succeeded', 'failed', 'succeeded']);
+    expect(f.claude.calls.some(call => call.request.phase === 'building')).toBe(false);
+  });
+
+  it('validates owner comments and rejects mid-revision, approved, canceled, and missing RFCs', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Review gates' });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'planning')).finish('# Original RFC');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    for (const content of [' ', 'x'.repeat(20_001)]) await expect(f.service.commentOnPlan(task.id, first.plans[0].id, content)).rejects.toMatchObject({ status: 400 });
+    const nonOwner = new TaskService({ ...f.options, scope: { ...scope, userId: 'someone-else' } });
+    await expect(nonOwner.commentOnPlan(task.id, first.plans[0].id, 'Unapproved reviewer')).rejects.toMatchObject({ status: 403 });
+    await expect(f.service.commentOnPlan('missing', first.plans[0].id, 'Missing task')).rejects.toMatchObject({ status: 404 });
+    await expect(f.service.commentOnPlan(task.id, 'missing', 'Missing plan')).rejects.toMatchObject({ status: 409 });
+    expect((await f.service.getTask(task.id)).planDiscussion).toEqual([]);
+    await f.service.commentOnPlan(task.id, first.plans[0].id, 'Make the tests explicit.');
+    const revision = await waitForCall(f, 1, 'planning');
+    await expect(f.service.commentOnPlan(task.id, first.plans[0].id, 'Cannot append while revising')).rejects.toMatchObject({ status: 409 });
+    await expect(f.service.approve(task.id, first.plans[0].id)).rejects.toMatchObject({ status: 409 });
+    revision.finish(JSON.stringify({ reply: 'Listed the exact regression checks.', content: '# Revised RFC\nRun focused regression checks.' }));
+    const second = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.repo.saveSettings(scope, { ...await f.repo.settings(scope), dispatcherEnabled: false });
+    await f.service.approve(task.id, second.plans[1].id);
+    await expect(f.service.commentOnPlan(task.id, second.plans[1].id, 'Cannot change approved scope')).rejects.toMatchObject({ status: 409 });
+    await f.service.editTask(task.id, { status: 'canceled' });
+    await expect(f.service.commentOnPlan(task.id, second.plans[1].id, 'Cannot revise canceled work')).rejects.toMatchObject({ status: 409 });
+    expect((await f.service.getTask(task.id)).planDiscussion).toEqual(second.planDiscussion);
+  });
+
+  it('atomically admits one simultaneous comment and protects it from a racing approval', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Concurrent review' });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'planning')).finish('# Original RFC');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.repo.saveSettings(scope, { ...await f.repo.settings(scope), dispatcherEnabled: false });
+    const comments = await Promise.allSettled([
+      f.service.commentOnPlan(task.id, first.plans[0].id, 'Add keyboard tests.'),
+      f.service.commentOnPlan(task.id, first.plans[0].id, 'Add screen reader tests.'),
+    ]);
+    expect(comments.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(comments.filter(result => result.status === 'rejected')).toHaveLength(1);
+    const saved = await f.service.getTask(task.id);
+    expect(saved.planDiscussion).toHaveLength(1);
+    expect(saved).toMatchObject({ status: 'todo', phase: 'planning', plans: [{ status: 'changes_requested' }] });
+    await expect(f.service.approve(task.id, first.plans[0].id)).rejects.toMatchObject({ status: 409 });
+    await dispatch(f);
+    (await waitForCall(f, 1, 'planning')).finish(JSON.stringify({ reply: 'Included the requested checks.', content: '# Revised RFC\nInclude those checks.' }));
+    const second = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.repo.saveSettings(scope, { ...await f.repo.settings(scope), dispatcherEnabled: false });
+    const race = await Promise.allSettled([
+      f.service.commentOnPlan(task.id, second.plans[1].id, 'One more clarification.'),
+      f.service.approve(task.id, second.plans[1].id),
+    ]);
+    expect(race.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(race.filter(result => result.status === 'rejected')).toHaveLength(1);
+    const winner = await f.service.getTask(task.id);
+    if (race[0].status === 'fulfilled') {
+      expect(winner.phase).toBe('planning');
+      expect(winner.plans.at(-1)?.status).toBe('changes_requested');
+      expect(winner.planDiscussion?.at(-1)?.content).toBe('One more clarification.');
+    } else {
+      expect(winner.phase).toBe('building');
+      expect(winner.plans.at(-1)?.status).toBe('approved');
+      expect(winner.planDiscussion).toEqual(second.planDiscussion);
+    }
+  });
+
+  it('ignores a late revision reply after cancellation while retaining the owner conversation', async () => {
+    const f = await fixture();
+    f.claude.ignoreAbort = true;
+    const task = await f.service.createTask({ title: 'Canceled discussion' });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'planning')).finish('# Original RFC');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    await f.service.commentOnPlan(task.id, first.plans[0].id, 'Clarify the plan.');
+    const revision = await waitForCall(f, 1, 'planning');
+    await f.service.editTask(task.id, { status: 'canceled' });
+    revision.finish(JSON.stringify({ reply: 'A late reply', content: '# Late revised RFC' }));
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'canceled revision released');
+    const saved = await f.service.getTask(task.id);
+    expect(saved.status).toBe('canceled');
+    expect(saved.plans).toHaveLength(1);
+    expect(saved.planDiscussion).toMatchObject([{ role: 'user', content: 'Clarify the plan.' }]);
+    expect(saved.planDiscussion).toHaveLength(1);
+    expect(await f.repo.attention(scope)).toEqual([]);
   });
 
   it.each(['passed', 'failed', 'skipped'] as const)('retains %s verification evidence and reports the correct terminal outcome', async result => {
@@ -468,16 +662,18 @@ describe('TaskService workflow', () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Original task', status: 'backlog' });
     await f.service.sendChief('Refine the task, assign Codex, and organize it under a group with a prerequisite');
-    (await waitForCall(f, 0, 'chief')).finish(JSON.stringify({ message: 'Prepared the task organization.', actions: [
-      { type: 'create_task', kind: 'group', ref: 'feature', title: 'Feature group', status: 'backlog' },
-      { type: 'create_task', ref: 'dependency', title: 'Prerequisite', status: 'backlog' },
-      { type: 'update_task', taskId: task.id, title: 'Refined task', description: 'Includes testable acceptance criteria.', priority: 2, provider: 'codex', labels: ['ui', 'accessibility'], parentId: '@feature', blockedByIds: ['@dependency'] },
-    ] }));
+    const chief = await waitForCall(f, 0, 'chief');
+    const group = await chiefRequest(f, chief, '/tasks', 'POST', { kind: 'group', title: 'Feature group', status: 'backlog' }, 201);
+    const prerequisite = await chiefRequest(f, chief, '/tasks', 'POST', { title: 'Prerequisite', status: 'backlog' }, 201);
+    await chiefRequest(f, chief, `/tasks/${task.id}`, 'PATCH', { title: 'Refined task', description: 'Includes testable acceptance criteria.', priority: 2, provider: 'codex', labels: ['ui', 'accessibility'], parentId: group.id, blockedByIds: [prerequisite.id] });
+    chief.finish('Prepared the task organization.');
     await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'full chief task management');
     const tasks = await f.repo.tasks(scope);
     expect(await f.service.getTask(task.id)).toMatchObject({ title: 'Refined task', description: 'Includes testable acceptance criteria.', priority: 2, provider: 'codex', labels: ['ui', 'accessibility'], parentId: tasks.find(item => item.title === 'Feature group')!.id, blockedByIds: [tasks.find(item => item.title === 'Prerequisite')!.id], status: 'backlog' });
     await f.service.sendChief('Remove labels, parent, and dependencies from the refined task');
-    (await waitForCall(f, 1, 'chief')).finish(JSON.stringify({ message: 'Removed those relations.', actions: [{ type: 'update_task', taskId: task.id, labels: [], parentId: null, blockedByIds: [] }] }));
+    const followup = await waitForCall(f, 1, 'chief');
+    await chiefRequest(f, followup, `/tasks/${task.id}`, 'PATCH', { labels: [], parentId: null, blockedByIds: [] });
+    followup.finish('Removed those relations.');
     await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief relation removal');
     expect(await f.service.getTask(task.id)).toMatchObject({ title: 'Refined task', parentId: null, labels: [], blockedByIds: [], provider: 'codex' });
   });
@@ -489,10 +685,10 @@ describe('TaskService workflow', () => {
     (await waitForCall(f, 0, 'planning')).finish('# RFC\nOriginal approved scope.');
     await waitForState(f, task.id, 'in_review');
     await f.service.sendChief('Change the request and cancel the task');
-    (await waitForCall(f, 1, 'chief')).finish(JSON.stringify({ message: 'Processed the requested changes.', actions: [
-      { type: 'update_task', taskId: task.id, description: 'Scope expansion without review' },
-      { type: 'cancel_task', taskId: task.id },
-    ] }));
+    const chief = await waitForCall(f, 1, 'chief');
+    const rejected = await chiefRequest<{ error: string }>(f, chief, `/tasks/${task.id}`, 'PATCH', { description: 'Scope expansion without review' }, 400);
+    await chiefRequest(f, chief, `/tasks/${task.id}/cancel`, 'POST', {});
+    chief.finish(`Canceled the task. The attempted edit was rejected: ${rejected.error}`);
     await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief cancellation');
     expect(await f.service.getTask(task.id)).toMatchObject({ status: 'canceled', description: '' });
     expect((await f.repo.messages(scope)).at(-1)?.content).toContain('Only unstarted coding tasks');

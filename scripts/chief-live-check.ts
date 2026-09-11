@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { serve } from '@hono/node-server';
+import { once } from 'node:events';
+import { LocalChiefCommands } from '../src/server/local-chief-commands.js';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -27,13 +30,17 @@ const scope = { workspaceId: 'chief-live', projectId: 'arithmetic', userId: 'own
 const repository = new SqliteRepository(join(directory, 'muon.sqlite'));
 const artifacts = new LocalArtifactStore(join(directory, 'artifacts'));
 await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Arithmetic fixture', identifier: 'CHK', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
-const service = new TaskService({ scope, repository, artifacts, workspaces: new LocalWorktreeProvider(join(directory, 'worktrees')), adapters: { claude: new ClaudeCodeAdapter(), codex: new CodexAdapter() } });
+const port = Number(process.env.MUON_CHIEF_TEST_PORT ?? 4333);
+const chiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
+const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(directory, 'worktrees')), adapters: { claude: new ClaudeCodeAdapter(), codex: new CodexAdapter() } });
 await service.initialize();
-const app = createHttpApp(service, artifacts);
+const app = createHttpApp(service, artifacts, { port, access: chiefCommands });
+const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
+await once(server, 'listening');
 console.log(`Live chief validation directory: ${directory}`);
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await app.request(`http://localhost:4310${path}`, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   assert.ok(response.ok, `HTTP ${response.status}: ${await response.clone().text()}`);
   return response.json() as Promise<T>;
 }
@@ -63,7 +70,7 @@ async function chief(content: string): Promise<AppSnapshot> {
 try {
   const existing = await request<Task>('/api/tasks', 'POST', { title: 'Existing backlog task', description: 'A task that the chief must update.', status: 'backlog', priority: 4 });
   console.log('Asking real Claude chief to decompose work and edit an existing task.');
-  const first = await chief(`Organize this work now; do not implement files or enable the dispatcher. Create one organizational group titled "Arithmetic feature" and exactly two coding subtasks under it: "Implement addition" and "Test addition". Set both subtasks to Todo with provider Claude and label "arithmetic". Implement addition should describe adding a numerical add(a,b) export. Test addition should depend on Implement addition and describe positive, negative, and decimal regression coverage in its own task worktree, including integration of the dependency change if required. Also update existing task ${existing.identifier} (${existing.id}): rename it to "Review arithmetic requirements", change priority to high, and set its labels to ["review"], keeping it in Backlog. Return the results through your normal task actions.`);
+  const first = await chief(`Organize this work now; do not implement files or enable the dispatcher. Create one organizational group titled "Arithmetic feature" and exactly two coding subtasks under it: "Implement addition" and "Test addition". Set both subtasks to Todo with provider Claude and label "arithmetic". Implement addition should describe adding a numerical add(a,b) export. Test addition should depend on Implement addition and describe positive, negative, and decimal regression coverage in its own task worktree, including integration of the dependency change if required. Also update existing task ${existing.identifier} (${existing.id}): rename it to "Review arithmetic requirements", change priority to high, and set its labels to ["review"], keeping it in Backlog. Perform the task changes through your Muon CLI, then summarize the saved results.`);
   assert.equal(first.tasks.length, 4);
   const group = first.tasks.find(task => task.title === 'Arithmetic feature')!;
   const implementation = first.tasks.find(task => task.title === 'Implement addition')!;
@@ -118,4 +125,5 @@ try {
 } finally {
   await service.stop();
   repository.close();
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }

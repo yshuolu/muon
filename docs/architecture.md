@@ -7,7 +7,11 @@ This document describes the shipped initial implementation. The Linear product s
 ```mermaid
 flowchart LR
   Owner[Local owner] --> UI[React workspace]
-  UI --> HTTP[Hono API]
+  UI --> HTTP[Hono REST API]
+  Owner --> CLI[Muon CLI]
+  Chief[Local Claude chief] --> CLI
+  CLI --> HTTP
+  Cloud[Future cloud chief] -. authenticated REST .-> HTTP
   HTTP --> Service[Task service and dispatcher]
   Service --> Repository[Repository port]
   Repository --> SQLite[SQLite]
@@ -20,7 +24,7 @@ flowchart LR
   Artifacts --> Files[Managed local evidence files]
 ```
 
-The domain contracts live in `src/shared/domain.ts`. HTTP clients see the same task records in list, board, detail, attention, and chief task links. No provider protocol frame is sent to React.
+The domain records live in `src/shared/domain.ts`, request schemas in `src/shared/api-contract.ts`, and the browser/CLI HTTP client in `src/shared/api-client.ts`. The server is the system of record; clients have no SQLite or TaskService dependency. The resource contract and command surface are documented in [REST API](rest-api.md) and [CLI](cli.md). HTTP clients see the same task records in list, board, detail, attention, and chief task links. No provider protocol frame is sent to React.
 
 ## Task and approval model
 
@@ -32,7 +36,7 @@ Every task has a UUID, a project-local readable identifier, workspace/project sc
 
 Groups are organizational containers. Reconciliation walks nested groups and dependencies, completes only a nonempty all-Done set, and reopens a completed group when new unfinished children appear. Groups never dispatch agents, fabricate RFC approval, or generate test evidence. A coding parent still executes its own RFC/build/verification lifecycle after its children finish. Dependency results and immutable change snapshots are supplied to integration tasks; their implementations are not automatically merged.
 
-Plans preserve their content and version. A review updates decision metadata on that revision; it does not overwrite the document. Approval checks the fixed local actor against the owner, requires the latest pending revision ID, and uses optimistic task versioning. An agent cannot authorize implementation by emitting an approved status. Feedback creates a new planning attempt and later a fresh pending revision.
+Plans preserve their content and version. A review updates decision metadata on that revision; it does not overwrite the document. Approval checks the fixed local actor against the owner, requires the latest pending revision ID, and uses optimistic task versioning. An agent cannot authorize implementation by emitting an approved status. Each owner comment is a durable discussion message tied to the reviewed revision. It invalidates that pending review and queues a new planning attempt using the same provider session and worktree. The agent receives the complete discussion and latest RFC and returns a validated reply plus a complete revised RFC; these are saved atomically as an assistant message and a new pending revision. A malformed response blocks the task and retains the comment for retry. Comments and approval are rejected during revision, against old versions, or after approval. The REST discussion resource and CLI expose the same records as the UI.
 
 Run records capture each coding attempt's phase, provider, start/end, session ID, result status, and associated plan. Evidence records carry the verification run ID so the UI can separate current results from historical failures. Tasks retain earlier RFCs, evidence, final summaries, and milestones. Task cancellation invalidates the active run ID before a late result can be applied; retained changed files are refreshed after the process stops.
 
@@ -50,11 +54,15 @@ This is a single-coordinator implementation. Distributed lease heartbeats and a 
 
 ## Chief of staff
 
-The chief calls the same `ClaudeCodeAdapter.run` contract with phase `chief`, read-only project access, task context, and recent final conversation. Its final JSON is schema-validated before mutations. It creates coding tasks and groups, edits eligible task metadata and relations, queues and prioritizes work, cancels tasks, and requests retry/fix/replan recovery. References such as `@feature` let later actions attach children, dependencies, and updates to tasks created earlier in the same result. Its default decomposition creates a group plus independently reviewed coding subtasks; final integration, when needed, is a separate dependent coding task.
+The chief uses `ClaudeCodeAdapter.run` with phase `chief`, a read-only project, recent final conversation, and a per-run CLI capability. It reads current records and performs task operations through `muon` commands. Each command calls the REST API; normal domain validation and persistence happen before the command returns. The final Markdown is display-only and cannot execute an action, even if it contains JSON.
 
-Applying a result pauses new dispatch selection until the action batch ends so a new parent cannot start before its children are attached. Each action goes through task domain validation. Successful task IDs and failed action explanations accompany the final response. Actions are individually persisted, not one all-or-nothing transaction. Crash recovery does not replay an unfinished chief batch.
+`LocalChiefCommands` implements `ChiefCommandGateway` and the HTTP authorization/observation hook. It issues a short-lived scoped bearer credential and a read-only temporary executable that pins the API origin and credential. Caller environment overrides cannot turn that executable into an owner client. The Claude Bash allowlist permits the supplied executable, keeps source writes denied, and allows only the loopback API host/port through the required sandbox. The CLI honors the sandbox HTTP proxy. Other commands, unsandboxed retries, hooks, and MCP tools are unavailable.
 
-Submission atomically persists the user message and claims the single pending chief request, preventing concurrent requests from overwriting one another. The chief uses existing messages as context; it starts a fresh provider session per request in this version. It cannot approve plans, fabricate completion state, or edit the database directly through its available tools.
+The API grants the chief task reads, creation, eligible edits, cancellation, and recovery. It rejects RFC approvals, owner review feedback, settings, attention acknowledgements, and recursive chief requests. Unknown, expired, and canceled tokens never fall back to owner authority. The local owner UI/CLI still trusts loopback access on this machine; this is not a hostile-process or multiuser isolation boundary. Cloud hosting must supply authenticated identities, membership checks, request-specific scopes, and its deployment boundary.
+
+Successful REST mutations journal affected task IDs for links in the chief's final reply. A request admitted before revocation can finish and is still recorded; subsequent requests are rejected. Applied changes survive an agent failure or interrupted final reply. There is no hidden action batch and no replay of partially completed work. For decomposition, the chief creates linked Backlog tasks first, then queues them, because the dispatcher can pick up Todo work immediately.
+
+Submission atomically persists the user message and claims one pending chief request. Chief runs share the coding concurrency limit and start fresh provider sessions. Cancellation and shutdown revoke credentials, clean up the temporary launcher, and preserve already saved records. The server rechecks shutdown after asynchronously creating the command session, before launching a provider.
 
 ## Replaceable subsystems
 
@@ -65,6 +73,8 @@ Submission atomically persists the user message and claims the single pending ch
 | `WorkspaceProvider` | `LocalWorktreeProvider` | Remote checkout/container provider; return worker-local workspace references |
 | `ArtifactStore` | `LocalArtifactStore` | Object storage with authorized asset delivery |
 | `IdentityProvider` | `LocalIdentityProvider` | Request identity/session and project membership provider |
+| `ChiefCommandGateway` | Scoped per-run local CLI executable and credential | Remote worker capability issuance using the same REST resource contract |
+| `HttpRequestAccess` | Local chief capability policy with trusted loopback owner | Authenticated request authorization and mutation observation |
 | `Dispatcher` | In-process task service scheduler | Durable queue and distributed coordinator |
 
 Composition is confined to `src/server/index.ts`. The default fixed scope is supplied there rather than accepted from HTTP request bodies. A future authenticated HTTP layer must resolve scope per request, authorize project membership, and route to the appropriate coordinator. The domain already separates owner and delegated provider and validates RFC owner authority.

@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, RetryTaskInput, Scope, Settings, Task } from '../shared/domain';
+import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, RetryTaskInput, Scope, Settings, Task } from '../shared/domain';
 import { AgentProcessUnreapedError, type AgentAdapter, type WorkspaceProvider } from '../runtime';
-import { ConflictError, DomainError, type ArtifactStore, type Dispatcher, type Repository } from './ports';
-import { chiefPrompt, chiefResultSchema, codingPrompt, parseJsonResult, verificationSchema } from './agent-prompts';
+import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
+import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planRevisionSchema, verificationSchema } from './agent-prompts';
 
 const now = () => new Date().toISOString();
 const terminal = (task: Task) => task.status === 'done' || task.status === 'canceled';
 type Editable = Partial<Pick<Task, 'title' | 'description' | 'priority' | 'provider' | 'labels' | 'parentId' | 'blockedByIds'>> & { status?: 'backlog' | 'todo' | 'canceled' };
 export interface ServiceOptions {
   scope: Scope; repository: Repository; artifacts: ArtifactStore; workspaces: WorkspaceProvider;
-  adapters: Record<'claude' | 'codex', AgentAdapter>; demo?: boolean;
+  adapters: Record<'claude' | 'codex', AgentAdapter>; demo?: boolean; chiefCommands?: ChiefCommandGateway;
 }
 
 export class TaskService implements Dispatcher {
@@ -22,7 +22,6 @@ export class TaskService implements Dispatcher {
   private mutatingRepository = false;
   private stopped = false;
   private chiefActive = false;
-  private applyingChief = false;
   private timer?: ReturnType<typeof setInterval>;
   private availability = { claude: false, codex: false };
   private get repo() { return this.options.repository; }
@@ -158,7 +157,7 @@ export class TaskService implements Dispatcher {
       id, identifier: '', ...this.scope, ownerUserId: this.scope.userId,
       title: input.title.trim(), description: input.description ?? '', status: input.status ?? 'todo', phase: 'idle', kind: input.kind ?? 'coding',
       priority: input.priority ?? 0, provider: input.provider ?? settings.defaultProvider, labels: [...new Set(input.labels?.map(label => label.trim()) ?? [])],
-      parentId: input.parentId ?? null, blockedByIds: input.blockedByIds ?? [], plans: [], evidence: [], changedFiles: [],
+      parentId: input.parentId ?? null, blockedByIds: input.blockedByIds ?? [], plans: [], planDiscussion: [], evidence: [], changedFiles: [],
       summary: '', runs: [], activity: [{ id: randomUUID(), text: 'Task created.', createdAt: timestamp }], createdAt: timestamp, updatedAt: timestamp, version: 1,
     });
     await this.reconcileGroups();
@@ -209,12 +208,21 @@ export class TaskService implements Dispatcher {
     return saved;
   }
   async requestChanges(id: string, planId: string, feedback: string) {
+    return this.commentOnPlan(id, planId, feedback);
+  }
+  async commentOnPlan(id: string, planId: string, content: string) {
     const task = await this.getTask(id);
     if (task.ownerUserId !== this.scope.userId) throw new DomainError('Only the task owner may review its RFC.', 403);
+    const feedback = content.trim();
+    if (!feedback || feedback.length > 20_000) throw new DomainError('Plan comments must contain between 1 and 20,000 characters.');
     const current = task.plans.at(-1);
-    if (task.status !== 'in_review' || current?.id !== planId || current.status !== 'pending') throw new DomainError('This RFC is no longer awaiting review.', 409);
-    const plans = task.plans.map(plan => plan.id === planId ? { ...plan, status: 'changes_requested' as const, feedback, reviewedAt: now(), reviewedBy: this.scope.userId } : plan);
-    const saved = await this.change(task, { plans, status: 'todo', phase: 'planning', sessionId: undefined }, `Changes requested on RFC v${current.version}.`);
+    if (task.kind === 'group' || task.runId || task.status !== 'in_review' || task.phase !== 'plan_review' || current?.id !== planId || current.status !== 'pending') throw new DomainError('This RFC is no longer awaiting review. Wait for the latest revision before commenting.', 409);
+    const timestamp = now();
+    const message: PlanDiscussionMessage = { id: randomUUID(), role: 'user', content: feedback, createdAt: timestamp, planId, userId: this.scope.userId };
+    const plans = task.plans.map(plan => plan.id === planId ? { ...plan, status: 'changes_requested' as const, feedback, reviewedAt: timestamp, reviewedBy: this.scope.userId } : plan);
+    // The comment and revoked review are one versioned write: a concurrent approval
+    // or comment can win, but neither can silently overwrite the other.
+    const saved = await this.change(task, { plans, planDiscussion: [...(task.planDiscussion ?? []), message], status: 'todo', phase: 'planning', error: undefined }, `Owner commented on RFC v${current.version}. Plan revision queued.`);
     await this.repo.removeAttention(this.scope, id, 'plan_approval');
     void this.tick().catch(console.error);
     return saved;
@@ -282,7 +290,7 @@ export class TaskService implements Dispatcher {
     return message;
   }
   async tick() {
-    if (this.stopped || this.applyingChief || this.mutatingRepository) return;
+    if (this.stopped || this.mutatingRepository) return;
     if (this.ticking) { this.tickAgain = true; return this.tickIdle; }
     this.ticking = true;
     let releaseTick!: () => void;
@@ -291,7 +299,7 @@ export class TaskService implements Dispatcher {
       do {
         this.tickAgain = false;
         await this.dispatchOnce();
-      } while (this.tickAgain && !this.stopped && !this.applyingChief && !this.mutatingRepository);
+      } while (this.tickAgain && !this.stopped && !this.mutatingRepository);
     } finally { this.ticking = false; releaseTick(); }
   }
   private async dispatchOnce() {
@@ -402,8 +410,15 @@ export class TaskService implements Dispatcher {
     if (current.runId !== task.runId || signal.aborted) return;
     if (!result.text.trim()) throw new DomainError('The agent returned no final result.');
     if (phase === 'planning') {
-      const plan = { id: randomUUID(), version: current.plans.length + 1, format: /^\s*(<!doctype html|<html)/i.test(result.text) ? 'html' as const : 'markdown' as const, content: result.text, status: 'pending' as const, createdAt: now(), dependencyInputs };
-      const saved = await this.change(current, { plans: [...current.plans, plan], phase: 'plan_review', status: 'in_review', runId: undefined, sessionId: result.sessionId }, `RFC v${plan.version} is ready for owner review.`);
+      let revision: { reply: string; content: string } | undefined;
+      if (hasPendingPlanDiscussion(current)) {
+        try { revision = planRevisionSchema.parse(parseJsonResult(result.text)); }
+        catch { throw new DomainError('The agent did not return a valid review reply and complete revised RFC. Your comment is saved; retry planning to continue the conversation.'); }
+      }
+      const content = revision?.content ?? result.text;
+      const plan = { id: randomUUID(), version: current.plans.length + 1, format: !revision && /^\s*(<!doctype html|<html)/i.test(content) ? 'html' as const : 'markdown' as const, content, status: 'pending' as const, createdAt: now(), dependencyInputs };
+      const planDiscussion: PlanDiscussionMessage[] = revision ? [...(current.planDiscussion ?? []), { id: randomUUID(), role: 'assistant', content: revision.reply, createdAt: plan.createdAt, planId: plan.id }] : current.planDiscussion ?? [];
+      const saved = await this.change(current, { plans: [...current.plans, plan], planDiscussion, phase: 'plan_review', status: 'in_review', runId: undefined, sessionId: result.sessionId ?? current.sessionId }, `RFC v${plan.version} is ready for owner review.`);
       await this.notify(saved, 'plan_approval', 'Review and approve the RFC to start implementation.');
       return;
     }
@@ -456,48 +471,26 @@ export class TaskService implements Dispatcher {
     this.chiefActive = true;
     const abort = new AbortController();
     let canRelease = true;
+    let commands: ChiefCommandSession | undefined;
     const done = Promise.resolve().then(async () => {
-      const [project, tasks, messages] = await Promise.all([this.repo.project(this.scope), this.repo.tasks(this.scope), this.repo.messages(this.scope)]);
+      const [project, messages] = await Promise.all([this.repo.project(this.scope), this.repo.messages(this.scope)]);
       if (!project.repositoryPath) throw new DomainError('Set a repository path in workspace settings so the chief of staff can inspect your project.');
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, tasks, messages), cwd: project.repositoryPath, signal: abort.signal });
+      if (!this.options.chiefCommands && !this.options.demo) throw new DomainError('The chief command interface is not configured. Start Muon through its HTTP server.');
       if (this.stopped || abort.signal.aborted) return;
-      const response = chiefResultSchema.parse(parseJsonResult(result.text));
-      const taskIds: string[] = []; const failures: string[] = [];
-      const refs = new Map<string, string>();
-      const resolveId = (id: string) => {
-        if (!id.startsWith('@')) return id;
-        const resolved = refs.get(id.slice(1));
-        if (!resolved) throw new DomainError(`Task reference ${id} must refer to an earlier successful action.`);
-        return resolved;
-      };
-      this.applyingChief = true;
-      try {
-        for (const action of response.actions) {
-          if (this.stopped || abort.signal.aborted) break;
-          try {
-            if (action.type === 'create_task') {
-              if (action.ref && refs.has(action.ref)) throw new DomainError(`Task reference @${action.ref} was already used.`);
-              const created = await this.createTask({ ...action, parentId: action.parentId ? resolveId(action.parentId) : undefined, blockedByIds: action.blockedByIds?.map(resolveId) });
-              taskIds.push(created.id);
-              if (action.ref) refs.set(action.ref, created.id);
-            } else {
-              const taskId = resolveId(action.taskId);
-              if (action.type === 'cancel_task') await this.editTask(taskId, { status: 'canceled' });
-              else if (action.type === 'retry_task') await this.retry(taskId, { mode: action.mode, feedback: action.feedback });
-              else {
-                const { type: _type, taskId: _taskId, ...patch } = action;
-                await this.editTask(taskId, { ...patch, parentId: patch.parentId ? resolveId(patch.parentId) : patch.parentId, blockedByIds: patch.blockedByIds?.map(resolveId) });
-              }
-              taskIds.push(taskId);
-            }
-          } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
-        }
-      } finally { this.applyingChief = false; }
-      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: `${response.message}${failures.length ? `\n\nSome task actions could not be applied:\n${failures.map(text => `- ${text}`).join('\n')}` : ''}`, createdAt: now(), taskIds: [...new Set(taskIds)] });
+      commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
+      if (this.stopped || abort.signal.aborted) return;
+      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, signal: abort.signal, chiefCli: commands?.cli });
+      if (this.stopped || abort.signal.aborted) return;
+      const content = result.text.trim();
+      if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');
+      // Task operations have already gone through CLI -> REST -> TaskService. A
+      // model's final text is display-only and never interpreted as commands.
+      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content, createdAt: now(), taskIds: commands?.taskIds() ?? [] });
     }).catch(async error => {
       if (error instanceof AgentProcessUnreapedError) canRelease = false;
-      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: `I couldn't complete this request. ${error instanceof Error ? error.message : String(error)}`, createdAt: now() });
+      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: `I couldn't complete this request. ${error instanceof Error ? error.message : String(error)} Any task changes already saved through the CLI are retained.`, createdAt: now(), taskIds: commands?.taskIds() ?? [] });
     }).finally(async () => {
+      await commands?.close().catch(error => console.error("Chief command cleanup failed", error));
       await this.repo.setPendingChief(this.scope, null);
       if (canRelease) { this.chiefActive = false; this.active.delete('chief'); }
       void this.tick().catch(console.error);

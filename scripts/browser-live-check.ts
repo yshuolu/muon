@@ -7,6 +7,7 @@ import { chromium, expect, type BrowserContext, type Page } from '@playwright/te
 import { serve } from '@hono/node-server';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { TaskService } from '../src/server/task-service';
+import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
@@ -49,12 +50,13 @@ const claude = new ControlledAdapter('claude');
 const codex = new ControlledAdapter('codex');
 const artifacts = new LocalArtifactStore(join(outputRoot, 'artifacts'));
 const workspaces = new LocalWorktreeProvider(join(outputRoot, 'worktrees'));
-const service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex } });
+const port = Number(process.env.MUON_BROWSER_TEST_PORT ?? 4332);
+const commands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
+const service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
 await service.initialize();
 service.start();
-const port = Number(process.env.MUON_BROWSER_TEST_PORT ?? 4332);
 const url = `http://127.0.0.1:${port}`;
-const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist') });
+const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist'), access: commands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 const browser = await chromium.launch({ headless: true });
 const screenshots: string[] = [];
@@ -80,7 +82,7 @@ async function waitTask(id: string, status: Task['status']) {
 }
 async function capture(page: Page, name: string) {
   const path = join(outputRoot, `${name}.png`);
-  await page.screenshot({ path, fullPage: true }); screenshots.push(path); return path;
+  await page.screenshot({ path, fullPage: true, animations: 'disabled' }); screenshots.push(path); return path;
 }
 
 try {
@@ -123,15 +125,64 @@ try {
   await capture(page, '01-rfc-review');
   check('Subtask priority and parent persist; pause is explained; building cannot launch before explicit owner approval.');
 
+  await expect(page.getByRole('button', { name: 'Request changes', exact: true })).toHaveCount(0);
+  const initialPlan = (await service.getTask(child.id)).plans.at(-1)!;
+  await page.getByLabel('Comment on the plan', { exact: true }).fill('Please explain how the screenshot proves the result and include keyboard navigation in verification.');
+  await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeDisabled();
+  await page.route(`**/api/tasks/${child.id}/plan-discussion`, route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This task changed. Refresh and try again.' }) }), { times: 1 });
+  await page.getByRole('button', { name: 'Send comment', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'This task changed. Refresh and try again.' }).first()).toBeVisible();
+  await expect(page.getByLabel('Comment on the plan', { exact: true })).toHaveValue('Please explain how the screenshot proves the result and include keyboard navigation in verification.');
+  assert.equal((await service.getTask(child.id)).planDiscussion?.length ?? 0, 0);
+  await page.getByRole('button', { name: 'Send comment', exact: true }).click();
+  const revisionOne = await call(1, 'planning');
+  assert.match(revisionOne.request.prompt, /include keyboard navigation/);
+  await expect(page.getByLabel('Comment on the plan', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeDisabled();
+  const obsoleteApproval = await fetch(`${url}/api/tasks/${child.id}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ planId: initialPlan.id }) });
+  assert.equal(obsoleteApproval.status, 409);
+  revisionOne.finish(JSON.stringify({ reply: 'The screenshot records the visible workflow state; keyboard navigation will be checked separately and recorded in the test steps.', content: '# RFC: task media and recovery\n\n## Approach\nWrite result.txt inside this worktree.\n\n## Verification\nCapture the actual workflow screenshot and recording. Check keyboard navigation separately and record the observed test steps. Repair any failed checks within scope.' }));
+  const firstRevision = await waitTask(child.id, 'in_review');
+  await expect(page.getByRole('combobox', { name: 'Plan version', exact: true })).toHaveValue(firstRevision.plans.at(-1)!.id);
+  await expect(page.getByText('The screenshot records the visible workflow state; keyboard navigation will be checked separately and recorded in the test steps.', { exact: true })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Plan version', exact: true }).selectOption(initialPlan.id);
+  await expect(page.getByLabel('Comment on the plan', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeDisabled();
+  await page.getByRole('combobox', { name: 'Plan version', exact: true }).selectOption(firstRevision.plans.at(-1)!.id);
+  await page.getByLabel('Comment on the plan', { exact: true }).fill('Keep those checks, and explicitly verify focus returns after the screenshot dialog closes.');
+  await page.getByRole('button', { name: 'Send comment', exact: true }).click();
+  const revisionTwo = await call(2, 'planning');
+  assert.match(revisionTwo.request.prompt, /include keyboard navigation/);
+  assert.match(revisionTwo.request.prompt, /screenshot records the visible workflow state/);
+  assert.match(revisionTwo.request.prompt, /focus returns/);
+  revisionTwo.finish(JSON.stringify({ reply: 'Kept keyboard navigation and added a focus-restoration check after closing the screenshot dialog.', content: '# RFC: task media and recovery\n\n## Approach\nWrite result.txt inside this worktree.\n\n## Verification\nCheck keyboard navigation and focus restoration after closing the screenshot dialog. Capture the actual screenshot and recording. Repair any failed checks within the approved scope.' }));
+  const revisedReview = await waitTask(child.id, 'in_review');
+  assert.equal(revisedReview.plans.length, 3);
+  assert.equal(revisedReview.planDiscussion?.length, 4);
+  assert.deepEqual(revisedReview.runs!.map(run => run.phase), ['planning', 'planning', 'planning']);
+  await page.reload();
+  await page.getByRole('button').filter({ hasText: child.title }).click();
+  await expect(page.getByText('Kept keyboard navigation and added a focus-restoration check after closing the screenshot dialog.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Plan version', exact: true })).toHaveValue(revisedReview.plans.at(-1)!.id);
+  await capture(page, '01b-plan-conversation');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel('Comment on the plan', { exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByLabel('Comment on the plan', { exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await capture(page, '01c-plan-conversation-mobile');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  check('Two plan comments preserve conversation and RFC versions across reloads; rejected sends retain the draft, stale revisions cannot be approved, and review controls work on mobile.');
+
   await page.getByRole('button', { name: 'Close task', exact: true }).click();
   await page.getByRole('button', { name: /^Attention \d/ }).click();
   await page.getByRole('button', { name: 'Review plan', exact: true }).click();
   await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'Attention', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Approve plan', exact: true }).click();
-  const building = await call(1, 'building');
+  const building = await call(3, 'building');
+  assert.match(building.request.prompt, /focus restoration/);
   await writeFile(join(building.request.cwd, 'result.txt'), 'Acceptance fixture result, first implementation.\n');
   building.finish('Created result.txt in the isolated worktree.');
-  const firstVerification = await call(2, 'verification');
+  const firstVerification = await call(4, 'verification');
   firstVerification.finish(JSON.stringify({ summary: 'Controlled first verification requires repair.', evidence: [{ kind: 'test', title: 'Initial fixture check', description: 'Controlled failure exercises the repair interface.', result: 'failed', steps: ['Inspect first implementation', 'Report the controlled failing check'] }] }));
   await waitTask(child.id, 'blocked');
   await expect(page.getByRole('combobox', { name: 'Next step', exact: true })).toBeVisible();
@@ -139,11 +190,11 @@ try {
   await page.getByLabel('What should the agent address?', { exact: true }).fill('Correct the fixture output without changing the approved scope.');
   await capture(page, '02-recovery-controls');
   await page.getByRole('button', { name: 'Fix and verify', exact: true }).click();
-  const repairing = await call(3, 'building');
+  const repairing = await call(5, 'building');
   assert.match(repairing.request.prompt, /Correct the fixture output/);
   await writeFile(join(repairing.request.cwd, 'result.txt'), 'Acceptance fixture result, corrected implementation.\n');
   repairing.finish('Corrected result.txt within the approved RFC.');
-  const finalVerification = await call(4, 'verification');
+  const finalVerification = await call(6, 'verification');
   const evidenceDir = join(finalVerification.request.cwd, '.muon-evidence');
   await mkdir(evidenceDir);
   const actualScreenshot = join(evidenceDir, 'workflow.png');
@@ -160,7 +211,7 @@ try {
   ] }));
   const completed = await waitTask(child.id, 'done');
   await waitTask(group.id, 'done');
-  assert.equal(completed.plans.length, 1); assert.equal(completed.evidence.length, 4);
+  assert.equal(completed.plans.length, 3); assert.equal(completed.evidence.length, 4);
   assert.equal((await git('status', '--porcelain')).trim(), '');
   check('Repair preserves the approved RFC; real Git changes and actual browser screenshot/video are imported through TaskService and LocalArtifactStore.');
 
@@ -228,7 +279,7 @@ try {
 
   const integration = await service.createTask({ title: 'Review frozen dependency input', status: 'todo', blockedByIds: [child.id] });
   await service.updateSettings({ dispatcherEnabled: true });
-  const integrationPlan = await call(5, 'planning');
+  const integrationPlan = await call(7, 'planning');
   integrationPlan.finish('# Integration RFC\n\nUse the frozen result.txt patch from the completed dependency.\n\nThe owner reviews these exact inputs before implementation.');
   const integrationReview = await waitTask(integration.id, 'in_review');
   assert.equal(integrationReview.plans[0].dependencyInputs?.length, 1);
@@ -250,14 +301,15 @@ try {
   await page.getByRole('button', { name: 'Chief of staff', exact: true }).click();
   await page.getByLabel('Message your chief of staff', { exact: true }).fill('Capture a backlog follow-up for this fixture.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
-  const chief = await call(6, 'chief');
-  chief.finish(JSON.stringify({ message: 'Captured the follow-up in the backlog.', actions: [{ type: 'create_task', title: 'Fixture follow-up', status: 'backlog' }] }));
+  const chief = await call(8, 'chief');
+  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token } });
+  chief.finish('Captured the follow-up in the backlog.');
   await expect(page.getByRole('button').filter({ hasText: 'Fixture follow-up' })).toBeVisible();
   await page.getByRole('button').filter({ hasText: 'Fixture follow-up' }).click();
   await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'Chief of staff', exact: true })).toBeVisible();
   await page.locator('.detail-breadcrumb').getByRole('button', { name: 'Chief of staff', exact: true }).click();
   await expect(page.getByLabel('Message your chief of staff', { exact: true })).toBeVisible();
-  check('Chief final actions create persisted task links and task back-navigation returns to the Chief view.');
+  check('Chief CLI operations create persisted task links and task back-navigation returns to the Chief view.');
   assert.deepEqual(errors, []);
   check('No browser page errors were observed.');
   succeeded = true;
@@ -274,10 +326,15 @@ try {
   repository.close();
   const reopened = new SqliteRepository(databasePath);
   const saved = await reopened.tasks(scope); reopened.close();
-  if (succeeded) { assert.ok(saved.some(task => task.status === 'done' && task.evidence.some(item => item.kind === 'recording'))); check('SQLite reopen retains the completed task, RFC, attempt history, and media references.'); }
+  if (succeeded) { assert.ok(saved.some(task => task.status === 'done' && task.evidence.some(item => item.kind === 'recording') && task.planDiscussion?.length === 4 && task.plans.length === 3)); check('SQLite reopen retains the completed task, RFC discussion and revisions, attempt history, and media references.'); }
   await writeFile(join(outputRoot, 'report.json'), JSON.stringify({ succeeded, checks, errors, screenshots, outputRoot }, null, 2));
   if (succeeded) {
     await writeFile(resolve('docs/browser-validation.md'), `# Browser acceptance validation\n\nPassed ${new Date().toISOString()}.\n\nThis is an isolated product acceptance fixture with controlled agent outcomes, real HTTP and SQLite, real Git worktrees, and a dedicated headless Chromium browser. It does not claim authenticated Claude/Codex execution. No user browser tab or project database was used.\n\n${checks.map(item => `- ${item}`).join('\n')}\n\n## Retained artifacts\n\n- Fixture database, Git repository, worktrees, imported artifacts, and JSON report: \`${outputRoot}\`\n- Full browser recording: \`${join(outputRoot, 'recordings')}\`\n- Downloaded original recording: \`${join(outputRoot, 'downloaded-recording.webm')}\`\n${screenshots.map(path => `- [${path.split('/').at(-1)}](${path})`).join('\n')}\n\nRerun after building: \`npx tsx scripts/browser-live-check.ts\`. Install the dedicated Chromium test runtime once with \`npx playwright install chromium\`.\n`);
+  }
+  if (succeeded) {
+    const generatedValidationPath = resolve('docs/browser-validation.md');
+    const generatedValidation = await readFile(generatedValidationPath, 'utf8');
+    await writeFile(generatedValidationPath, generatedValidation.replaceAll('npx tsx scripts/browser-live-check.ts', 'pnpm exec tsx scripts/browser-live-check.ts').replaceAll('npx playwright install chromium', 'pnpm exec playwright install chromium'));
   }
   console.log(JSON.stringify({ succeeded, outputRoot, checks: checks.length, errors }));
 }

@@ -21,7 +21,7 @@ import { writeFileSync } from 'node:fs';
 if (process.argv.includes('--version')) { console.log('2.1.258'); process.exit(0); }
 let prompt = '';
 process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', () => {
-  writeFileSync('invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt }));
+  writeFileSync('invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt, chiefToken: process.env.MUON_API_TOKEN }));
   if (prompt === 'crash') { process.stderr.write('Please sign in first'); process.exit(1); }
   if (prompt === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); return; }
   if (prompt === 'malformed') { console.log('broken JSON'); return; }
@@ -73,6 +73,31 @@ lines.on('close', () => process.exit(0));
 }
 
 describe('ClaudeCodeAdapter', () => {
+  it('lets the chief invoke only its scoped CLI with a read-only repository and no credential in arguments', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture());
+    const command = `'${join(directory, 'muon')}'`;
+    const token = 'fixture-only-token';
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks through the CLI', chiefCli: { command, apiUrl: 'http://127.0.0.1:4310', token } });
+    const invocation = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    const { args } = invocation;
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Bash');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
+    expect(args[args.indexOf('--permission-prompts') + 1]).toBe('none');
+    expect(settings.permissions.allow).toEqual([`Bash(${join(directory, 'muon')} *)`]);
+    expect(settings.permissions.deny).toContain('Write');
+    expect(settings.permissions.deny).toContain('Edit');
+    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, network: { allowedDomains: ['127.0.0.1:4310'], allowLocalBinding: false, strictAllowlist: true } });
+    expect(settings.sandbox.filesystem.denyWrite).toContain(directory);
+    expect(invocation.chiefToken).toBe(token);
+    expect(JSON.stringify(args)).not.toContain(token);
+    expect(invocation.prompt).not.toContain(token);
+  });
+
+  it('requires a chief CLI capability instead of falling back to unrestricted shell access', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture());
+    await expect(adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks' })).rejects.toThrow('scoped Muon CLI session');
+  });
   it('returns only the final result and frames split UTF-8 correctly', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     expect(await adapter.available()).toBe(true);
@@ -102,7 +127,7 @@ describe('ClaudeCodeAdapter', () => {
 
   it.each([['error', 'Test command denied'], ['crash', 'Please sign in'], ['malformed', 'Invalid agent protocol']])('surfaces %s without accepting partial output', async (prompt, message) => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
-    await expect(adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt })).rejects.toThrow(message);
+    await expect(adapter.run({ provider: 'claude', phase: 'planning', cwd: directory, prompt })).rejects.toThrow(message);
   });
 
   it('applies explicit owner network options only to approved execution phases', async () => {

@@ -3,23 +3,30 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "bin": {
+    "muon": "bin/muon.mjs"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
+    "cli": "node bin/muon.mjs",
+    "user": "pnpm run dev",
     "dev": "concurrently -k -n server,web \"tsx watch src/server/index.ts\" \"vite --host 127.0.0.1\"",
     "dev:server": "tsx watch src/server/index.ts",
     "build": "tsc --noEmit && vite build",
     "start": "tsx src/server/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "npm run build && node --import tsx scripts/browser-live-check.ts",
+    "test:browser": "pnpm run build && node --import tsx scripts/browser-live-check.ts",
     "test:live:codex": "node --import tsx scripts/codex-live-check.ts",
     "test:live:claude": "node --import tsx scripts/claude-live-check.ts",
     "test:live:chief": "node --import tsx scripts/chief-live-check.ts",
+    "test:live:discussion": "node --import tsx scripts/plan-discussion-live-check.ts",
     "test:live:dependencies": "node --import tsx scripts/dependency-live-check.ts",
     "test:watch": "vitest",
-    "demo": "MUON_DEMO=1 npm run dev"
+    "demo": "MUON_DEMO=1 pnpm run dev"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
@@ -35,6 +42,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.3.1",
+    "undici": "^7.29.1",
     "zod": "^4.1.0"
   },
   "devDependencies": {

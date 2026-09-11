@@ -26,6 +26,13 @@ export interface ArtifactStore {
 }
 export interface IdentityProvider { currentScope(): Scope }
 export interface Dispatcher { start(): void; stop(): Promise<void>; tick(): Promise<void> }
+export interface ChiefCommandSession {
+  cli: { command: string; apiUrl: string; token: string };
+  taskIds(): string[];
+  close(): Promise<void>;
+}
+// A local implementation supplies a CLI; a remote implementation can issue API credentials.
+export interface ChiefCommandGateway { open(scope: Scope, signal: AbortSignal): Promise<ChiefCommandSession> }
 export class ConflictError extends Error { constructor() { super('This task changed. Refresh and try again.'); } }
 export class DomainError extends Error {
   constructor(message: string, public status = 400) { super(message); }

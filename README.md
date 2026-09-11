@@ -4,21 +4,23 @@ A local, task-first workspace for directing coding agents. Describe work to a Cl
 
 ## Run
 
-Requires **Node.js 22.13+** and Git. Install and sign in to **Claude Code** (required for the chief of staff); Claude requires `--restricted` support (2.1.248+). Muon installs its tested **Codex CLI** as a project dependency. Use your existing Codex login, or run `npx codex login` after installation.
+Requires **Node.js 22.13+**, **pnpm 10.33+**, and Git. Install and sign in to **Claude Code** (required for the chief of staff); Claude requires `--restricted` support (2.1.248+). Muon installs its tested **Codex CLI** as a project dependency. Use your existing Codex login, or run `pnpm exec codex login` after installation.
 
 ```sh
-npm install
-npm run dev
+pnpm install
+pnpm run user
 ```
 
-Open **http://127.0.0.1:5173**. Open **Settings**, set the absolute path to a Git repository root with at least one commit, select your default agent, and set the concurrency limit. A task created in **Todo** automatically starts planning. **Backlog** captures work without starting an agent.
+Open **http://127.0.0.1:5173**. `pnpm run user` is the normal local user launch command: it starts the real API and web app together. Open **Settings**, set the absolute path to a Git repository root with at least one commit, select your default agent, and set the concurrency limit. A task created in **Todo** automatically starts planning. **Backlog** captures work without starting an agent.
+
+`pnpm run dev` remains available as a development alias.
 
 The app uses the existing local CLI login; no API key needs to be copied into Muon. Local refers to the app, database, orchestration, and agent processes. The agents still use their configured model services.
 
 For a populated, interactive demo without any model calls or repository changes:
 
 ```sh
-npm run demo
+pnpm run demo
 ```
 
 The demo has its own database, starts with dispatch paused, and clearly labels its illustrative plans/results. Enable dispatch to try the complete approval workflow. Stop the current server before switching between demo and real modes.
@@ -26,8 +28,8 @@ The demo has its own database, starts with dispatch paused, and clearly labels i
 For a built local app:
 
 ```sh
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
 Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310; the frontend proxies `/api` to Hono. Production serves both from Hono. This version is a local browser app; desktop packaging is not included.
@@ -37,7 +39,7 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 1. Create a task yourself or ask the chief of staff to create and prioritize work.
 2. The dispatcher selects eligible Todo tasks by priority, then creation time, up to the configured system limit. The chief consumes one slot too.
 3. Muon creates an isolated Git worktree. The selected agent inspects the code with read-only planning permissions and returns an RFC.
-4. The task pauses in **In review** and releases its agent slot. **Attention** points you to the RFC. Approve the exact revision, or request changes to receive a new revision.
+4. The task pauses in **In review** and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
 5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
 6. Passing verification creates a **Done** task with test steps, final summary, stored screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention.
 
@@ -47,15 +49,31 @@ Choose **Task group** for an organizational parent: it never launches an agent a
 
 Coding subtasks have independent RFCs, worktrees, and verification. They run independently unless dependencies connect them. A coding parent waits for children, then runs its own approved integration workflow. Muon exports completed dependency changes into immutable patches attached to the integration RFC, including uncommitted and untracked files. The Plan tab shows these inputs and downloads the exact patches; building uses the snapshots you reviewed. Completion does not merge sibling branches automatically. A canceled dependency or child does not unblock parent coding work until you resolve its scope.
 
-The chief can create groups and coding tasks in one response, edit unstarted task metadata and relations, queue, prioritize, cancel, recover failures, and summarize results. Its structured actions go through the same task service as the UI. It cannot approve RFCs or mark coding work verified.
+The chief creates groups and coding tasks, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
 
 Blocked tasks offer **Retry**, **Fix implementation**, and **Request new RFC**. Retry repeats the failed phase. Fix returns an approved build or verification failure to building, then verifies again. A new RFC revokes the old approval and pauses for your new decision. Each attempt retains its evidence, and the Evidence tab distinguishes the latest attempt from earlier failures.
+
+## REST API and CLI
+
+The HTTP service is the system of record. The web panel, owner CLI, and local chief all use it; clients never open SQLite. A future cloud chief can call the same REST resources directly.
+
+```sh
+pnpm run cli tasks list --status todo
+pnpm run cli tasks create --json '{"title":"Review API design","status":"backlog"}'
+pnpm run cli tasks get MUO-1
+pnpm run cli tasks plans MUO-1
+pnpm run cli attention list --unread
+```
+
+`node /absolute/path/to/muon/bin/muon.mjs` works from any directory, and the package exposes a `muon` bin. Set `MUON_API_URL` to the service origin; the local default is `http://127.0.0.1:4310`. The server must be running. Commands return JSON, use nonzero exit codes for errors, and accept JSON or a body file/stdin. RFC/evidence/patch downloads preserve original bytes.
+
+See the [REST resource contract](docs/rest-api.md) and [CLI reference](docs/cli.md). The current owner boundary trusts this computer's loopback interface. Remote authentication, membership, and deployment policy remain future implementations.
 
 ## Local data and recovery
 
 By default data lives in `.muon/local/` (demo: `.muon/demo/`):
 
-- `muon.sqlite`: scoped projects, settings, tasks, run history, RFC decisions, evidence metadata, attention, and final chief messages. SQLite uses WAL and optimistic task revisions.
+- `muon.sqlite`: scoped projects, settings, tasks, run history, RFC decisions and review conversations, evidence metadata, attention, and final chief messages. SQLite uses WAL and optimistic task revisions.
 - `worktrees/`: persistent worktree manifests and checkouts, namespaced by repository identity and task ID.
 - `artifacts/`: copied verification images, videos, and text files, retained independently of agent processes.
 - `server.lock`: prevents multiple dispatchers opening the same data directory.
@@ -94,11 +112,11 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Browser workflow and media validation](docs/browser-validation.md)
 
 ```sh
-npm run typecheck
-npm test
-npm run build
+pnpm run typecheck
+pnpm test
+pnpm run build
 ```
 
 Tests use actual temporary SQLite databases and Git repositories plus controlled provider executables. They cover approval races, dispatch capacity, dependencies, group rollups, chief mutations, recovery, cancellation, restart recovery, provider framing, artifact containment, recording byte ranges, and HTTP validation. They do not spend model credits. Separate opt-in live validation scripts exercise the real authenticated providers in isolated repositories and independently rerun their tests; see the linked acceptance records.
 
-`npm run test:browser` runs the complete browser acceptance with controlled agents, actual SQLite/Git worktrees, and recorded media. Install its dedicated Chromium runtime once with `npx playwright install chromium` if it is not already present. `npm run test:live:claude`, `npm run test:live:codex`, `npm run test:live:chief`, and `npm run test:live:dependencies` use your authenticated provider accounts and make real model calls.
+`pnpm run test:browser` runs the complete browser acceptance with controlled agents, actual SQLite/Git worktrees, and recorded media. Install its dedicated Chromium runtime once with `pnpm exec playwright install chromium` if it is not already present. `pnpm run test:live:claude`, `pnpm run test:live:codex`, `pnpm run test:live:chief`, and `pnpm run test:live:dependencies` use your authenticated provider accounts and make real model calls.

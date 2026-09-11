@@ -1,6 +1,7 @@
 import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { record, text } from './protocol-values.js';
+import { dirname, join, isAbsolute } from 'node:path';
 
 export interface ClaudeCodeOptions {
   allowedNetworkDomains?: string[];
@@ -24,25 +25,37 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   async run(request: AgentRequest): Promise<AgentResult> {
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const readonly = request.phase === 'planning' || request.phase === 'chief';
+    const chief = request.phase === 'chief';
+    const readonly = request.phase === 'planning';
+    if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
+    const cli = request.chiefCli;
+    const cliExecutable = cli?.command.replace(/^'|'$/g, '');
+    if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
+    const api = chief ? new URL(cli!.apiUrl) : undefined;
+    if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
     const settings = {
       disableAllHooks: true,
-      permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: [] },
+      permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: [],
+        ...(chief ? {
+          allow: [`Bash(${cliExecutable} *)`],
+          deny: ['Edit', 'Write', `Read(${join(request.cwd, '.muon').replace(/^\//, '//')}/**)`, 'Read(./.env)', 'Read(./.env.*)'],
+        } : {}),
+      },
       sandbox: {
         enabled: !readonly,
         failIfUnavailable: true,
-        autoAllowBashIfSandboxed: !readonly,
+        autoAllowBashIfSandboxed: !readonly && !chief,
         allowUnsandboxedCommands: false,
         excludedCommands: [],
-        network: { allowedDomains: readonly ? [] : this.allowedNetworkDomains, allowLocalBinding: !readonly && this.allowLocalBinding },
-        filesystem: { allowWrite: [request.cwd] },
+        network: { allowedDomains: chief ? [api!.host] : readonly ? [] : this.allowedNetworkDomains, allowLocalBinding: !readonly && !chief && this.allowLocalBinding, ...(chief ? { strictAllowlist: true } : {}) },
+        filesystem: chief ? { allowWrite: [], denyWrite: [request.cwd, dirname(cliExecutable!)], denyRead: [join(request.cwd, '.muon'), join(request.cwd, '.env')] } : { allowWrite: [request.cwd] },
       },
     };
     const args = [
       '-p', '--output-format', 'stream-json', '--verbose', '--restricted', '--strict-mcp-config',
-      '--permission-mode', readonly ? 'plan' : 'acceptEdits',
+      '--permission-mode', readonly ? 'plan' : chief ? 'default' : 'acceptEdits',
       '--permission-prompts', 'none',
-      '--tools', readonly ? 'Read,Glob,Grep' : 'Read,Glob,Grep,Edit,Write,Bash',
+      '--tools', readonly ? 'Read,Glob,Grep' : chief ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
       '--disallowedTools', 'mcp__*',
       '--settings', JSON.stringify(settings),
       ...(request.sessionId ? ['--resume', request.sessionId] : []),
@@ -53,6 +66,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       return await new Promise<AgentResult>((resolve, reject) => {
         process = new JsonProcess({
           executable: this.executable, args, cwd: request.cwd, signal: request.signal,
+          ...(chief ? { env: { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } } : {}),
           onFault: reject,
           onRecord: (value) => {
             const frame = record(value);
