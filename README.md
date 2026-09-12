@@ -41,7 +41,7 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 3. Muon creates an isolated Git worktree. The selected agent inspects the code with read-only planning permissions and returns an RFC.
 4. The task pauses in **In review** and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
 5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
-6. Passing verification creates a **Done** task with test steps, final summary, stored screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention.
+6. Passing verification creates a **Done** task with test steps, final summary, retained output files and screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention; their retained files remain available.
 
 Reading an approval does not resolve it. Completion notifications can be acknowledged. When every task is Done or Canceled and at least one is verified, Attention also reports project completion with the canceled count. Adding new work clears that project completion notice. Done means verification passed; Muon keeps the branch/worktree for your review and does not merge, push, or deploy it.
 
@@ -52,6 +52,16 @@ Coding subtasks have independent RFCs, worktrees, and verification. They run ind
 The chief creates groups and coding tasks, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
 
 Blocked tasks offer **Retry**, **Fix implementation**, and **Request new RFC**. Retry repeats the failed phase. Fix returns an approved build or verification failure to building, then verifies again. A new RFC revokes the old approval and pauses for your new decision. Each attempt retains its evidence, and the Evidence tab distinguishes the latest attempt from earlier failures.
+
+## Assets
+
+An **Asset** is a retained file: a user upload, an imported file, or an agent output. The same model represents inputs and outputs, with its own owner and visibility. Reference it directly in text as `[Report](asset://ASSET-ID)` or `![Screenshot](asset://ASSET-ID)`. Descriptions, comments, plans, and results can refer to the same file without a separate `TaskAsset` model or task relationship fields. A reference does not grant permission to read the file.
+
+Use **Add file** in the **Assets** tab before planning starts so the RFC can account for the file. Muon adds a reference to the task description and supplies a readable copy in the task's own worktree. **Referenced files** resolves the task's text references and previews Markdown reports with tables and a heading outline, raster images, video/audio, and text or code. Click a Markdown asset link to open its preview. Other file types remain downloadable. The **Changes** tab offers **Open as asset** for listed changed files from a stopped task, retaining the file and adding a reference to its result without rerunning the agent or changing its verification outcome.
+
+Files can be up to 100 MiB. Text previews are limited to 2 MiB; **Download** always preserves the complete original. HTML and SVG appear as source, and Markdown does not execute embedded HTML or load remote images.
+
+Asset metadata lives in SQLite and file bytes live in managed local storage, independent of the source worktree. New assets are private to their owner; project visibility permits access within the asset's project. The storage boundary records a backend ID and object key so a future GCS implementation can provide the same contract; GCS is not configured or shipped yet. Existing evidence attachments and legacy download URLs remain supported.
 
 ## REST API and CLI
 
@@ -73,9 +83,10 @@ See the [REST resource contract](docs/rest-api.md) and [CLI reference](docs/cli.
 
 By default data lives in `.muon/local/` (demo: `.muon/demo/`):
 
-- `muon.sqlite`: scoped projects, settings, tasks, run history, RFC decisions and review conversations, evidence metadata, attention, and final chief messages. SQLite uses WAL and optimistic task revisions.
+- `muon.sqlite`: scoped projects, settings, tasks, assets, run history, RFC decisions and review conversations, evidence metadata, attention, and final chief messages. SQLite uses WAL and optimistic task revisions.
 - `worktrees/`: persistent worktree manifests and checkouts, namespaced by repository identity and task ID.
-- `artifacts/`: copied verification images, videos, and text files, retained independently of agent processes.
+- `assets/`: retained input and output bytes, addressed through asset records.
+- `artifacts/`: earlier evidence attachments, preserved for legacy downloads and migration to assets.
 - `server.lock`: prevents multiple dispatchers opening the same data directory.
 
 Normal shutdown stops agents and releases the local instance lock. On restart, interrupted tasks become Blocked, keep their worktrees, and pause automatic dispatch; they are never assumed successful. After a hard crash, inspect and stop any surviving agent processes before resuming dispatch or retrying a task. Muon cannot prove orphan process exit across a killed server. If an agent cannot confirm shutdown in a running server, its capacity slot stays reserved.
@@ -106,7 +117,7 @@ By default, Muon launches coding, planning, chat, and verification agents with t
 
 ## Architecture and validation
 
-TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node's SQLite driver. Provider processes, worktrees, persistence, identity, artifacts, and dispatch have explicit contracts. The UI supports one project and one owner; stored IDs and repository scopes reserve the path to collaboration.
+TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node's SQLite driver. Provider processes, worktrees, persistence, identity, asset storage, and dispatch have explicit contracts. The UI supports one project and one owner; stored IDs and repository scopes reserve the path to collaboration.
 
 - [Linear product study and adapted PRD](docs/linear-product-study.md)
 - [Implementation architecture and cloud boundaries](docs/architecture.md)

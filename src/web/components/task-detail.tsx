@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Check, CheckCheck, ChevronRight, Code2, File, FileCheck2, FileText, GitBranch, Layers3, Pencil, Plus, ShieldCheck, X } from 'lucide-react';
-import type { AppSnapshot, Priority, Provider, Task } from '../../shared/types';
+import type { AppSnapshot, Asset, Priority, Provider, Task } from '../../shared/types';
 import { PHASE_LABELS, PRIORITY_LABELS, STATUS_LABELS } from '../../shared/types';
 import { api } from '../lib/api';
 import { relativeTime } from '../lib/utils';
@@ -14,11 +14,16 @@ import { VerificationEvidence } from './verification-evidence';
 import { queueReasons } from '../lib/task-state';
 import { displayedPlan } from '../lib/plan-review';
 import { PlanDiscussion } from './plan-discussion';
+import { AssetsPanel } from './assets-panel';
+import { AssetReferenceList } from './asset-preview';
+import { taskAssetIds } from '../../shared/asset-references';
 
-type Tab = 'overview' | 'plan' | 'evidence' | 'files';
+type Tab = 'overview' | 'plan' | 'evidence' | 'assets' | 'files';
 export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSubtask, backLabel }: { task: Task; snapshot: AppSnapshot; onClose: () => void; onRefresh: () => void; onSelect: (task: Task) => void; onSubtask: (task: Task) => void; backLabel: string }) {
   const [tab, setTab] = useState<Tab>(task.kind === 'group' ? 'overview' : task.phase === 'plan_review' ? 'plan' : task.status === 'done' ? 'evidence' : 'overview');
   const [busy, setBusy] = useState(false);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [importingPath, setImportingPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
@@ -32,6 +37,7 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
   const latestPlan = task.plans.at(-1);
   const plan = displayedPlan(task.plans, planVersion);
   const viewPlanVersion = (id: string) => setPlanVersion(id === latestPlan?.id ? null : id);
+  const assetIds = taskAssetIds(task);
   const subtasks = snapshot.tasks.filter(t => t.parentId === task.id);
   const parent = snapshot.tasks.find(t => t.id === task.parentId);
   const isGroup = task.kind === 'group';
@@ -39,6 +45,7 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
   const waiting = queueReasons(task, snapshot);
   const canEdit = isGroup ? task.status !== 'canceled' : ['backlog', 'todo'].includes(task.status) && task.phase === 'idle';
   const canCancel = !['done', 'canceled'].includes(task.status);
+  const canRetainFiles = task.ownerUserId === snapshot.scope.userId && !task.runId && task.status !== 'in_progress';
   const footerNote = isGroup ? (task.status === 'done' ? 'All subtasks completed' : `${subtasks.filter(child => child.status === 'done').length} of ${subtasks.length} subtasks completed`) : task.status === 'todo' ? waiting[0] : task.status === 'done' ? (task.worktree ? 'Verification complete · Branch retained' : 'Verification complete')
     : task.status === 'canceled' ? 'Task canceled'
     : task.status === 'blocked' ? 'Resolve the issue, then retry'
@@ -53,6 +60,19 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
     finally { setBusy(false); }
   }
   const update = (body: unknown) => mutate(`/tasks/${task.id}`, 'PATCH', body);
+  async function openChangedFile(path: string) {
+    setImportingPath(path);
+    setError(null);
+    try {
+      const asset = await api<Asset>(`/tasks/${task.id}/assets/import`, 'POST', { path });
+      setSelectedAssetId(asset.id);
+      setTab('assets');
+      document.getElementById('tab-assets')?.focus();
+      onRefresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not open this file as an asset.');
+    } finally { setImportingPath(null); }
+  }
   return <section className="task-detail" aria-label={`${task.identifier}: ${task.title}`}>
     <div className="detail-breadcrumb"><button onClick={onClose}><ArrowLeft size={15} />{backLabel}</button><ChevronRight size={13} /><span>{task.identifier}</span><span className="detail-breadcrumb-spacer" /><Button variant="ghost" size="icon" aria-label="Close task" onClick={onClose}><X size={17} /></Button></div>
     <div className={`detail-scroll ${tab === 'plan' && plan && task.status !== 'blocked' ? 'plan-review-workspace' : ''}`}>
@@ -75,9 +95,10 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
         event.preventDefault();
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
         buttons[next].click(); buttons[next].focus();
-      }}>{([{ id: 'overview', label: 'Overview', count: 0 }, { id: 'plan', label: 'Plan', count: task.plans.length }, { id: 'evidence', label: 'Evidence', count: task.evidence.length }, { id: 'files', label: 'Files', count: task.changedFiles.length }] as const).filter(item => !isGroup || item.id === 'overview').map(item => <button key={item.id} id={`tab-${item.id}`} aria-controls={`panel-${item.id}`} role="tab" tabIndex={tab === item.id ? 0 : -1} aria-selected={tab === item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}{item.id === 'plan' && latestPlan?.status === 'pending' ? <i className="review-dot" /> : item.count > 0 ? <span>{item.count}</span> : null}</button>)}</div>
-      <div className={`detail-tab-content ${tab === 'plan' && plan ? 'plan-tab-content' : ''}`} id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} role="tabpanel">
+      }}>{([{ id: 'overview', label: 'Overview', count: 0 }, { id: 'plan', label: 'Plan', count: task.plans.length }, { id: 'evidence', label: 'Evidence', count: task.evidence.length }, { id: 'assets', label: 'Assets', count: assetIds.length }, { id: 'files', label: 'Changes', count: task.changedFiles.length }] as const).filter(item => !isGroup || item.id === 'overview' || item.id === 'assets').map(item => <button key={item.id} id={`tab-${item.id}`} aria-controls={`panel-${item.id}`} role="tab" tabIndex={tab === item.id ? 0 : -1} aria-selected={tab === item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}{item.id === 'plan' && latestPlan?.status === 'pending' ? <i className="review-dot" /> : item.count > 0 ? <span>{item.count}</span> : null}</button>)}</div>
+      <div className={`detail-tab-content ${tab === 'plan' && plan ? 'plan-tab-content' : tab === 'assets' ? 'assets-tab-content' : ''}`} id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} role="tabpanel">
         {tab === 'overview' && <>
+          {assetIds.length > 0 && <button className="task-assets-link" onClick={() => { setTab('assets'); document.getElementById('tab-assets')?.focus(); }}><FileText size={19} /><span><strong>{assetIds.length} {assetIds.length === 1 ? 'referenced file' : 'referenced files'}</strong><small>Read documents and preview files</small></span><span>View assets<ChevronRight size={14} /></span></button>}
           <div className="overview-grid"><div className="overview-content">{task.summary && <div className="result-summary"><div className="section-label"><CheckCheck size={15} />{isGroup ? 'Group result' : 'Agent’s final result'}</div><Markdown>{task.summary}</Markdown></div>}<div className="section-label">Description</div>{task.description ? <Markdown>{task.description}</Markdown> : <p className="muted">No description yet. Add context to help your agent get started.</p>}
             <div className="section-heading"><h3>Subtasks <span>{subtasks.filter(child => child.status === 'done').length} / {subtasks.length} done</span></h3>{canEdit && <Button variant="ghost" size="sm" onClick={() => onSubtask(task)}><Plus size={13} />Add subtask</Button>}</div>
             {subtasks.length ? <><div className="subtask-progress-note">{isGroup ? 'This group completes when all subtasks finish successfully. Each coding subtask has its own plan and results.' : 'This task starts after its subtasks finish. Its RFC covers the remaining integration work.'}</div><div className="subtask-list">{subtasks.map(child => <button key={child.id} onClick={() => onSelect(child)}><StatusIcon status={child.status} /><span className="task-identifier">{child.identifier}</span><span>{child.title}</span><ChevronRight size={13} /></button>)}</div></> : <div className="subtask-empty"><Layers3 size={16} /><span>{canEdit ? 'Break this work into smaller tasks.' : 'This task has no subtasks.'}</span></div>}
@@ -90,12 +111,14 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
           {plan.id !== latestPlan?.id && <div className="plan-version-notice"><span>You’re reading version {plan.version}. Version {latestPlan?.version} is the latest.</span><Button size="sm" variant="secondary" onClick={() => setPlanVersion(null)}>View latest version</Button></div>}
           {plan.feedback && !task.planDiscussion?.some(message => message.role === 'user' && message.planId === plan.id) && <div className="plan-feedback"><strong>Your review comment</strong><p>{plan.feedback}</p></div>}
           <PlanDependencies plan={plan} tasks={snapshot.tasks} onSelect={onSelect} />
+          {plan.format === 'html' && <AssetReferenceList text={plan.content} />}
           <div className="plan-document">{plan.format === 'html' ? <iframe title={`RFC version ${plan.version}`} sandbox="" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">${plan.content}`} className="plan-html" /> : <Markdown>{plan.content}</Markdown>}</div>
           </div></div>
           <PlanDiscussion task={task} viewedPlan={plan} userId={snapshot.scope.userId} dispatcherEnabled={snapshot.settings.dispatcherEnabled} busy={busy} error={error} onComment={(planId, content) => mutate(`/tasks/${task.id}/plan-discussion`, 'POST', { planId, content })} onApprove={planId => mutate(`/tasks/${task.id}/approve`, 'POST', { planId })} onViewLatest={() => setPlanVersion(null)} onViewVersion={viewPlanVersion} />
         </div>)}
         {tab === 'evidence' && <VerificationEvidence task={task} />}
-        {tab === 'files' && (task.changedFiles.length === 0 ? <EmptyState icon={<Code2 size={26} />} title="A clear view of what changed" description="Files changed in this task’s isolated worktree will appear here, with additions and deletions." /> : <div className="files-content">{task.worktree && <div className="files-branch"><GitBranch size={15} /><span>{task.worktree.branch}</span><span>Isolated worktree</span></div>}<div className="files-summary"><strong>{task.changedFiles.length} files changed</strong><FileChanges additions={task.changedFiles.reduce((sum, file) => sum + file.additions, 0)} deletions={task.changedFiles.reduce((sum, file) => sum + file.deletions, 0)} /></div><div className="changed-files">{task.changedFiles.map(file => <div key={file.path}><File size={15} /><code>{file.path}</code><span className="file-status" title={file.status}>{file.status}</span><FileChanges additions={file.additions} deletions={file.deletions} /></div>)}</div></div>)}
+        {tab === 'assets' && <AssetsPanel task={task} userId={snapshot.scope.userId} selectedId={selectedAssetId} onSelect={setSelectedAssetId} onRefresh={onRefresh} />}
+        {tab === 'files' && (task.changedFiles.length === 0 ? <EmptyState icon={<Code2 size={26} />} title="A clear view of what changed" description="Files changed in this task’s isolated worktree will appear here, with additions and deletions." /> : <div className="files-content">{task.worktree && <div className="files-branch"><GitBranch size={15} /><span>{task.worktree.branch}</span><span>Isolated worktree</span></div>}<div className="files-summary"><strong>{task.changedFiles.length} files changed</strong><FileChanges additions={task.changedFiles.reduce((sum, file) => sum + file.additions, 0)} deletions={task.changedFiles.reduce((sum, file) => sum + file.deletions, 0)} /></div><div className="changed-files">{task.changedFiles.map(file => <div key={file.path}><File size={15} /><code>{file.path}</code><span className="file-status" title={file.status}>{file.status}</span><FileChanges additions={file.additions} deletions={file.deletions} />{!['D', 'deleted'].includes(file.status) && task.worktree && <Button variant="ghost" size="sm" disabled={importingPath !== null || !canRetainFiles} title={canRetainFiles ? 'Retain this file and open its preview' : 'The task owner can retain files after the task has stopped'} onClick={() => void openChangedFile(file.path)} aria-label={`Open ${file.path} as asset`}>{importingPath === file.path ? 'Opening…' : 'Open as asset'}</Button>}</div>)}</div></div>)}
       </div>
     </div>
     <div className="detail-footer"><span><StatusIcon status={task.status} size={13} />{isGroup ? 'Task group' : PHASE_LABELS[task.phase]}</span><span>{task.worktree && <GitBranch size={12} />}{footerNote}</span></div>

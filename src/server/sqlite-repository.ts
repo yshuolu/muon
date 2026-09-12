@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
 import { ConflictError, type Repository } from './ports';
 
 type Row = Record<string, unknown>;
@@ -16,6 +16,12 @@ export class SqliteRepository implements Repository {
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
+    `);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const schemaVersion = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+      if (schemaVersion > 2) throw new Error('This database requires a newer version of Muon.');
+      if (schemaVersion < 1) this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, payload TEXT NOT NULL,
         PRIMARY KEY (workspace_id, project_id)
@@ -48,7 +54,23 @@ export class SqliteRepository implements Repository {
         FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id)
       );
       PRAGMA user_version = 1;
-    `);
+      `);
+      if (schemaVersion < 2) this.db.exec(`
+        CREATE TABLE assets (
+          workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL,
+          storage_backend_id TEXT NOT NULL, object_key TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, project_id, id),
+          UNIQUE (workspace_id, project_id, storage_backend_id, object_key),
+          FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id)
+        );
+        PRAGMA user_version = 2;
+      `);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      this.db.close();
+      throw error;
+    }
   }
   private keys(scope: Scope) { return [scope.workspaceId, scope.projectId]; }
   async initialize(scope: Scope, project: Project, settings: Settings) {
@@ -76,6 +98,17 @@ export class SqliteRepository implements Repository {
   }
   async task(scope: Scope, id: string) {
     return decode<Task>(this.db.prepare('SELECT payload FROM tasks WHERE workspace_id=? AND project_id=? AND id=?').get(...this.keys(scope), id));
+  }
+  async assets(scope: Scope) {
+    return this.db.prepare('SELECT payload FROM assets WHERE workspace_id=? AND project_id=? ORDER BY rowid').all(...this.keys(scope)).map(row => decode<Asset>(row)!);
+  }
+  async asset(scope: Scope, id: string) {
+    return decode<Asset>(this.db.prepare('SELECT payload FROM assets WHERE workspace_id=? AND project_id=? AND id=?').get(...this.keys(scope), id));
+  }
+  async insertAsset(scope: Scope, asset: Asset) {
+    const saved = { ...asset, workspaceId: scope.workspaceId, projectId: scope.projectId };
+    this.db.prepare('INSERT INTO assets VALUES (?,?,?,?,?,?)').run(...this.keys(scope), saved.id, saved.storageBackendId, saved.objectKey, JSON.stringify(saved));
+    return saved;
   }
   async insertTask(scope: Scope, task: Task) {
     this.db.exec('BEGIN IMMEDIATE');

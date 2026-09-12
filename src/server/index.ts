@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { ClaudeCodeAdapter, CodexAdapter, LocalWorktreeProvider } from '../runtime';
 import { SqliteRepository } from './sqlite-repository';
 import { LocalArtifactStore } from './local-artifacts';
+import { LocalAssetStorage } from './local-assets';
+import { AssetService } from './asset-service';
 import { TaskService } from './task-service';
 import { createHttpApp } from './http-app';
 import { DemoAdapter, demoWorkspaces, seedDemo } from './demo';
@@ -19,7 +21,8 @@ const scope = new LocalIdentityProvider().currentScope();
 const chiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
 const repository = new SqliteRepository(resolve(dataRoot, 'muon.sqlite'));
 const artifacts = new LocalArtifactStore(resolve(dataRoot, 'artifacts'));
-const service = new TaskService({ scope, repository, artifacts, demo, chiefCommands,
+const assets = new AssetService({ repository, storage: new LocalAssetStorage(resolve(dataRoot, 'assets')), legacyArtifacts: artifacts });
+const service = new TaskService({ scope, repository, artifacts, assets, demo, chiefCommands,
   adapters: demo ? { claude: new DemoAdapter('claude'), codex: new DemoAdapter('codex') } : {
     claude: new ClaudeCodeAdapter(process.env.MUON_CLAUDE_EXECUTABLE, {
       model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]',

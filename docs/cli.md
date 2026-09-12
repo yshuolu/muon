@@ -78,15 +78,27 @@ muon tasks update MUO-3 --file - < edits.json
 
 Successful record commands emit one JSON value to stdout. Errors emit one `{ "error": { "code", "message", "status" } }` value to stderr and exit with status 1. HTTP failures preserve the API status and code; local argument and connectivity failures use status 0. Help is ordinary text. No model logs, npm banners, or SQLite output are mixed into command results when using the launcher directly.
 
-## Plans, dependency patches, and evidence files
+## Plans, dependency patches, and asset files
 
 ```sh
 muon tasks plan MUO-3 EXACT-PLAN-ID --output rfc.md
 muon tasks dependency-patch MUO-3 EXACT-PLAN-ID MUO-2 --output dependency.patch
+muon api GET /api/tasks/MUO-3/assets
+muon api GET /api/assets/ASSET-ID
+muon api GET /api/assets/ASSET-ID/content --output report.md
 muon artifacts download ARTIFACT-ID --output verification.webm
 ```
 
-Plan exports preserve their original Markdown or HTML. Dependency exports download the exact immutable patch recorded with the RFC. Artifact downloads preserve binary bytes. An output path must be new and its parent directory must exist; downloads never overwrite existing files. `--output -` writes raw bytes to stdout for piping, without JSON framing. After file downloads, stdout contains the path, byte length, and content type.
+Plan exports preserve their original Markdown or HTML. Dependency exports download the exact immutable patch recorded with the RFC. Asset downloads preserve binary bytes. `artifacts download` remains available for legacy evidence URLs; new records use `/api/assets/:id/content`. An output path must be new and its parent directory must exist; downloads never overwrite existing files. `--output -` writes raw bytes to stdout for piping, without JSON framing. After file downloads, stdout contains the path, byte length, and content type.
+
+Add a reference to an existing asset in an unstarted task description or retain a listed changed file from a stopped task through the JSON API:
+
+```sh
+muon api POST /api/tasks/MUO-3/assets/attach --json '{"assetId":"ASSET-ID"}'
+muon api POST /api/tasks/MUO-2/assets/import --json '{"path":"report.md"}'
+```
+
+These operations require the owner. Adding a reference through `assets/attach` is allowed only before planning begins. Uploading a new file uses multipart HTTP through the UI or `curl -F 'file=@brief.md' http://127.0.0.1:4310/api/tasks/MUO-3/assets`; the CLI's `--file` option reads a JSON request body and is not a binary upload option. A file is referenced in text as `[Report](asset://ASSET-ID)` or `![Screenshot](asset://ASSET-ID)`. References do not change asset ownership or visibility.
 
 ## Generic REST access
 
@@ -95,7 +107,7 @@ All public REST routes remain reachable through the CLI even before they gain de
 ```sh
 muon api GET /api/tasks/MUO-3/evidence
 muon api PATCH /api/tasks/MUO-3 --file edits.json
-muon api GET /api/artifacts/ARTIFACT-ID --output screenshot.png
+muon api GET /api/assets/ASSET-ID/content --output screenshot.png
 ```
 
 Generic paths must stay within `/api/` on the configured origin. Bearer credentials, permissions, validation, conflicts, and owner approval checks behave exactly as they do for named commands. The shared `ApiClient` is transport-only and also works in the browser with a same-origin `/api` base.

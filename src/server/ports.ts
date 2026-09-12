@@ -1,4 +1,4 @@
-import type { AppSnapshot, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { AppSnapshot, Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
 
 export interface Repository {
   initialize(scope: Scope, project: Project, settings: Settings): Promise<void>;
@@ -10,6 +10,9 @@ export interface Repository {
   task(scope: Scope, id: string): Promise<Task | undefined>;
   insertTask(scope: Scope, task: Task): Promise<Task>;
   saveTask(scope: Scope, task: Task, expectedVersion: number): Promise<Task>;
+  assets(scope: Scope): Promise<Asset[]>;
+  asset(scope: Scope, id: string): Promise<Asset | undefined>;
+  insertAsset(scope: Scope, asset: Asset): Promise<Asset>;
   attention(scope: Scope): Promise<Attention[]>;
   putAttention(scope: Scope, attention: Attention): Promise<void>;
   removeAttention(scope: Scope, taskId: string, kind?: Attention['kind']): Promise<void>;
@@ -23,6 +26,12 @@ export interface Repository {
 export interface ArtifactStore {
   importFile(scope: Scope, taskId: string, workspacePath: string, relativePath: string): Promise<string>;
   read(scope: Scope, id: string): Promise<{ data: Uint8Array; mime: string } | undefined>;
+}
+export interface AssetStorage {
+  readonly backendId: string;
+  /** Creates immutable content. Retrying an identical write is allowed. */
+  write(scope: Scope, objectKey: string, data: Uint8Array): Promise<void>;
+  read(scope: Scope, objectKey: string): Promise<Uint8Array | undefined>;
 }
 export interface IdentityProvider { currentScope(): Scope }
 export interface Dispatcher { start(): void; stop(): Promise<void>; tick(): Promise<void> }

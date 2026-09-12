@@ -1,9 +1,27 @@
+import { assetIdFromUrl } from '../../shared/asset-references';
 import { AlertCircle, ArrowDown, ArrowUp, Check, CheckCircle2, Circle, CircleDashed, CircleDot, CirclePause, Minus, SignalHigh, SignalLow, SignalMedium, Sparkles, XCircle } from 'lucide-react';
 import type { Priority, Provider, TaskStatus } from '../../shared/types';
 import { PRIORITY_LABELS, STATUS_LABELS } from '../../shared/types';
 import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { isAssetImageUrl } from '../lib/asset-preview';
+import { assetMarkdownUrl, AssetReferenceImage, AssetReferenceLink } from './asset-preview';
+
+// Stable renderer identities keep open asset dialogs mounted during workspace polling.
+const MARKDOWN_COMPONENTS: Components = {
+  img: ({ src, alt }) => {
+    const assetId = assetIdFromUrl(src);
+    return assetId ? <AssetReferenceImage assetId={assetId} alt={alt} /> : typeof src === 'string' && (isAssetImageUrl(src) || src.startsWith('/api/artifacts/') || /^data:image\/(png|jpeg|gif|webp);base64,/i.test(src))
+      ? <img src={src} alt={alt || 'Attached image'} loading="lazy" />
+      : <span className="markdown-image-placeholder">{alt || 'Image'} · external image</span>;
+  },
+  a: ({ href, children: label }) => {
+    const assetId = assetIdFromUrl(href);
+    return assetId ? <AssetReferenceLink assetId={assetId}>{label}</AssetReferenceLink> : <a href={href} target="_blank" rel="noreferrer">{label}</a>;
+  },
+};
 
 export function MuonMark({ small = false }: { small?: boolean }) {
   return <span className={`muon-mark ${small ? 'small' : ''}`} aria-hidden="true"><i /><i /><i /></span>;
@@ -25,12 +43,7 @@ export function EmptyState({ icon, title, description, action }: { icon?: ReactN
   return <div className="empty-state"><div className="empty-icon">{icon || <Sparkles size={24} />}</div><h3>{title}</h3><p>{description}</p>{action}</div>;
 }
 export function Markdown({ children }: { children: string }) {
-  return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-    img: ({ src, alt }) => typeof src === 'string' && (src.startsWith('/api/artifacts/') || /^data:image\/(png|jpeg|gif|webp);base64,/i.test(src))
-      ? <img src={src} alt={alt || 'Attached image'} loading="lazy" />
-      : <span className="markdown-image-placeholder">{alt || 'Image'} · external image</span>,
-    a: ({ children: label, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
-  }}>{children}</ReactMarkdown></div>;
+  return <div className="markdown"><ReactMarkdown skipHtml urlTransform={assetMarkdownUrl} remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>{children}</ReactMarkdown></div>;
 }
 export function ResultIcon({ result }: { result?: 'passed' | 'failed' | 'skipped' }) {
   return result === 'passed' ? <Check size={15} className="text-success" /> : result === 'failed' ? <XCircle size={15} className="text-danger" /> : <Minus size={15} />;

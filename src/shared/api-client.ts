@@ -49,11 +49,12 @@ export class ApiClient {
     const url = this.url(path);
     const headers = new Headers({ Accept: 'application/json' });
     if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
-    if (body !== undefined || !['GET', 'HEAD'].includes(method.toUpperCase())) headers.set('Content-Type', 'application/json');
+    const multipart = body instanceof FormData;
+    if (!multipart && (body !== undefined || !['GET', 'HEAD'].includes(method.toUpperCase()))) headers.set('Content-Type', 'application/json');
     let response: Response;
     try {
       response = await this.fetcher(url, {
-        method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        method, headers, body: multipart ? body : body === undefined ? undefined : JSON.stringify(body),
         redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {

@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
 import { ConflictError } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 
@@ -24,6 +25,12 @@ const attention = (id: string, taskId: string, kind: Attention['kind'] = 'plan_a
   id, taskId, kind, title: 'Review RFC', description: 'A plan needs approval.', createdAt: timestamp,
 });
 const message = (id: string): ChiefMessage => ({ id, role: 'user', content: id, createdAt: timestamp });
+const asset = (id: string): Asset => ({
+  id, workspaceId: scope.workspaceId, projectId: scope.projectId, name: 'report.md',
+  mediaType: 'text/markdown', sizeBytes: 8, sha256: 'a'.repeat(64), storageBackendId: 'local',
+  objectKey: id, origin: 'generated', createdAt: timestamp, createdByUserId: scope.userId,
+  ownerUserId: scope.userId, visibility: 'private',
+});
 
 const opened = new Set<SqliteRepository>();
 const directories: string[] = [];
@@ -42,6 +49,58 @@ afterEach(async () => {
 });
 
 describe('SqliteRepository', () => {
+  it('persists immutable assets with project and workspace isolation', async () => {
+    const repo = await repository();
+    const otherProject = { ...scope, projectId: 'project-b' };
+    const otherWorkspace = { ...scope, workspaceId: 'workspace-b' };
+    for (const target of [otherProject, otherWorkspace]) await repo.initialize(target, project(target), settings);
+    const first = await repo.insertAsset(scope, asset('same-id'));
+    await repo.insertAsset(otherProject, { ...asset('same-id'), name: 'Other project.md' });
+    await repo.insertAsset(otherWorkspace, { ...asset('same-id'), name: 'Other workspace.md' });
+    expect(await repo.assets(scope)).toEqual([first]);
+    expect((await repo.asset(otherProject, first.id))?.name).toBe('Other project.md');
+    expect((await repo.asset(otherWorkspace, first.id))?.name).toBe('Other workspace.md');
+    expect(await repo.asset({ ...scope, projectId: 'missing' }, first.id)).toBeUndefined();
+    await expect(repo.insertAsset(scope, { ...first, name: 'Replacement.md' })).rejects.toThrow();
+    await expect(repo.insertAsset(scope, { ...first, id: 'duplicate-key' })).rejects.toThrow();
+    expect(await repo.asset(scope, first.id)).toEqual(first);
+  });
+
+  it('migrates a version 1 database without changing existing task records', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'muon-repository-migration-'));
+    directories.push(directory);
+    const filename = join(directory, 'muon.sqlite');
+    let repo = await repository(filename);
+    const original = await repo.insertTask(scope, task('first'));
+    close(repo);
+    const oldDatabase = new DatabaseSync(filename);
+    oldDatabase.exec('DROP TABLE assets; PRAGMA user_version = 1;');
+    oldDatabase.close();
+    repo = await repository(filename);
+    expect(await repo.task(scope, original.id)).toEqual(original);
+    const stored = await repo.insertAsset(scope, asset('asset-1'));
+    close(repo);
+    repo = await repository(filename);
+    expect(await repo.asset(scope, stored.id)).toEqual(stored);
+    expect((await repo.insertTask(scope, task('second'))).identifier).toBe('MUO-2');
+    const migratedDatabase = new DatabaseSync(filename);
+    expect(migratedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
+    migratedDatabase.close();
+  });
+
+  it('refuses a newer database schema without rewriting its version', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'muon-repository-migration-'));
+    directories.push(directory);
+    const filename = join(directory, 'muon.sqlite');
+    const futureDatabase = new DatabaseSync(filename);
+    futureDatabase.exec('PRAGMA user_version = 3;');
+    futureDatabase.close();
+    expect(() => new SqliteRepository(filename)).toThrow('newer version');
+    const unchangedDatabase = new DatabaseSync(filename);
+    expect(unchangedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(3);
+    unchangedDatabase.close();
+  });
+
   it('isolates records by both workspace and project even when task IDs match', async () => {
     const repo = await repository();
     const otherProject = { ...scope, projectId: 'project-b' };

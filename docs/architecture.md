@@ -20,8 +20,10 @@ flowchart LR
   Service --> Agents[AgentAdapter]
   Agents --> Claude[Claude Code]
   Agents --> Codex[Codex app-server]
-  Service --> Artifacts[ArtifactStore]
-  Artifacts --> Files[Managed local evidence files]
+  Service --> Assets[Asset service]
+  Assets --> Repository
+  Assets --> Storage[AssetStorage]
+  Storage --> Files[Managed local input and output files]
 ```
 
 The core records live in `src/shared/types.ts`, request schemas in `src/shared/api-contract.ts`, and the browser/CLI HTTP client in `src/shared/api-client.ts`. The server is the system of record; clients have no SQLite or TaskService dependency. The resource contract and command surface are documented in [REST API](rest-api.md) and [CLI](cli.md). HTTP clients see the same task records in list, board, detail, attention, and chief task links. No provider protocol frame is sent to React.
@@ -71,7 +73,7 @@ Submission atomically persists the user message and claims one pending chief req
 | `Repository` | `SqliteRepository`, driver kept in one module | PostgreSQL repository preserving scoped queries, optimistic versions, atomic ID allocation and chief enqueue |
 | `AgentAdapter` | `ClaudeCodeAdapter`, `CodexAdapter` | Worker RPC adapter with the same request/result and cancellation contract |
 | `WorkspaceProvider` | `LocalWorktreeProvider` | Remote checkout/container provider; return worker-local workspace references |
-| `ArtifactStore` | `LocalArtifactStore` | Object storage with authorized asset delivery |
+| `AssetStorage` | `LocalAssetStorage`; metadata is persisted through `Repository` | GCS or another object store with the same byte-storage contract and authorized asset delivery |
 | `IdentityProvider` | `LocalIdentityProvider` | Request identity/session and project membership provider |
 | `ChiefCommandGateway` | Scoped per-run local CLI executable and credential | Remote worker capability issuance using the same REST resource contract |
 | `HttpRequestAccess` | Local chief capability policy with trusted loopback owner | Authenticated request authorization and mutation observation |
@@ -79,11 +81,19 @@ Submission atomically persists the user message and claims one pending chief req
 
 Composition is confined to `src/server/index.ts`. The default fixed scope is supplied there rather than accepted from HTTP request bodies. A future authenticated HTTP layer must resolve scope per request, authorize project membership, and route to the appropriate coordinator. The application already separates owner and delegated provider and validates RFC owner authority.
 
-The repository stores task aggregates in JSON payloads with relational scope, identity, status, priority, and version columns for keys and indexes. Replacing SQLite with PostgreSQL can preserve the port and use JSONB; it still requires migrations, transactional equivalence, and operational work. This version uses schema version 1, not a complete multi-version migration framework.
+The repository stores task aggregates in JSON payloads with relational scope, identity, status, priority, and version columns for keys and indexes. Assets have their own scoped table, with storage identity columns and metadata payloads. Replacing SQLite with PostgreSQL can preserve the port and use JSONB; it still requires migrations, transactional equivalence, and operational work. Schema version 2 adds the asset table through a transactional upgrade from version 1; databases from a newer version are rejected.
 
 The UI polls the `/api/state` read model every two seconds. Push delivery/outbox and external notifications are deferred. Attention is a durable repository record, so replacing delivery does not change approval state. Project completion is reconciled when all tasks are Done/Canceled with at least one verified coding result; the notice distinguishes verified tasks, completed groups, and canceled work, remains acknowledged after reading, and clears when new work is added.
 
-## Evidence and workspace boundaries
+## Assets, evidence, and workspace boundaries
+
+`Asset` represents one retained file regardless of whether it was uploaded, imported, or generated. Its metadata includes scope, owner, visibility, display name, media type, byte size, SHA-256, storage backend ID, object key, creation time and creator. Origin describes how the file entered Muon; it does not restrict its future use. Assets have no task/run provenance fields or global input/output role. There is no `TaskAsset` model or task-to-asset relation in the database.
+
+Assets are referenced directly in text using `[name](asset://ID)` or `![alt](asset://ID)`. Task descriptions, RFCs, discussions, results, and evidence descriptions use the same syntax. The task assets resource derives a deduplicated view from these references; it does not store membership or mutate permissions. Every read independently enforces asset scope and visibility: private assets are owner-only, and project assets are visible within their project. Explicit sharing grants remain a future extension.
+
+`AssetService` persists metadata through `Repository` and bytes through `AssetStorage`. `LocalAssetStorage` is the shipped backend; GCS and other stores are extension points. Assets retain their bytes independently of provider processes and worktrees. Asset HTTP URLs resolve scoped database records before reading storage, and storage keys are not arbitrary host paths. The earlier `ArtifactStore` is retained as a compatibility boundary for old evidence URLs; startup migrates retained legacy evidence into asset records without rewriting verification outcomes.
+
+The owner can upload standalone assets or add an asset reference to an unstarted task description. Planning resolves description references and retains them in the RFC text; execution resolves the approved RFC's references. The local implementation stages read-only, checksum-verified copies of authorized files under `.muon-cache/inputs/` in the task's own worktree. Input sets are bounded to 100 files and 100 MiB combined; managed copies are excluded from untracked changes. Retaining an existing output requires a stopped task, a validated owned worktree, and an exact listed changed-file path, then appends the asset reference to the result and a durable evidence note. Earlier references remain discoverable after later runs replace the summary. This preserves an existing generated report without rerunning the task or treating a failed verification as successful.
 
 Muon creates one branch/worktree per coding task, records its original base commit, and revalidates repository, path, and branch identity before every phase. Both providers receive that workspace. Changed files are computed using Git against the recorded base, including committed, staged, unstaged, and untracked changes. Renames are represented as additions/deletions in this initial adapter. No automatic merging or removal is performed.
 
@@ -93,9 +103,9 @@ Repository setup validation is delegated to `WorkspaceProvider.validateRepositor
 
 Verification requires structured evidence with concrete test steps and observed results. At least one test must pass, and any failed or skipped reported test blocks completion. Required RFC checks cannot be reclassified as notes to bypass this gate. Optional investigations that could not run are disclosed separately; earlier failed or skipped attempts remain in history after recovery. Muon validates the report shape but does not independently prove that an agent's textual report is true. Evidence should be reviewed alongside the recorded commands and Git changes. A future verifier can use the same agent/workspace interfaces with stronger evidence attestation.
 
-Screenshots, recordings, and text attachments (TXT, LOG, Markdown, JSON, CSV) are copied from a task worktree into managed storage. Absolute paths, traversal, source symlink escapes, symlinked storage escapes, unsupported file types, and oversized files are rejected. An attachment failure retains the final summary, test steps/results, and any valid assets, adds explicit failure evidence, and blocks completion. Artifact reads are project-scoped. HTTP byte ranges support recording playback and seeking; the UI exposes full-size images and downloadable originals. The initial single-owner artifact store does not yet implement per-task ACLs or per-user recipients; those are required when adding multiple users.
+Verification attachments and declared output files are copied from the task worktree into managed asset storage. Absolute paths, traversal, source symlink escapes, symlinked storage escapes, and oversized files are rejected. File storage accepts arbitrary file types; supported previews are a separate UI concern. An attachment failure retains the final summary, test steps/results, and any valid assets, adds explicit failure evidence, and blocks completion. Reported outputs remain available even when verification fails. Asset reads enforce scope, owner, and visibility independently of the referring task. HTTP byte ranges support recording playback and seeking; the UI renders Markdown reports, images, and text and provides original downloads. Recipient-specific grants and a sharing-management UI remain future work.
 
-Markdown is rendered without raw HTML execution. HTML RFCs use an isolated, script-disabled iframe. The main UI exposes final results only, while Claude/Codex may retain their own normal local histories outside Muon.
+The Assets tab resolves the task's text references and renders GFM Markdown with tables and a navigable heading outline, raster images, video/audio controls, and text/code. Files are bounded to 100 MiB and text previews to 2 MiB; complete originals remain downloadable. Markdown renders without raw HTML execution or remote image loads. HTML and SVG assets show source instead of active previews. HTML RFCs use an isolated, script-disabled iframe. The main UI exposes final results only, while Claude/Codex may retain their own normal local histories outside Muon.
 
 ## What is deliberately not shipped
 

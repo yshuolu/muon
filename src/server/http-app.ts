@@ -8,12 +8,43 @@ import type { TaskService } from './task-service';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
-  listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema,
+  listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
   authorize(request: Request): void | Promise<void>;
   observe?(request: Request, response: Response): void | Promise<void>;
+}
+function isAssetUpload(path: string, method: string) {
+  return method === 'POST' && /^\/api\/(assets|tasks\/[^/]+\/assets)$/.test(path);
+}
+
+function assetResponse(bytes: Uint8Array, mediaType: string, name: string, range?: string, download = false) {
+  const data = new Uint8Array(bytes);
+  const safeInline = /^(image\/(png|jpeg|webp|gif)|video\/(mp4|webm)|audio\/(mpeg|ogg|wav)|text\/(plain|markdown)|application\/json)$/.test(mediaType);
+  const filename = name.replace(/[^a-zA-Z0-9_.-]/g, '_') || 'asset';
+  const wellFormedName = Array.from(name, char => char.length === 1 && /[\uD800-\uDFFF]/.test(char) ? '\uFFFD' : char).join('');
+  const utf8Name = encodeURIComponent(wellFormedName).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16)}`);
+  const headers = new Headers({
+    'Content-Type': mediaType, 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff',
+    'Accept-Ranges': 'bytes', 'Content-Disposition': `${download || !safeInline ? 'attachment' : 'inline'}; filename="${filename}"; filename*=UTF-8''${utf8Name}`,
+  });
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    const first = match?.[1] ? Number(match[1]) : undefined;
+    const last = match?.[2] ? Number(match[2]) : undefined;
+    const start = first ?? Math.max(0, data.length - (last ?? 0));
+    const end = first === undefined ? data.length - 1 : Math.min(last ?? data.length - 1, data.length - 1);
+    if (!match || (first === undefined && last === undefined) || (first !== undefined && !Number.isSafeInteger(first)) || (last !== undefined && !Number.isSafeInteger(last)) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= data.length || end < start) {
+      headers.set('Content-Range', `bytes */${data.length}`);
+      return new Response(null, { status: 416, headers });
+    }
+    headers.set('Content-Range', `bytes ${start}-${end}/${data.length}`);
+    headers.set('Content-Length', String(end - start + 1));
+    return new Response(data.slice(start, end + 1), { status: 206, headers });
+  }
+  headers.set('Content-Length', String(data.length));
+  return new Response(data, { headers });
 }
 export function createHttpApp(service: TaskService, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string; access?: HttpRequestAccess } = {}) {
   const app = new Hono();
@@ -26,7 +57,8 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
       try { const url = new URL(origin); if (url.protocol !== 'http:' || !hosts.has(url.host)) return c.json({ error: 'Cross-origin access is not allowed.' }, 403); }
       catch { return c.json({ error: 'Invalid origin.' }, 403); }
     }
-    if (!['GET', 'HEAD'].includes(c.req.method) && !c.req.header('content-type')?.includes('application/json')) return c.json({ error: 'Use application/json for mutations.' }, 415);
+    const multipart = isAssetUpload(c.req.path, c.req.method) && c.req.header('content-type')?.startsWith('multipart/form-data;');
+    if (!['GET', 'HEAD'].includes(c.req.method) && !multipart && !c.req.header('content-type')?.includes('application/json')) return c.json({ error: 'Use application/json for mutations, or multipart/form-data for asset uploads.' }, 415);
     if (options.ready && !options.ready()) return c.json({ error: 'Muon is starting. Try again shortly.' }, 503);
     // Body-limit middleware may replace c.req.raw while buffering a stream.
     // Keep the admitted request identity for the successful-write observer.
@@ -37,7 +69,10 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     c.header('Cache-Control', 'no-store');
     c.header('X-Content-Type-Options', 'nosniff');
   });
-  app.use('/api/*', bodyLimit({ maxSize: 1024 * 1024, onError: c => c.json({ error: 'Request exceeds 1 MB.' }, 413) }));
+  app.use('/api/*', async (c, next) => {
+    const upload = isAssetUpload(c.req.path, c.req.method) && c.req.header('content-type')?.startsWith('multipart/form-data;');
+    return bodyLimit({ maxSize: (upload ? 101 : 1) * 1024 * 1024, onError: context => context.json({ error: upload ? 'Asset upload request exceeds 101 MiB.' : 'Request exceeds 1 MB.' }, 413) })(c, next);
+  });
   app.onError((error, c) => {
     if (error instanceof z.ZodError) return c.json({ error: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') }, 400);
     if (error instanceof SyntaxError) return c.json({ error: 'Invalid JSON.' }, 400);
@@ -93,6 +128,34 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
       (!search || [task.identifier, task.title, task.description, ...task.labels].some(value => value.toLowerCase().includes(search)))));
   });
   app.get('/api/tasks/:id', async c => c.json(await taskByReference(c.req.param('id'))));
+  app.get('/api/tasks/:id/assets', async c => c.json(await service.listTaskAssets((await taskByReference(c.req.param('id'))).id)));
+  const uploadedFile = async (request: Request) => {
+    if (!request.headers.get('content-type')?.startsWith('multipart/form-data;')) throw new DomainError('Upload a file with multipart/form-data.', 415);
+    let form: FormData;
+    try { form = await request.formData(); } catch { throw new DomainError('Invalid multipart upload.'); }
+    const file = form.get('file');
+    if (!(file instanceof File) || form.getAll('file').length !== 1 || [...form.keys()].some(key => key !== 'file')) throw new DomainError('Upload exactly one file in the file field.');
+    if (file.size > 100 * 1024 * 1024) throw new DomainError('Assets must be at most 100 MiB.', 413);
+    return { name: file.name, mediaType: file.type || undefined, data: new Uint8Array(await file.arrayBuffer()) };
+  };
+  app.post('/api/assets', async c => c.json(await service.uploadAsset(await uploadedFile(c.req.raw)), 201));
+  app.post('/api/tasks/:id/assets', async c => {
+    const task = await taskByReference(c.req.param('id'));
+    return c.json(await service.uploadTaskAsset(task.id, await uploadedFile(c.req.raw)), 201);
+  });
+  app.post('/api/tasks/:id/assets/attach', async c => {
+    const { assetId } = attachAssetSchema.parse(await c.req.json());
+    return c.json(await service.attachTaskAsset((await taskByReference(c.req.param('id'))).id, assetId));
+  });
+  app.post('/api/tasks/:id/assets/import', async c => {
+    const { path } = importAssetSchema.parse(await c.req.json());
+    return c.json(await service.importTaskAsset((await taskByReference(c.req.param('id'))).id, path), 201);
+  });
+  app.get('/api/assets/:id', async c => c.json(await service.getAsset(c.req.param('id'))));
+  app.get('/api/assets/:id/content', async c => {
+    const { asset, data } = await service.readAsset(c.req.param('id'));
+    return assetResponse(data, asset.mediaType, asset.name, c.req.header('range'), c.req.query('download') === '1');
+  });
   for (const [resource, property] of [['plans', 'plans'], ['evidence', 'evidence'], ['files', 'changedFiles'], ['activity', 'activity'], ['runs', 'runs']] as const) {
     app.get(`/api/tasks/:id/${resource}`, async c => c.json((await taskByReference(c.req.param('id')))[property] ?? []));
   }
@@ -178,7 +241,7 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     await service.updateSettings(input); return c.json({ ok: true });
   });
   app.get('/api/artifacts/:id', async c => {
-    const artifact = await artifacts.read(service.scope, c.req.param('id'));
+    const artifact = await service.readLegacyArtifact(c.req.param('id'));
     if (!artifact) return c.json({ error: 'Artifact not found.' }, 404);
     const data = new Uint8Array(artifact.data);
     const headers = new Headers({ 'Content-Type': artifact.mime, 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes' });

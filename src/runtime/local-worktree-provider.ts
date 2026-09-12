@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { ChangedFile, TaskWorkspace, WorkspaceProvider } from './contracts.js';
 import { exportWorktreeChanges } from './local-worktree-export.js';
+import { ASSET_INPUT_DIRECTORY, materializeAssetInputs } from './local-asset-inputs.js';
 
 const exec = promisify(execFile);
 type Manifest = TaskWorkspace & { repositoryPath: string; commonDirectory: string; taskId: string };
@@ -66,6 +67,14 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
 
   exportChanges(input: TaskWorkspace & { maxBytes?: number }) {
     return exportWorktreeChanges(input, { validate: () => this.validateExport(input), changedFiles: () => this.changedFiles(input) });
+  }
+
+  async materializeInputs(workspace: TaskWorkspace, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>) {
+    await this.validateExport(workspace);
+    // A repository-owned file must never be silently replaced by a managed input.
+    const tracked = await git(workspace.path, ['ls-files', '-z', '--', ASSET_INPUT_DIRECTORY]);
+    if (tracked) throw new Error('The reserved input asset directory contains tracked files.');
+    return materializeAssetInputs(workspace.path, inputs);
   }
 
   async ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace> {
@@ -156,6 +165,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
       if (file) changed.push({ path: file, status: status[i] ?? 'M', ...(stats.get(file) ?? { additions: 0, deletions: 0 }) });
     }
     for (const file of untrackedOutput.split('\0').filter(Boolean)) {
+      if (file.startsWith(`${ASSET_INPUT_DIRECTORY}/`)) continue;
       const absolute = resolve(path, file);
       if (!inside(path, absolute)) throw new Error('Git returned a path outside the worktree.');
       let additions = 0;

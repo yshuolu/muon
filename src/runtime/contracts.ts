@@ -51,4 +51,5 @@ export interface WorkspaceProvider {
   ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;
   changedFiles(input: { path: string; baseCommit: string }): Promise<ChangedFile[]>;
   exportChanges?(input: TaskWorkspace & { maxBytes?: number }): Promise<WorkspaceChanges>;
+  materializeInputs?(workspace: TaskWorkspace, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>): Promise<Array<{ id: string; name: string; path: string }>>;
 }

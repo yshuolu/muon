@@ -67,7 +67,7 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     if (!grant) return; // The existing local UI/owner CLI trust boundary.
     const path = new URL(request.url).pathname;
     const method = request.method;
-    const read = ['GET', 'HEAD'].includes(method) && /^\/api\/(health|state|project|settings|runtime|tasks|attention|chief\/messages|artifacts)(\/|$)/.test(path);
+    const read = ['GET', 'HEAD'].includes(method) && /^\/api\/(health|state|project|settings|runtime|tasks|attention|chief\/messages|artifacts|assets)(\/|$)/.test(path);
     const taskWrite = method === 'POST' && path === '/api/tasks'
       || method === 'PATCH' && /^\/api\/tasks\/[^/]+$/.test(path)
       || method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|retry)$/.test(path);

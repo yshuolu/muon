@@ -5,6 +5,12 @@ export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'don
 export type TaskPhase = 'idle' | 'planning' | 'plan_review' | 'building' | 'verification' | 'complete';
 export type Priority = 0 | 1 | 2 | 3 | 4;
 export interface Scope { workspaceId: string; projectId: string; userId: string }
+export interface Asset {
+  id: string; workspaceId: string; projectId: string; name: string; mediaType: string;
+  sizeBytes: number; sha256: string; storageBackendId: string; objectKey: string;
+  origin: 'upload' | 'generated' | 'imported'; createdAt: string; createdByUserId: string;
+  ownerUserId: string; visibility: 'private' | 'project'; sourcePath?: string;
+}
 export interface DependencyInput {
   taskId: string; identifier: string; title: string; capturedAt: string;
   changes: WorkspaceChanges;
