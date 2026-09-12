@@ -555,9 +555,7 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .plan-feedback-form > div { display: flex; justify-content: flex-end; gap: 9px; margin-top: 12px; }
 .plan-approved { display: flex; align-items: center; gap: 7px; color: var(--success); font-size: 12px; margin: 19px 0 0; }
 .plan-review-workspace { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.plan-review-workspace > .detail-main-heading { flex-shrink: 0; width: 100%; max-width: none; padding: 20px 32px 16px; }
-.plan-review-workspace .detail-title-row h1 { font-size: 23px; }
-.plan-review-workspace .detail-heading-meta { margin-top: 10px; }
+.plan-review-workspace > .detail-main-heading { flex-shrink: 0; }
 .plan-review-workspace > .workflow-rail { flex-shrink: 0; width: 100%; max-width: none; padding: 0 32px; margin-bottom: 18px; }
 .plan-review-workspace > .detail-tabs { flex-shrink: 0; }
 .plan-review-workspace > .queue-explanation { flex-shrink: 0; width: calc(100% - 64px); margin: 0 32px 16px; padding: 10px 14px; }
@@ -638,7 +636,6 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
   .plan-discussion-approval strong { font-size: 12px; }
   .plan-discussion-approval p { font-size: 11px; }
   .plan-version-notice { align-items: flex-start; flex-direction: column; }
-  .plan-review-workspace > .detail-main-heading { padding: 22px 22px 18px; }
   .plan-review-workspace > .workflow-rail { padding: 0 22px; }
 }
 .plan-dependencies { margin: 0 0 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); padding: 15px 17px; color: var(--foreground); }
