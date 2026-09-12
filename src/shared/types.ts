@@ -60,7 +60,7 @@ export interface Settings { maxConcurrentAgents: number; dispatcherEnabled: bool
 export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
 export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string }
 export interface PlanningChat { id: string; messages: PlanningChatMessage[]; createdAt: string; updatedAt: string; busy: boolean; activity?: string | null; error?: string }
-export interface AgentRuntimeConfig { model: string; thinking: string }
+export interface AgentRuntimeConfig { model: string; thinking: string; bypassPermissions: boolean }
 export interface AppSnapshot {
   scope: Scope; project: Project; settings: Settings; tasks: Task[];
   attention: Attention[]; messages: ChiefMessage[];

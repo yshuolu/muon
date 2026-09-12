@@ -91,7 +91,8 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 | `MUON_CLAUDE_EXECUTABLE` | `claude` | Claude Code executable |
 | `MUON_CLAUDE_MODEL` | `claude-fable-5-1[1m]` | Claude Code model |
 | `MUON_CLAUDE_EFFORT` | `max` | Claude Code thinking effort |
-| `MUON_CLAUDE_ALLOWED_DOMAINS` | `registry.npmjs.org` | Comma-separated dependency/test hosts allowed during approved Claude builds and verification |
+| `MUON_CLAUDE_ALLOWED_DOMAINS` | `registry.npmjs.org` | Legacy allowlist used when agent permission bypass is disabled |
+| `MUON_AGENT_BYPASS_PERMISSIONS` | enabled | Set to `0` to retain provider sandbox and approval restrictions; enabled runs Claude with `--dangerously-skip-permissions` and Codex with `danger-full-access` |
 | `MUON_CLAUDE_ALLOW_LOCAL_SERVERS` | unset | Set to `1` when approved Claude tasks need to start a local preview/test server |
 | `MUON_CODEX_EXECUTABLE` | project-managed Codex CLI | Optional override for a specific Codex executable |
 | `MUON_CODEX_MODEL` | `gpt-6-astra` | Codex model |
@@ -101,7 +102,7 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 The app binds to loopback and rejects foreign hosts/origins. It has a fixed local owner, not a network authentication system. Do not expose this local server publicly.
 
-Claude's default command network policy permits the public npm registry. Projects using another package registry, browser downloads, or network integration tests need their specific hosts added to `MUON_CLAUDE_ALLOWED_DOMAINS`. Add localhost hosts and enable `MUON_CLAUDE_ALLOW_LOCAL_SERVERS` when your project tests start a local web server. These are explicit owner runtime settings; missing permission blocks a task with retained results and a recovery action. Codex permits outbound dependency access during approved build/verification phases. Neither provider grants source edits during planning.
+By default, Muon launches coding, planning, chat, and verification agents with the owner's full local permissions: Claude uses `--dangerously-skip-permissions`, and Codex uses `approvalPolicy: never` with `danger-full-access`. Set `MUON_AGENT_BYPASS_PERMISSIONS=0` to restore the restricted provider policies. The chief remains scoped to its Muon CLI so it cannot mutate tasks outside the server's owner boundary. Full access lets agents read or write outside isolated worktrees and use unrestricted network access; enable it only when that is your intended local policy.
 
 ## Architecture and validation
 

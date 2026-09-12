@@ -35,7 +35,7 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
   const subtasks = snapshot.tasks.filter(t => t.parentId === task.id);
   const parent = snapshot.tasks.find(t => t.id === task.parentId);
   const isGroup = task.kind === 'group';
-  const agentConfig = snapshot.runtime.config?.[task.provider] ?? (task.provider === 'claude' ? { model: 'claude-fable-5-1[1m]', thinking: 'max' } : { model: 'gpt-6-astra', thinking: 'ultra' });
+  const agentConfig = snapshot.runtime.config?.[task.provider] ?? (task.provider === 'claude' ? { model: 'claude-fable-5-1[1m]', thinking: 'max', bypassPermissions: true } : { model: 'gpt-6-astra', thinking: 'ultra', bypassPermissions: true });
   const waiting = queueReasons(task, snapshot);
   const canEdit = isGroup ? task.status !== 'canceled' : ['backlog', 'todo'].includes(task.status) && task.phase === 'idle';
   const canCancel = !['done', 'canceled'].includes(task.status);

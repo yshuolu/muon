@@ -56,7 +56,8 @@ lines.on('line', line => {
     const prompt = frame.params.input[0].text;
     send({id:frame.id,result:prompt === 'deferred-id' ? {} : {turn:{id:'turn-1',status:'inProgress'}}});
     setTimeout(() => {
-      if (prompt === 'permission') { send({id:900,method:'item/commandExecution/requestApproval',params:{threadId,turnId:'turn-1'}}); return; }
+      if (prompt === 'permission') send({id:900,method:'item/commandExecution/requestApproval',params:{threadId,turnId:'turn-1'}});
+      if (prompt === 'permissions') send({id:901,method:'item/permissions/requestApproval',params:{threadId,turnId:'turn-1'}});
       const event = (method, params) => send({method,params:{threadId,turnId:'turn-1',...params}});
       event('turn/started',{turn:{id:'turn-1'}});
       send({method:'turn/completed',params:{threadId:'someone-else',turn:{id:'other',status:'failed'}}});
@@ -131,6 +132,15 @@ describe('ClaudeCodeAdapter', () => {
     expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true, excludedCommands: [] });
     expect(args).not.toContain('--dangerously-skip-permissions');
   });
+  it('supports explicit full-access task execution when enabled', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'claude', phase: 'planning', cwd: directory, prompt: 'Research' });
+    const { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('--restricted');
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Edit,Write,Bash');
+    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } });
+  });
 
   it.each([['error', 'Test command denied'], ['crash', 'Please sign in'], ['malformed', 'Invalid agent protocol']])('surfaces %s without accepting partial output', async (prompt, message) => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
@@ -184,6 +194,17 @@ describe('CodexAdapter', () => {
     expect(requests[3].params.sandbox).toBe('read-only');
     expect(requests[3].params.config.mcp_servers['personal-tools'].enabled).toBe(false);
     expect(requests[4].params.sandboxPolicy).toEqual({ type: 'readOnly' });
+  });
+  it('uses danger-full-access policies when explicitly enabled', async () => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'codex', phase: 'building', cwd: directory, prompt: 'Build' });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(requests[3].params.sandbox).toBe('danger-full-access');
+    expect(requests[4].params.sandboxPolicy).toEqual({ type: 'dangerFullAccess' });
+  });
+  it('does not abort full-access runs on provider permission requests', async () => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await expect(adapter.run({ provider: 'codex', phase: 'building', cwd: directory, prompt: 'permissions' })).resolves.toMatchObject({ text: 'Final result' });
   });
 
   it('accepts legacy completed messages without phase metadata', async () => {

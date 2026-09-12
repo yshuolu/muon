@@ -12,6 +12,7 @@ import { LocalChiefCommands } from './local-chief-commands';
 
 const demo = process.env.MUON_DEMO === '1';
 const port = Number(process.env.PORT ?? 4310);
+const bypassAgentPermissions = process.env.MUON_AGENT_BYPASS_PERMISSIONS !== '0';
 const dataRoot = resolve(process.env.MUON_DATA_DIR ?? '.muon', demo ? 'demo' : 'local');
 const releaseInstance = await acquireLocalInstance(dataRoot);
 const scope = new LocalIdentityProvider().currentScope();
@@ -25,10 +26,12 @@ const service = new TaskService({ scope, repository, artifacts, demo, chiefComma
       effort: process.env.MUON_CLAUDE_EFFORT ?? 'max',
       allowedNetworkDomains: process.env.MUON_CLAUDE_ALLOWED_DOMAINS?.split(',').map(domain => domain.trim()).filter(Boolean),
       allowLocalBinding: process.env.MUON_CLAUDE_ALLOW_LOCAL_SERVERS === '1',
+      bypassPermissions: bypassAgentPermissions,
     }),
     codex: new CodexAdapter(process.env.MUON_CODEX_EXECUTABLE, {
       model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra',
       reasoningEffort: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra',
+      bypassPermissions: bypassAgentPermissions,
     }),
   },
   workspaces: demo ? demoWorkspaces : new LocalWorktreeProvider(resolve(dataRoot, 'worktrees')),

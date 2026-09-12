@@ -14,13 +14,15 @@ export class CodexAdapter implements AgentAdapter {
   private readonly prefixArgs: string[];
   private readonly model?: string;
   private readonly reasoningEffort?: string;
+  private readonly bypassPermissions: boolean;
 
-  constructor(executable?: string, options: { model?: string; reasoningEffort?: string } = {}) {
+  constructor(executable?: string, options: { model?: string; reasoningEffort?: string; bypassPermissions?: boolean } = {}) {
     // Use the project's tested CLI version, while retaining an explicit host override.
     this.executable = executable ?? process.execPath;
     this.prefixArgs = executable ? [] : [createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js')];
     this.model = options.model;
     this.reasoningEffort = options.reasoningEffort;
+    this.bypassPermissions = options.bypassPermissions ?? false;
   }
 
   available(): Promise<boolean> { return executableAvailable(this.executable, this.prefixArgs); }
@@ -72,9 +74,11 @@ export class CodexAdapter implements AgentAdapter {
           if (typeof frame.method === 'string' && frame.id !== undefined) {
             // The hardcoded workflow does not auto-grant tool escalation or user input.
             if (frame.method === 'item/commandExecution/requestApproval' || frame.method === 'item/fileChange/requestApproval') {
-              process?.send({ id: frame.id, result: { decision: 'decline' } });
+              process?.send({ id: frame.id, result: { decision: this.bypassPermissions ? 'accept' : 'decline' } });
+              if (this.bypassPermissions) return;
             } else if (frame.method === 'item/permissions/requestApproval') {
               process?.send({ id: frame.id, result: { permissions: {}, scope: 'turn' } });
+              if (this.bypassPermissions) return;
             } else if (frame.method === 'mcpServer/elicitation/request') {
               process?.send({ id: frame.id, result: { action: 'decline', content: null } });
             } else {
@@ -147,7 +151,7 @@ export class CodexAdapter implements AgentAdapter {
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
-        cwd: request.cwd, approvalPolicy: 'never', sandbox: readonly ? 'read-only' : 'workspace-write',
+        cwd: request.cwd, approvalPolicy: 'never', sandbox: this.bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
         config,
       }));
       sessionId = text(record(opened?.thread)?.id);
@@ -159,7 +163,9 @@ export class CodexAdapter implements AgentAdapter {
         input: [{ type: 'text', text: request.prompt }],
         cwd: request.cwd,
         approvalPolicy: 'never',
-        sandboxPolicy: readonly
+        sandboxPolicy: this.bypassPermissions
+          ? { type: 'dangerFullAccess' }
+          : readonly
           ? { type: 'readOnly' }
           : { type: 'workspaceWrite', writableRoots: [request.cwd], networkAccess: true },
       }));

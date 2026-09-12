@@ -46,6 +46,8 @@ export interface ClaudeCodeOptions {
   allowLocalBinding?: boolean;
   model?: string;
   effort?: string;
+  /** Run every Muon provider phase with the owner's full local permissions. */
+  bypassPermissions?: boolean;
 }
 
 export class ClaudeCodeAdapter implements AgentAdapter {
@@ -54,6 +56,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   private readonly allowLocalBinding: boolean;
   private readonly model?: string;
   private readonly effort?: string;
+  private readonly bypassPermissions: boolean;
 
   constructor(private readonly executable = 'claude', options: ClaudeCodeOptions = {}) {
     const domains = options.allowedNetworkDomains ?? ['registry.npmjs.org'];
@@ -62,6 +65,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     this.allowLocalBinding = options.allowLocalBinding ?? false;
     this.model = options.model;
     this.effort = options.effort;
+    this.bypassPermissions = options.bypassPermissions ?? false;
   }
 
   available(): Promise<boolean> { return executableAvailable(this.executable); }
@@ -77,6 +81,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
+    if (this.bypassPermissions && !chief) {
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(this.model ? ['--model', this.model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
+      return this.runProcess(request, args);
+    }
     const settings = {
       disableAllHooks: true,
       permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: [],
@@ -136,5 +144,19 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     } finally {
       await process?.stop();
     }
+  }
+
+  private async runProcess(request: AgentRequest, args: string[]): Promise<AgentResult> {
+    let process: JsonProcess | undefined;
+    let sessionId = request.sessionId;
+    try {
+      return await new Promise<AgentResult>((resolve, reject) => {
+        process = new JsonProcess({ executable: this.executable, args, cwd: request.cwd, signal: request.signal, onFault: reject, onRecord: value => {
+          const frame = record(value); if (!frame) return; sessionId = text(frame.session_id) ?? sessionId; const progress = progressFromFrame(frame); if (progress) request.onProgress?.(progress); if (frame.type !== 'result') return;
+          if (frame.is_error === true || (frame.subtype && frame.subtype !== 'success')) { reject(new Error(text(frame.result) ?? 'Claude could not complete the task.')); return; }
+          const result = text(frame.result); if (!result) { reject(new Error('Claude returned no final result.')); return; } resolve({ text: result, ...(sessionId ? { sessionId } : {}) });
+        }}); process.writePrompt(request.prompt);
+      });
+    } finally { await process?.stop(); }
   }
 }
