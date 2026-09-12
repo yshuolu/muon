@@ -400,10 +400,9 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .chief-suggestions > button > svg:first-child { color: var(--muted-foreground); }
 .chief-suggestions > button > svg:last-child { margin-left: auto; color: var(--muted-foreground); }
 .chief-composer-wrap { width: min(780px, calc(100% - 72px)); margin: 0 auto; padding-bottom: 22px; }
-.chief-runtime-meta { display: flex; align-items: center; gap: 9px; min-height: 25px; padding: 0 3px 7px; color: var(--muted-foreground); font-size: 11px; }
-.chief-runtime-meta > span:first-child { display: inline-flex; align-items: center; gap: 5px; color: var(--foreground); font-weight: 500; }
-.chief-runtime-meta code { max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
-.chief-runtime-meta > span:last-child { margin-left: auto; }
+.chief-runtime-meta { display: flex; align-items: center; min-height: 25px; padding: 0 3px 7px; color: var(--muted-foreground); font-size: 11px; }
+.chief-runtime-meta > span { display: inline-flex; align-items: center; gap: 5px; color: var(--foreground); font-weight: 500; }
+.chief-runtime-meta code { max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 400; }
 .chief-composer { border: 1px solid var(--input); border-radius: var(--radius-lg); padding: 14px 15px 10px; background: var(--card); box-shadow: 0 4px 20px rgb(0 0 0 / 5%); }
 .chief-composer:focus-within { border-color: var(--ring); }
 .chief-composer textarea { border: 0; background: none; padding: 0; resize: none; font-size: 14px; max-height: 160px; outline: none; }
