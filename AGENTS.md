@@ -5,9 +5,18 @@ These instructions apply to the entire repository.
 ## Project Context
 
 Muon is a local, task-first workspace for coordinating Claude Code and Codex
-agents. Keep the workflow reviewable: plans require owner approval before code
-changes, work happens in isolated Git worktrees, and verification evidence is
-durable.
+agents. Small, focused repository changes may proceed without separate plan
+approval; larger changes require owner approval of the plan before code changes.
+Work happens in isolated Git worktrees, and verification evidence is durable.
+Preserve Muon's in-product RFC approval gates for coding tasks.
+
+## Delivery
+
+- After completing and validating a change, always commit it, integrate it into
+  `main`, and push `main` to `origin` without asking for another approval.
+- Keep implementation work in an isolated Git worktree. Fetch the latest
+  `main`, preserve concurrent changes, and verify the integrated result before
+  pushing. Never force-push `main`.
 
 ## Source Changes
 

@@ -95,6 +95,8 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 ## Configuration
 
+Choose the chief of staff's model from the toolbar inside its message composer. The selection is saved for this project and applies only to chief requests. Choose **Use default** to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MUON_DATA_DIR` | `.muon` | Parent directory for local/demo state |

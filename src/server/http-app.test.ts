@@ -73,6 +73,27 @@ async function enableDispatch() {
 }
 
 describe('HTTP validation and local boundary', () => {
+  it('persists an owner-selected chief model and clears it without replacing other settings', async () => {
+    expect((await request('/api/settings', 'PATCH', { chiefModel: '  sonnet[1m]  ' })).status).toBe(200);
+    expect(await (await request('/api/settings')).json()).toMatchObject({ chiefModel: 'sonnet[1m]', defaultProvider: 'claude', maxConcurrentAgents: 1 });
+    expect((await request('/api/settings', 'PATCH', { chiefModel: null })).status).toBe(200);
+    expect((await repository.settings(scope)).chiefModel).toBeNull();
+  });
+
+  it.each(['', '   ', '-p', 'model --tools Bash', 'model\nname', 'model;command', 'x'.repeat(201), 42, {}])('rejects invalid chief model settings: %j', async chiefModel => {
+    expect((await request('/api/settings', 'PATCH', { chiefModel })).status).toBe(400);
+    expect((await repository.settings(scope)).chiefModel).toBeUndefined();
+  });
+
+  it('keeps chief model settings owner-only and rejects changing an active request model', async () => {
+    await service.sendChief('Organize the project');
+    await eventually(() => claude.calls.length === 1);
+    const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
+    expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' }, headers)).status).toBe(403);
+    expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' })).status).toBe(409);
+    expect((await repository.settings(scope)).chiefModel).toBeUndefined();
+  });
+
   it('validates repository setup through the workspace provider before saving settings', async () => {
     vi.mocked(workspaces.validateRepository!).mockRejectedValue(new Error('No committed Git history.'));
     const result = await request('/api/settings', 'PATCH', { repositoryPath: '/empty/git', projectName: 'Changed name', maxConcurrentAgents: 3 });

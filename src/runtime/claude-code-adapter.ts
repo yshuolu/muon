@@ -74,6 +74,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
     const chief = request.phase === 'chief';
+    const model = chief ? request.model ?? this.model : this.model;
     const readonly = request.phase === 'planning' || request.phase === 'chat';
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
@@ -108,7 +109,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--permission-mode', readonly ? 'plan' : chief ? 'default' : 'acceptEdits',
       '--permission-prompts', 'none',
       '--tools', readonly ? 'Read,Glob,Grep' : chief ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
-      ...(this.model ? ['--model', this.model] : []),
+      ...(model ? ['--model', model] : []),
       ...(this.effort ? ['--effort', this.effort] : []),
       '--disallowedTools', 'mcp__*',
       '--settings', JSON.stringify(settings),

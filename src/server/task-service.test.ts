@@ -247,6 +247,76 @@ describe('TaskService workflow', () => {
     expect((await f.repo.messages(scope)).map(item => item.content)).toEqual(['Organize the project', 'The project is organized.']);
   });
 
+  it('applies the saved model only to chief requests and restores the adapter default when cleared', async () => {
+    const f = await fixture(2);
+    const config = (await f.service.snapshot()).runtime.config;
+    await f.service.updateSettings({ chiefModel: 'sonnet[1m]' });
+    await f.service.sendChief('Organize the project');
+    const chief = await waitForCall(f, 0, 'chief');
+    expect(chief.request.model).toBe('sonnet[1m]');
+    await expect(f.service.updateSettings({ chiefModel: 'opus' })).rejects.toMatchObject({ status: 409 });
+    await expect(f.service.updateSettings({ chiefModel: null })).rejects.toMatchObject({ status: 409 });
+    await f.service.updateSettings({ chiefModel: 'sonnet[1m]' });
+    await f.service.createTask({ title: 'Coding model stays configured' });
+    await dispatch(f);
+    expect((await waitForCall(f, 1, 'planning')).request.model).toBeUndefined();
+    expect((await f.service.snapshot()).runtime.config).toEqual(config);
+    chief.finish('The project is organized.');
+    await eventually(async () => !(await f.service.snapshot()).runtime.chiefRunning, 'chief finished');
+    await f.service.updateSettings({ chiefModel: null });
+    await f.service.sendChief('Continue with the configured model');
+    expect((await waitForCall(f, 2, 'chief')).request.model).toBeUndefined();
+  });
+
+  it('keeps a queued chief model unchanged until capacity becomes available', async () => {
+    const f = await fixture();
+    await f.service.updateSettings({ chiefModel: 'sonnet' });
+    await f.service.createTask({ title: 'Occupy the only agent slot' });
+    await dispatch(f);
+    const coding = await waitForCall(f, 0, 'planning');
+    await f.service.sendChief('Organize when a slot is available');
+    await expect(f.service.updateSettings({ chiefModel: 'opus' })).rejects.toMatchObject({ status: 409 });
+    expect((await f.repo.settings(scope)).chiefModel).toBe('sonnet');
+    coding.finish('# RFC');
+    expect((await waitForCall(f, 1, 'chief')).request.model).toBe('sonnet');
+  });
+
+  it('waits for a model save before admitting a simultaneous chief message', async () => {
+    const f = await fixture();
+    let enter!: () => void; let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const saveSettings = f.repo.saveSettings.bind(f.repo);
+    vi.spyOn(f.repo, 'saveSettings').mockImplementationOnce(async (target, settings) => { enter(); await gate; await saveSettings(target, settings); });
+    const changing = f.service.updateSettings({ chiefModel: 'sonnet' });
+    await entered;
+    const sending = f.service.sendChief('Use my selected model');
+    try {
+      await setImmediate();
+      expect(await f.repo.messages(scope)).toEqual([]);
+    } finally { release(); }
+    await Promise.all([changing, sending]);
+    expect((await waitForCall(f, 0, 'chief')).request.model).toBe('sonnet');
+  });
+
+  it('rejects a model change racing an already-admitted chief message', async () => {
+    const f = await fixture();
+    await f.service.updateSettings({ chiefModel: 'sonnet' });
+    let enter!: () => void; let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const enqueueChief = f.repo.enqueueChief.bind(f.repo);
+    vi.spyOn(f.repo, 'enqueueChief').mockImplementationOnce(async (target, message) => { enter(); await gate; return enqueueChief(target, message); });
+    const sending = f.service.sendChief('Use the current model');
+    await entered;
+    const changing = f.service.updateSettings({ chiefModel: 'opus' });
+    const outcome = changing.catch(error => error);
+    release();
+    await sending;
+    expect(await outcome).toMatchObject({ status: 409 });
+    expect((await waitForCall(f, 0, 'chief')).request.model).toBe('sonnet');
+  });
+
   it('persists a chief priority-only update without erasing the task status', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Prioritize this', status: 'backlog', priority: 4 });

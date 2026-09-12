@@ -358,13 +358,16 @@ export class TaskService implements Dispatcher {
     await this.repo.putAttention(this.scope, { ...attention, readAt: now() });
   }
   async updateSettings(input: Partial<Settings> & { repositoryPath?: string; projectName?: string }) {
-    // Serialize configuration writes, including a harmless name/limit save racing a repository switch.
+    // Serialize settings writes with chief submission so a queued request keeps its selected model.
     const previousSettings = this.settingsIdle;
     let releaseSettings!: () => void;
     this.settingsIdle = new Promise<void>(resolve => { releaseSettings = resolve; });
     await previousSettings;
     try {
       const { repositoryPath, projectName, ...settings } = input;
+      const currentSettings = await this.repo.settings(this.scope);
+      const changingChiefModel = settings.chiefModel !== undefined && settings.chiefModel !== (currentSettings.chiefModel ?? null);
+      if (changingChiefModel && (this.chiefActive || await this.repo.pendingChief(this.scope))) throw new DomainError('Wait for the chief of staff to finish before changing its model.', 409);
       const project = await this.repo.project(this.scope);
       const changingRepository = repositoryPath !== undefined && repositoryPath !== project.repositoryPath;
       if (changingRepository) {
@@ -389,11 +392,19 @@ export class TaskService implements Dispatcher {
     }
   }
   async sendChief(content: string) {
-    if (this.chiefActive) throw new DomainError('The chief of staff is still active. Wait for it to finish.', 409);
-    const message = { id: randomUUID(), role: 'user' as const, content, createdAt: now() };
-    if (!await this.repo.enqueueChief(this.scope, message)) throw new DomainError('The chief of staff is already working. Wait for the final response.', 409);
-    void this.tick().catch(console.error);
-    return message;
+    const previousSettings = this.settingsIdle;
+    let releaseSettings!: () => void;
+    this.settingsIdle = new Promise<void>(resolve => { releaseSettings = resolve; });
+    await previousSettings;
+    try {
+      if (this.chiefActive) throw new DomainError('The chief of staff is still active. Wait for it to finish.', 409);
+      const message = { id: randomUUID(), role: 'user' as const, content, createdAt: now() };
+      if (!await this.repo.enqueueChief(this.scope, message)) throw new DomainError('The chief of staff is already working. Wait for the final response.', 409);
+      return message;
+    } finally {
+      releaseSettings();
+      void this.tick().catch(console.error);
+    }
   }
   createPlanningChat(): PlanningChat {
     const timestamp = now();
@@ -678,7 +689,7 @@ export class TaskService implements Dispatcher {
     let canRelease = true;
     let commands: ChiefCommandSession | undefined;
     const done = Promise.resolve().then(async () => {
-      const [project, messages] = await Promise.all([this.repo.project(this.scope), this.repo.messages(this.scope)]);
+      const [project, messages, settings] = await Promise.all([this.repo.project(this.scope), this.repo.messages(this.scope), this.repo.settings(this.scope)]);
       if (!project.repositoryPath) throw new DomainError('Set a repository path in workspace settings so the chief of staff can inspect your project.');
       if (!this.options.chiefCommands && !this.options.demo) throw new DomainError('The chief command interface is not configured. Start Muon through its HTTP server.');
       if (this.stopped || abort.signal.aborted) return;
@@ -686,7 +697,7 @@ export class TaskService implements Dispatcher {
       commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
       if (this.stopped || abort.signal.aborted) return;
       this.chiefActivity = 'Running Claude Code…';
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
+      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, model: settings.chiefModel ?? undefined, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');

@@ -99,6 +99,25 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     await expect(adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks' })).rejects.toThrow('scoped Muon CLI session');
   });
+  it('selects the chief model per request while preserving its scope and defaults for other phases', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions: true });
+    const chiefCli = { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' };
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', model: 'sonnet[1m]', chiefCli });
+    let { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet[1m]');
+    expect(args[args.indexOf('--effort') + 1]).toBe('max');
+    expect(args).toContain('--restricted');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    expect(settings.permissions.allow).toEqual([`Bash(${chiefCli.command} *)`]);
+    expect(settings.sandbox).toMatchObject({ enabled: true, allowUnsandboxedCommands: false });
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Use the default', chiefCli });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
+    await adapter.run({ provider: 'claude', phase: 'planning', cwd: directory, prompt: 'Make a plan', model: 'chief-only-model' });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
+  });
   it('returns only the final result and frames split UTF-8 correctly', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     expect(await adapter.available()).toBe(true);

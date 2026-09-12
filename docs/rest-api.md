@@ -23,7 +23,7 @@ The chief may manage task records through its authorized CLI calls. It cannot ap
 | `GET /health` | `{ "ok": true }` |
 | `GET /state` | `AppSnapshot` with scope, project, settings, tasks, attention, chief messages, runtime |
 | `GET /project` | `Project`, including configured repository path |
-| `GET /settings` | `Settings`: concurrency, dispatcher state, default provider |
+| `GET /settings` | `Settings`: concurrency, dispatcher state, default provider, optional chief model override |
 | `GET /runtime` | `AppSnapshot["runtime"]`: active count, chief state, provider availability, demo flag |
 | `GET /tasks` | `Task[]`, optionally filtered as below |
 | `GET /tasks/:task` | `Task` |
@@ -103,7 +103,7 @@ Discussion posts are owner operations; a chief bearer credential may read the co
 
 Recovery preserves prior attempts and artifacts: `retry` resumes the failed phase, `fix` returns to building within the approved scope, and `replan` requires a fresh owner review before building. Recovery feedback is optional and limited to 20,000 characters. The service validates whether each operation is appropriate for the task’s current state.
 
-Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnabled` (boolean), `defaultProvider`, `repositoryPath`, and `projectName`. Repository changes require a valid committed Git root and are rejected while they would disrupt current work. Changing project display name does not change its stable project ID or task identifier prefix.
+Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnabled` (boolean), `defaultProvider`, `repositoryPath`, `projectName`, and `chiefModel`. The chief model is a trimmed model alias or identifier of 1–200 characters, starting with a letter or digit and containing only letters, digits, `.`, `_`, `:`, `/`, `[`, `]`, or `-`. Set it to `null` to use the configured Claude default. It applies only to chief requests; model changes return 409 while a chief request is queued or running. Settings writes and chief submission are serialized so an accepted request retains its selected model. Model availability is checked by the Claude runtime when it runs. Repository changes require a valid committed Git root and are rejected while they would disrupt current work. Changing project display name does not change its stable project ID or task identifier prefix.
 
 Chief messages accept 1–30,000 nonblank characters. A simultaneous or already-pending chief request returns 409. A 202 response means the request was recorded for dispatch; poll `/chief/messages` and `/runtime` for the final result. Creating a Todo task similarly records it immediately; the dispatcher selects eligible work within the shared concurrency limit.
 
