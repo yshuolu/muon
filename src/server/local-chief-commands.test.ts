@@ -24,12 +24,12 @@ describe('Local chief CLI capabilities', () => {
     for (const [path, method] of [
       ['state', 'GET'], ['project', 'GET'], ['settings', 'GET'], ['runtime', 'GET'], ['tasks', 'GET'],
       ['tasks/MUO-1/evidence', 'GET'], ['attention', 'GET'], ['chief/messages', 'GET'], ['artifacts/file', 'GET'],
-      ['tasks/MUO-1/plan-discussion', 'GET'],
+      ['tasks/MUO-1/plan-discussion', 'GET'], ['tasks/MUO-1/comments', 'GET'],
       ['tasks', 'POST'], ['tasks/MUO-1', 'PATCH'], ['tasks/MUO-1/cancel', 'POST'], ['tasks/MUO-1/retry', 'POST'],
     ]) expect(() => commands.authorize(request(grant, path, method))).not.toThrow();
     for (const [path, method] of [
       ['tasks/MUO-1/approve', 'POST'], ['tasks/MUO-1/request-changes', 'POST'], ['settings', 'PATCH'],
-      ['tasks/MUO-1/plan-discussion', 'POST'],
+      ['tasks/MUO-1/plan-discussion', 'POST'], ['tasks/MUO-1/comments', 'POST'], ['tasks/MUO-1/comments/retry', 'POST'],
       ['attention/notice/read', 'POST'], ['chief/messages', 'POST'], ['tasks/MUO-1', 'DELETE'],
       ['unknown', 'GET'],
     ]) expect(() => commands.authorize(request(grant, path, method))).toThrow('workspace owner');

@@ -8,7 +8,7 @@ import type { TaskService } from './task-service';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
-  listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema,
+  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
@@ -160,6 +160,7 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     app.get(`/api/tasks/:id/${resource}`, async c => c.json((await taskByReference(c.req.param('id')))[property] ?? []));
   }
   app.get('/api/tasks/:id/plan-discussion', async c => c.json((await taskByReference(c.req.param('id'))).planDiscussion ?? []));
+  app.get('/api/tasks/:id/comments', async c => c.json((await taskByReference(c.req.param('id'))).comments ?? []));
   app.get('/api/tasks/:id/subtasks', async c => {
     const tasks = (await service.snapshot()).tasks;
     const task = resolveTask(tasks, c.req.param('id'));
@@ -210,6 +211,14 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
   app.post('/api/tasks/:id/plan-discussion', async c => {
     const body = planCommentSchema.parse(await c.req.json());
     return c.json(await service.commentOnPlan((await taskByReference(c.req.param('id'))).id, body.planId, body.content));
+  });
+  app.post('/api/tasks/:id/comments', async c => {
+    const input = taskCommentSchema.parse(await c.req.json());
+    return c.json(await service.commentOnTask((await taskByReference(c.req.param('id'))).id, input));
+  });
+  app.post('/api/tasks/:id/comments/retry', async c => {
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(await service.retryTaskComments((await taskByReference(c.req.param('id'))).id));
   });
   app.post('/api/tasks/:id/retry', async c => {
     const input = retryTaskSchema.parse(await c.req.json());

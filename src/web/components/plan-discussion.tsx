@@ -37,7 +37,7 @@ export function PlanDiscussion({ task, viewedPlan, userId, dispatcherEnabled, bu
   const revisionLabel = state.queued ? dispatcherEnabled ? 'Revision queued' : 'Revision queued · Dispatch paused' : 'Revising the plan';
   const revisionBlocked = task.status === 'blocked' && task.phase === 'planning';
   const finished = task.status === 'done' || task.phase === 'building' || task.phase === 'verification' || state.latest?.status === 'approved';
-  const placeholder = task.status === 'canceled' ? 'This task is canceled.' : revisionBlocked ? 'Resolve the revision issue to continue…' : !state.isLatest ? 'View the latest version to continue…' : state.revising ? 'You can reply when the revised plan is ready…' : finished ? 'This plan has been approved.' : 'Ask a question or describe what should change…';
+  const placeholder = task.status === 'canceled' ? 'This task is canceled.' : revisionBlocked ? 'Resolve the revision issue to continue…' : !state.isLatest ? 'View the latest version to continue…' : state.discussing ? 'Wait for the reply in Comments before reviewing…' : state.revising ? 'You can reply when the revised plan is ready…' : finished ? 'This plan has been approved.' : 'Ask a question or describe what should change…';
   return <aside className="plan-discussion-panel" aria-label="Plan discussion">
     <div className="plan-discussion-heading"><MessageSquare size={17} /><div><h3>Discuss the plan</h3><p>{task.provider === 'claude' ? 'Claude Code' : 'Codex'} · {task.status === 'canceled' ? 'Discussion closed' : revisionBlocked ? 'Revision needs attention' : state.revising ? revisionLabel : finished ? 'Review complete' : 'Your comments shape the next version'}</p></div></div>
     <div className="plan-discussion-messages" ref={thread} role="log" aria-label="Plan conversation" aria-live="polite" onScroll={() => { const element = thread.current; if (element) wasNearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
@@ -53,6 +53,7 @@ export function PlanDiscussion({ task, viewedPlan, userId, dispatcherEnabled, bu
       {error && <p className="form-error" role="alert">{error}</p>}
       {!state.isOwner && <p className="plan-discussion-hint">Only the task owner can comment or approve the plan.</p>}
       {revisionBlocked && <p className="plan-discussion-hint">This revision needs attention. Resolve the issue above to continue.</p>}
+      {state.discussing && <p className="plan-discussion-hint">A task comment is awaiting a reply. Open Comments to follow its progress before reviewing this RFC.</p>}
       <form className="plan-comment-form" onSubmit={send}>
         <label htmlFor={`plan-comment-${task.id}`}>Comment on the plan</label>
         <textarea id={`plan-comment-${task.id}`} placeholder={placeholder} rows={3} maxLength={20000} value={draft} disabled={!state.canComment} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />

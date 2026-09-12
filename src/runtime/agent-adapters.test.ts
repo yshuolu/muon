@@ -26,9 +26,14 @@ process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', (
   if (prompt === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); return; }
   if (prompt === 'malformed') { console.log('broken JSON'); return; }
   if (prompt === 'error') { console.log(JSON.stringify({type:'result',is_error:true,result:'Test command denied'})); return; }
-  console.log(JSON.stringify({type:'system',subtype:'init',session_id:'claude-session'}));
+  const resumeIndex = process.argv.indexOf('--resume');
+  const sessionId = resumeIndex < 0 ? 'claude-session' : process.argv[resumeIndex + 1];
+  const confirmedId = prompt === 'wrong-session' ? 'another-session' : prompt === 'invalid-session' ? ' ' : sessionId;
+  console.log(JSON.stringify({type:'system',subtype:'init',session_id:confirmedId}));
+  if (prompt === 'session-hang') { setInterval(() => {}, 1000); return; }
+  if (prompt === 'session-error') { console.log(JSON.stringify({type:'result',is_error:true,result:'Provider unavailable',session_id:sessionId})); return; }
   console.log(JSON.stringify({type:'assistant',message:{content:[{type:'thinking',thinking:'private'},{type:'tool_use',name:'Read',input:{file_path:'src/project.ts'}},{type:'text',text:'Working...'}]}}));
-  const result = Buffer.from(JSON.stringify({type:'result',subtype:'success',result:'Finished ✓',session_id:'claude-session'}) + '\\n');
+  const result = Buffer.from(JSON.stringify({type:'result',subtype:'success',result:'Finished ✓',session_id:prompt === 'changed-session' ? 'another-session' : sessionId}) + '\\n');
   const split = result.indexOf(Buffer.from('✓')) + 1;
   process.stdout.write(result.subarray(0, split));
   setTimeout(() => process.stdout.write(result.subarray(split)), 5);
@@ -36,13 +41,14 @@ process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', (
 `);
 }
 
-async function codexFixture(): Promise<string> {
+async function codexFixture(options: { sessionId?: unknown } = {}): Promise<string> {
   return executable('codex', `
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { console.log('codex 1.0'); process.exit(0); }
 writeFileSync('codex-invocation.json', JSON.stringify({args:process.argv.slice(2)}));
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+const options = ${JSON.stringify(options)};
 const lines = createInterface({input:process.stdin});
 lines.on('line', line => {
   const frame = JSON.parse(line);
@@ -50,7 +56,7 @@ lines.on('line', line => {
   if (!frame.method) return;
   if (frame.method === 'initialize') send({id:frame.id,result:{}});
   if (frame.method === 'config/read') send({id:frame.id,result:{config:{model:'configured-model',mcp_servers:{'personal-tools':{command:'tool-server'},'project.tools':{url:'https://example.invalid/mcp'}}}}});
-  if (frame.method === 'thread/start' || frame.method === 'thread/resume') send({id:frame.id,result:{thread:{id:frame.params.threadId ?? 'codex-thread'}}});
+  if (frame.method === 'thread/start' || frame.method === 'thread/resume') send({id:frame.id,result:{thread:{id:Object.hasOwn(options, 'sessionId') ? options.sessionId : frame.params.threadId ?? 'codex-thread'}}});
   if (frame.method === 'turn/start') {
     const threadId = frame.params.threadId;
     const prompt = frame.params.input[0].text;
@@ -189,6 +195,51 @@ describe('ClaudeCodeAdapter', () => {
   it('reports missing binaries as unavailable', async () => {
     expect(await new ClaudeCodeAdapter(join(directory, 'missing')).available()).toBe(false);
   });
+
+  it.each([false, true])('reports the live session before interruption with bypassPermissions=%s', async bypassPermissions => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions });
+    const controller = new AbortController();
+    const sessions: string[] = [];
+    await expect(adapter.run({ provider: 'claude', phase: 'planning', cwd: directory, prompt: 'session-hang', signal: controller.signal, onSessionId: sessionId => {
+      sessions.push(sessionId);
+      controller.abort();
+    } })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sessions).toEqual(['claude-session']);
+  });
+
+  it.each([false, true])('reports confirmed resumed sessions once, including failed turns, with bypassPermissions=%s', async bypassPermissions => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions });
+    const sessions: string[] = [];
+    const request = { provider: 'claude' as const, phase: 'building' as const, cwd: directory, sessionId: 'saved-session', onSessionId: (sessionId: string) => { sessions.push(sessionId); } };
+    await expect(adapter.run({ ...request, prompt: 'Build' })).resolves.toMatchObject({ sessionId: 'saved-session' });
+    expect(sessions).toEqual(['saved-session']);
+    sessions.length = 0;
+    await expect(adapter.run({ ...request, prompt: 'session-error' })).rejects.toThrow('Provider unavailable');
+    expect(sessions).toEqual(['saved-session']);
+  });
+
+  it.each([false, true])('rejects invalid or changed provider identities with bypassPermissions=%s', async bypassPermissions => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions });
+    for (const prompt of ['wrong-session', 'invalid-session', 'changed-session']) {
+      const sessions: string[] = [];
+      await expect(adapter.run({ provider: 'claude', phase: 'building', cwd: directory, sessionId: 'saved-session', prompt, onSessionId: sessionId => { sessions.push(sessionId); } })).rejects.toThrow('stable session identity');
+      expect(sessions).toEqual(prompt === 'changed-session' ? ['saved-session'] : []);
+    }
+  });
+
+  it('keeps resumed discussion read-only even when full-access execution is configured', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions: true, allowLocalBinding: true });
+    await adapter.run({ provider: 'claude', phase: 'discussion', cwd: directory, prompt: 'Explain the completed work', sessionId: 'saved-session' });
+    const { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    expect(args).toContain('--restricted');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args[args.indexOf('--resume') + 1]).toBe('saved-session');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep');
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    expect(settings.permissions).toMatchObject({ disableBypassPermissionsMode: 'disable', deny: ['Edit', 'Write', 'Bash'] });
+    expect(settings.sandbox).toMatchObject({ allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: { allowedDomains: [], allowLocalBinding: false } });
+  });
 });
 
 describe('CodexAdapter', () => {
@@ -241,5 +292,53 @@ describe('CodexAdapter', () => {
   it.each([['fail', 'Provider unavailable'], ['permission', 'requires owner attention']])('surfaces %s as a failure', async (prompt, message) => {
     const adapter = new CodexAdapter(await codexFixture());
     await expect(adapter.run({ provider: 'codex', phase: 'building', cwd: directory, prompt })).rejects.toThrow(message);
+  });
+
+  it('reports the new thread before interruption and does not start a turn after abort', async () => {
+    const adapter = new CodexAdapter(await codexFixture());
+    const controller = new AbortController();
+    const sessions: string[] = [];
+    await expect(adapter.run({ provider: 'codex', phase: 'planning', cwd: directory, prompt: 'Plan', signal: controller.signal, onSessionId: sessionId => {
+      sessions.push(sessionId);
+      controller.abort();
+    } })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sessions).toEqual(['codex-thread']);
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.some(entry => entry.method === 'turn/start')).toBe(false);
+  });
+
+  it('reports confirmed resumed sessions once, including failed turns', async () => {
+    const adapter = new CodexAdapter(await codexFixture());
+    const sessions: string[] = [];
+    const request = { provider: 'codex' as const, phase: 'building' as const, cwd: directory, sessionId: 'saved-thread', onSessionId: (sessionId: string) => { sessions.push(sessionId); } };
+    await expect(adapter.run({ ...request, prompt: 'Build' })).resolves.toMatchObject({ sessionId: 'saved-thread' });
+    expect(sessions).toEqual(['saved-thread']);
+    sessions.length = 0;
+    await expect(adapter.run({ ...request, prompt: 'fail' })).rejects.toThrow('Provider unavailable');
+    expect(sessions).toEqual(['saved-thread']);
+  });
+
+  it.each(['another-thread', '', ' ', 12])('rejects an unconfirmed resumed identity %j before notifying or starting a turn', async sessionId => {
+    const adapter = new CodexAdapter(await codexFixture({ sessionId }));
+    const sessions: string[] = [];
+    await expect(adapter.run({ provider: 'codex', phase: 'building', cwd: directory, prompt: 'Build', sessionId: 'saved-thread', onSessionId: confirmed => { sessions.push(confirmed); } })).rejects.toThrow('requested session identity');
+    expect(sessions).toEqual([]);
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.some(entry => entry.method === 'turn/start')).toBe(false);
+  });
+
+  it('keeps resumed discussion read-only even when full-access execution is configured', async () => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'codex', phase: 'discussion', cwd: directory, prompt: 'Explain the completed work', sessionId: 'saved-thread' });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.find(entry => entry.method === 'thread/resume').params).toMatchObject({ threadId: 'saved-thread', approvalPolicy: 'never', sandbox: 'read-only' });
+    expect(requests.find(entry => entry.method === 'turn/start').params).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly' } });
+  });
+
+  it.each(['permission', 'permissions'])('declines discussion %s requests even when full-access execution is configured', async prompt => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await expect(adapter.run({ provider: 'codex', phase: 'discussion', cwd: directory, prompt })).rejects.toThrow('requires owner attention');
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.find(entry => entry.id === (prompt === 'permission' ? 900 : 901)).result).toEqual(prompt === 'permission' ? { decision: 'decline' } : { permissions: {}, scope: 'turn' });
   });
 });

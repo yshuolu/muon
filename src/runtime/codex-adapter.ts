@@ -30,7 +30,8 @@ export class CodexAdapter implements AgentAdapter {
   async run(request: AgentRequest): Promise<AgentResult> {
     if (request.provider !== this.provider) throw new Error('Codex adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const readonly = request.phase === 'planning' || request.phase === 'chief' || request.phase === 'chat';
+    const readonly = request.phase === 'planning' || request.phase === 'chief' || request.phase === 'chat' || request.phase === 'discussion';
+    const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion';
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;
@@ -74,11 +75,11 @@ export class CodexAdapter implements AgentAdapter {
           if (typeof frame.method === 'string' && frame.id !== undefined) {
             // The hardcoded workflow does not auto-grant tool escalation or user input.
             if (frame.method === 'item/commandExecution/requestApproval' || frame.method === 'item/fileChange/requestApproval') {
-              process?.send({ id: frame.id, result: { decision: this.bypassPermissions ? 'accept' : 'decline' } });
-              if (this.bypassPermissions) return;
+              process?.send({ id: frame.id, result: { decision: bypassPermissions ? 'accept' : 'decline' } });
+              if (bypassPermissions) return;
             } else if (frame.method === 'item/permissions/requestApproval') {
               process?.send({ id: frame.id, result: { permissions: {}, scope: 'turn' } });
-              if (this.bypassPermissions) return;
+              if (bypassPermissions) return;
             } else if (frame.method === 'mcpServer/elicitation/request') {
               process?.send({ id: frame.id, result: { action: 'decline', content: null } });
             } else {
@@ -151,19 +152,21 @@ export class CodexAdapter implements AgentAdapter {
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
-        cwd: request.cwd, approvalPolicy: 'never', sandbox: this.bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
+        cwd: request.cwd, approvalPolicy: 'never', sandbox: bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
         config,
       }));
       sessionId = text(record(opened?.thread)?.id);
-      if (!sessionId || (request.sessionId && request.sessionId !== sessionId)) {
+      if (!sessionId || /\s/.test(sessionId) || (request.sessionId && request.sessionId !== sessionId)) {
         throw new Error('Codex did not confirm the requested session identity.');
       }
+      if (failure) throw failure;
+      request.onSessionId?.(sessionId);
       const started = record(await rpc('turn/start', {
         threadId: sessionId,
         input: [{ type: 'text', text: request.prompt }],
         cwd: request.cwd,
         approvalPolicy: 'never',
-        sandboxPolicy: this.bypassPermissions
+        sandboxPolicy: bypassPermissions
           ? { type: 'dangerFullAccess' }
           : readonly
           ? { type: 'readOnly' }

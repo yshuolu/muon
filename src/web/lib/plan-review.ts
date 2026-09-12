@@ -10,9 +10,10 @@ export function planReviewState(task: Task, viewedPlanId: string, userId: string
   const isOwner = task.ownerUserId === userId;
   const locallyQueued = options.submittedPlanId === latest?.id && task.phase === 'plan_review';
   const revising = task.phase === 'planning' && ['todo', 'in_progress'].includes(task.status);
-  const reviewable = task.status === 'in_review' && task.phase === 'plan_review' && latest?.status === 'pending' && !locallyQueued;
+  const discussing = Boolean(task.followUp);
+  const reviewable = task.status === 'in_review' && task.phase === 'plan_review' && latest?.status === 'pending' && !locallyQueued && !discussing;
   return {
-    latest, isLatest, isOwner, revising: revising || locallyQueued,
+    latest, isLatest, isOwner, discussing, revising: revising || locallyQueued,
     queued: task.status === 'todo' && revising || locallyQueued,
     canComment: Boolean(isOwner && isLatest && reviewable && !options.busy),
     canApprove: Boolean(isOwner && isLatest && reviewable && !options.busy && !options.hasDraft),

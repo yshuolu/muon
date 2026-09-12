@@ -1,5 +1,5 @@
 export type AgentProvider = 'claude' | 'codex';
-export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief' | 'chat';
+export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief' | 'chat' | 'discussion';
 
 export interface AgentRequest {
   provider: AgentProvider;
@@ -10,6 +10,8 @@ export interface AgentRequest {
   model?: string;
   sessionId?: string;
   signal?: AbortSignal;
+  /** Reports the provider-confirmed session at most once, without waiting for a final result. */
+  onSessionId?: (sessionId: string) => void;
   onProgress?: (message: string) => void;
   chiefCli?: { command: string; apiUrl: string; token: string };
 }

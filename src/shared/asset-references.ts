@@ -21,6 +21,7 @@ export function taskAssetIds(task: Task): string[] {
     task.title, task.description, task.summary, task.recovery?.feedback ?? '',
     ...task.plans.flatMap(plan => [plan.content, plan.feedback ?? '']),
     ...(task.planDiscussion ?? []).map(message => message.content),
+    ...(task.comments ?? []).map(message => message.content),
     ...task.evidence.flatMap(item => [item.title, item.description, ...(item.steps ?? [])]),
     ...task.activity.map(item => item.text),
   ].join('\n');

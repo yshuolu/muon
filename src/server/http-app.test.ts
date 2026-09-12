@@ -232,7 +232,7 @@ describe('REST record resources', () => {
     expect(await (await request(`/api/tasks/${task.identifier.toLowerCase()}`)).json()).toEqual(saved);
     for (const [resource, expected] of [
       ['plans', saved.plans], ['evidence', saved.evidence], ['files', saved.changedFiles],
-      ['activity', saved.activity], ['runs', saved.runs], ['subtasks', []], ['dependencies', []], ['plan-discussion', []],
+      ['activity', saved.activity], ['runs', saved.runs], ['subtasks', []], ['dependencies', []], ['plan-discussion', []], ['comments', []],
     ] as const) {
       const response = await request(`/api/tasks/${task.identifier}/${resource}`);
       expect(response.status).toBe(200);
@@ -297,6 +297,9 @@ describe('REST record resources', () => {
     for (const reference of [foreign.id, foreign.identifier]) {
       expect((await request(`/api/tasks/${reference}`)).status).toBe(404);
       expect((await request(`/api/tasks/${reference}/plans`)).status).toBe(404);
+      expect((await request(`/api/tasks/${reference}/comments`)).status).toBe(404);
+      expect((await request(`/api/tasks/${reference}/comments`, 'POST', { requestId: '1c1ddc66-3593-414e-b11b-95c6b9216b31', content: 'Escape scope' })).status).toBe(404);
+      expect((await request(`/api/tasks/${reference}/comments/retry`, 'POST', {})).status).toBe(404);
       expect((await request(`/api/tasks/${reference}`, 'PATCH', { title: 'Escape scope' })).status).toBe(404);
       expect((await request('/api/tasks', 'POST', { title: 'Foreign parent', parentId: reference })).status).toBe(400);
       expect((await request(`/api/tasks/${task.id}`, 'PATCH', { blockedByIds: [reference] })).status).toBe(400);
@@ -402,6 +405,84 @@ describe('RFC discussion API', () => {
     const legacy = await request(`/api/tasks/${task.id}/request-changes`, 'POST', { planId: 'original-plan', feedback: 'Legacy review feedback.' });
     expect(legacy.status).toBe(200);
     expect((await legacy.json()).planDiscussion).toMatchObject([{ role: 'user', content: 'Legacy review feedback.', planId: 'original-plan' }]);
+  });
+});
+
+describe('task comments API', () => {
+  const requestId = '1c1ddc66-3593-414e-b11b-95c6b9216b31';
+
+  it('persists an owner follow-up by identifier and returns the same comment for a repeated request', async () => {
+    const task = await service.createTask({ title: 'Follow up before planning', status: 'backlog' });
+    const input = { requestId, content: '  Include keyboard checks when planning.  ' };
+    const response = await request(`/api/tasks/${task.identifier.toLowerCase()}/comments`, 'POST', input);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: task.id, status: 'backlog', phase: 'idle', comments: [{ role: 'user', content: 'Include keyboard checks when planning.', userId: scope.userId }] });
+    const repeated = await request(`/api/tasks/${task.id}/comments`, 'POST', input);
+    expect(repeated.status).toBe(200);
+    const comments = await (await request(`/api/tasks/${task.identifier}/comments`)).json();
+    expect(comments).toHaveLength(1);
+    expect(comments).toEqual((await repeated.json()).comments);
+    expect((await request(`/api/tasks/${task.id}/comments`, 'POST', { ...input, content: 'Reuse an ID for different instructions.' })).status).toBe(409);
+    expect((await service.getTask(task.id)).comments).toEqual(comments);
+    expect(claude.calls).toHaveLength(0);
+    expect(codex.calls).toHaveLength(0);
+  });
+
+  it('validates comment and retry bodies before mutation and resolves missing task references', async () => {
+    const task = await service.createTask({ title: 'Validate task follow-ups', status: 'backlog' });
+    for (const body of [
+      {}, { content: 'No request ID' }, { requestId, content: ' ' }, { requestId, content: 'x'.repeat(20_001) },
+      { requestId: 'not-a-uuid', content: 'Invalid request ID' }, { requestId, content: 'Invalid mode', mode: 'approve' },
+      { requestId, content: 'Spoofed assistant', role: 'assistant' }, { requestId, content: 'Spoofed owner', userId: 'other' },
+      { requestId, content: 'Approval bypass', status: 'done' },
+    ]) expect((await request(`/api/tasks/${task.id}/comments`, 'POST', body)).status).toBe(400);
+    expect((await request(`/api/tasks/${task.id}/comments/retry`, 'POST', { mode: 'replan' })).status).toBe(400);
+    expect(await service.getTask(task.id)).toEqual(task);
+    expect((await request('/api/tasks/missing/comments')).status).toBe(404);
+    expect((await request('/api/tasks/missing/comments', 'POST', { requestId, content: 'Missing task' })).status).toBe(404);
+    expect((await request('/api/tasks/missing/comments/retry', 'POST', {})).status).toBe(404);
+  });
+
+  it('allows chief reads but keeps comment submission and retries owner-only', async () => {
+    const task = await service.createTask({ title: 'Owner follow-up boundary', status: 'backlog' });
+    const grant = await commands.open(scope, new AbortController().signal);
+    try {
+      const headers = { authorization: `Bearer ${grant.cli.token}` };
+      expect((await request(`/api/tasks/${task.id}/comments`, 'GET', undefined, headers)).status).toBe(200);
+      expect((await request(`/api/tasks/${task.id}/comments`, 'POST', { requestId, content: 'Impersonate the owner' }, headers)).status).toBe(403);
+      expect((await request(`/api/tasks/${task.id}/comments/retry`, 'POST', {}, headers)).status).toBe(403);
+      expect(await service.getTask(task.id)).toEqual(task);
+    } finally { await grant.close(); }
+  });
+
+  it('retries a failed reply in the saved session and retains Done state, evidence, and the original comment', async () => {
+    const task = await service.createTask({ title: 'Explain a completed result', status: 'backlog' });
+    const completed = await repository.saveTask(scope, {
+      ...task, status: 'done', phase: 'complete', completedAt: task.createdAt, sessionId: 'completed-session', summary: 'Verified result.',
+      worktree: { path: `/test/worktrees/${task.id}`, branch: `muon/${task.id}`, baseCommit: 'a'.repeat(40) },
+      evidence: [{ id: 'verified-test', kind: 'test', title: 'Regression check', description: 'Passed.', result: 'passed', createdAt: task.createdAt }],
+    }, task.version);
+    const submitted = await request(`/api/tasks/${task.identifier}/comments`, 'POST', { requestId, content: 'What did the regression check cover?' });
+    expect(submitted.status).toBe(200);
+    const originalComments = (await submitted.json()).comments;
+    await enableDispatch();
+    await eventually(() => claude.calls.length === 1);
+    expect(claude.calls[0].request).toMatchObject({ phase: 'discussion', sessionId: 'completed-session', cwd: completed.worktree?.path });
+    claude.calls[0].reject(new Error('Provider disconnected before replying.'));
+    await eventually(async () => (await service.getTask(task.id)).followUp?.status === 'failed' && (await service.snapshot()).runtime.activeRuns === 0);
+    const failed = await service.getTask(task.id);
+    expect(failed).toMatchObject({ status: 'done', phase: 'complete', completedAt: completed.completedAt, summary: completed.summary, evidence: completed.evidence, comments: originalComments });
+    const retried = await request(`/api/tasks/${task.identifier.toLowerCase()}/comments/retry`, 'POST', {});
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toMatchObject({ id: task.id, status: 'done', comments: originalComments });
+    await eventually(() => claude.calls.length === 2);
+    expect(claude.calls[1].request).toMatchObject({ phase: 'discussion', sessionId: 'completed-session' });
+    claude.calls[1].resolve({ text: 'The regression check verified keyboard navigation.', sessionId: 'completed-session' });
+    await eventually(async () => (await service.getTask(task.id)).comments?.length === 2);
+    const comments = await (await request(`/api/tasks/${task.id}/comments`)).json();
+    expect(comments[0]).toEqual(originalComments[0]);
+    expect(comments[1]).toMatchObject({ role: 'assistant', content: 'The regression check verified keyboard navigation.', replyToIds: [originalComments[0].id] });
+    expect(await service.getTask(task.id)).toMatchObject({ status: 'done', phase: 'complete', completedAt: completed.completedAt, summary: completed.summary, evidence: completed.evidence });
   });
 });
 

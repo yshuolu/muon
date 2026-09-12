@@ -22,6 +22,9 @@ export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume',
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });
 export const planCommentSchema = reviewSchema.extend({ content: z.string().trim().min(1).max(20_000) });
+export const taskCommentSchema = z.strictObject({
+  content: z.string().trim().min(1).max(20_000), requestId: z.uuid(), mode: z.enum(['message', 'replan']).optional(),
+});
 export const chiefMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const planningChatMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const emptyMutationSchema = z.strictObject({});
@@ -46,6 +49,7 @@ export type RetryTaskRequest = z.infer<typeof retryTaskSchema>;
 export type ReviewPlanRequest = z.infer<typeof reviewSchema>;
 export type RequestPlanChangesRequest = z.infer<typeof requestChangesSchema>;
 export type PlanCommentRequest = z.infer<typeof planCommentSchema>;
+export type TaskCommentRequest = z.infer<typeof taskCommentSchema>;
 export type ChiefMessageRequest = z.infer<typeof chiefMessageSchema>;
 export type ListTasksQuery = z.input<typeof listTasksQuerySchema>;
 export type ListAttentionQuery = z.input<typeof listAttentionQuerySchema>;

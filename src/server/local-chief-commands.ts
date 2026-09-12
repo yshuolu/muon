@@ -71,7 +71,7 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     const taskWrite = method === 'POST' && path === '/api/tasks'
       || method === 'PATCH' && /^\/api\/tasks\/[^/]+$/.test(path)
       || method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|retry)$/.test(path);
-    if (!read && !taskWrite) throw new DomainError('This action requires the workspace owner. The chief cannot approve RFCs, submit owner reviews, change settings, or clear attention.', 403);
+    if (!read && !taskWrite) throw new DomainError('This action requires the workspace owner. The chief cannot approve RFCs, submit owner reviews or task follow-ups, change settings, or clear attention.', 403);
     this.admitted.set(request, grant);
   }
 

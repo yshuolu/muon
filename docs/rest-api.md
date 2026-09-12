@@ -30,6 +30,7 @@ The chief may manage task records through its authorized CLI calls. It cannot ap
 | `GET /tasks/:task/plans` | `Plan[]`, including historical RFCs and frozen dependency inputs |
 | `GET /tasks/:task/plans/:planId` | `Plan` belonging to this task |
 | `GET /tasks/:task/plan-discussion` | `PlanDiscussionMessage[]`, owner comments and final agent replies across RFC revisions |
+| `GET /tasks/:task/comments` | `TaskComment[]`, persisted owner follow-ups and final agent replies |
 | `GET /tasks/:task/evidence` | `Evidence[]`, including history and `runId` associations |
 | `GET /tasks/:task/assets` | Authorized `Asset[]` derived from the task's text references |
 | `GET /tasks/:task/files` | `ChangedFile[]` |
@@ -80,6 +81,8 @@ Use Markdown references directly in descriptions, comments, plans, results, or e
 | `POST /tasks/:task/cancel` | `{}` | 200 canceled `Task` |
 | `POST /tasks/:task/approve` | `{ "planId": "…" }` | 200 `Task` with owner-approved plan queued for building |
 | `POST /tasks/:task/plan-discussion` | `{ "planId": "…", "content": "…" }` | 200 `Task` with the owner comment persisted and revised planning queued |
+| `POST /tasks/:task/comments` | `{ "requestId": "UUID", "content": "…", "mode"?: "message" \| "replan" }` | 200 `Task` with the follow-up persisted for delivery |
+| `POST /tasks/:task/comments/retry` | `{}` | 200 `Task` with failed comment delivery queued again |
 | `POST /tasks/:task/request-changes` | `{ "planId": "…", "feedback": "…" }` | 200 `Task`; compatibility alias that posts feedback to the RFC discussion |
 | `POST /tasks/:task/retry` | `{ "mode"?: "retry" \| "fix" \| "replan", "feedback"?: "…" }` | 200 `Task` |
 | `POST /attention/:attentionId/read` | `{}` | 200 `{ "ok": true }` |
@@ -100,6 +103,12 @@ Asset uploads, task reference insertion, and retained-output imports require the
 Approval and discussion comments must include the exact current pending `planId`. A stale, already-approved, canceled, or currently revising RFC returns 409. Discussion comments require nonblank content of at most 20,000 characters; content is trimmed before storage. The server records the owner identity, closes that pending RFC for review, and queues the planning agent to respond and revise it. Poll the discussion and plans resources for the final reply and new pending RFC. Repeat this comment–revision conversation until the owner approves the latest exact plan ID. Each message has `id`, `role` (`user` or `assistant`), `content`, `createdAt`, and `planId`; owner comments also record `userId`. Agent replies link to the newly produced RFC. Older comments and RFCs remain available after approval. Reads return an empty array for older tasks with no discussion.
 
 Discussion posts are owner operations; a chief bearer credential may read the conversation but cannot post as the owner. The legacy `request-changes` endpoint remains supported and delegates to the same discussion operation, mapping `feedback` to `content`. New clients should use the conversation resource. Neither comments nor assistant replies approve implementation.
+
+Task comments are independent of RFC discussion. Their content is trimmed and must contain 1–20,000 characters. Generate a UUID `requestId` for each new submission and reuse it with the same content and mode after an uncertain HTTP result; repeated submissions do not duplicate the comment, while different content or mode under that ID returns 409. Omitted `mode` means `message`. Only the owner may post or retry; the chief may read comments. Canceled tasks and task groups reject submissions. Reads return an empty array for older tasks with no comments.
+
+Each comment has `id`, `role`, `content`, and `createdAt`; owner comments include `userId`, `requestId`, and `mode`, and agent replies include `runId` and `replyToIds`. Up to 20 unanswered comments may be queued, including before planning starts. The optional task `followUp` record holds `status` (`queued`, `interrupting`, `responding`, or `failed`), pending `commentIds`, `mode`, and optional `error`. It is removed after the pending replies complete; comments and run history remain. Referenced assets are authorized and supplied to the read-only discussion, without adding them to an approved implementation's input set.
+
+A message interrupts active work, waits for confirmed agent shutdown, and queues a read-only reply in the retained provider session and worktree. Interrupted work then resumes its prior phase with the comment context and existing approval requirements. Questions on Done or Blocked tasks preserve their lifecycle and verification evidence. Comments on unstarted tasks become context for initial planning. Use `mode: "replan"` for changed scope: implementation pauses for a new RFC and explicit owner approval. Comment delivery observes dispatcher capacity and pause settings; poll the task for delivery state and `/comments` for final replies. Failed delivery retains the comments and can be retried with `/comments/retry`.
 
 Recovery preserves prior attempts and artifacts: `retry` resumes the failed phase, `fix` returns to building within the approved scope, and `replan` requires a fresh owner review before building. Recovery feedback is optional and limited to 20,000 characters. The service validates whether each operation is appropriate for the task’s current state.
 

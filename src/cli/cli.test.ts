@@ -113,6 +113,41 @@ describe('Muon CLI', () => {
     expect(JSON.parse(conflict.stderr[0]).error.status).toBe(409);
   });
 
+  it('reads task comments and posts retryable follow-ups from JSON, options, and stdin', async () => {
+    const calls: Array<{ path: string; method?: string; body?: unknown }> = [];
+    const requestId = '1c1ddc66-3593-414e-b11b-95c6b9216b31';
+    const input = { requestId, content: 'Explain the verification result.', mode: 'message' };
+    const io = harness(async (url, options) => {
+      calls.push({ path: new URL(String(url)).pathname, method: options?.method, body: options?.body ? JSON.parse(String(options.body)) : undefined });
+      return Response.json({ ok: true });
+    }, {}, tmpdir(), JSON.stringify(input));
+    expect(await io.run(['tasks', 'comments', 'MUO-8'])).toBe(0);
+    expect(await io.run(['tasks', 'MUO-8', 'comments'])).toBe(0);
+    expect(await io.run(['tasks', 'comment', 'MUO-8', '--json', JSON.stringify(input)])).toBe(0);
+    expect(await io.run(['tasks', 'comment', 'MUO-8', '--file', '-'])).toBe(0);
+    expect(await io.run(['tasks', 'comment', 'MUO-8', '--request-id', requestId, '--content', '  Add keyboard navigation.  ', '--mode', 'replan'])).toBe(0);
+    expect(await io.run(['tasks', 'retry-comments', 'MUO-8'])).toBe(0);
+    expect(await io.run(['tasks', 'retry-comments', 'MUO-8', '--json', '{}'])).toBe(0);
+    expect(calls).toEqual([
+      { path: '/api/tasks/MUO-8/comments', method: 'GET', body: undefined },
+      { path: '/api/tasks/MUO-8/comments', method: 'GET', body: undefined },
+      { path: '/api/tasks/MUO-8/comments', method: 'POST', body: input },
+      { path: '/api/tasks/MUO-8/comments', method: 'POST', body: input },
+      { path: '/api/tasks/MUO-8/comments', method: 'POST', body: { requestId, content: 'Add keyboard navigation.', mode: 'replan' } },
+      { path: '/api/tasks/MUO-8/comments/retry', method: 'POST', body: {} },
+      { path: '/api/tasks/MUO-8/comments/retry', method: 'POST', body: {} },
+    ]);
+    for (const args of [
+      ['tasks', 'comment', 'MUO-8', '--content', 'Missing request identity.'],
+      ['tasks', 'comment', 'MUO-8', '--request-id', 'invalid', '--content', 'Invalid identity.'],
+      ['tasks', 'comment', 'MUO-8', '--request-id', requestId, '--content', '   '],
+      ['tasks', 'comment', 'MUO-8', '--request-id', requestId, '--content', 'Follow-up', '--mode', 'approve'],
+      ['tasks', 'comment', 'MUO-8', '--json', JSON.stringify(input), '--request-id', requestId],
+      ['tasks', 'comment', 'MUO-8', '--plan-id', 'v1', '--request-id', requestId, '--content', 'Ambiguous operation'],
+    ]) expect(await io.run(args)).toBe(1);
+    expect(calls).toHaveLength(7);
+  });
+
   it('supports relative JSON input files and stdin without a database fallback', async () => {
     const cwd = await directory(); await writeFile(join(cwd, 'task.json'), '{"title":"From file"}');
     const bodies: unknown[] = [];

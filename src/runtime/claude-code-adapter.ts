@@ -46,7 +46,7 @@ export interface ClaudeCodeOptions {
   allowLocalBinding?: boolean;
   model?: string;
   effort?: string;
-  /** Run every Muon provider phase with the owner's full local permissions. */
+  /** Use full local permissions except for chief requests and read-only discussions. */
   bypassPermissions?: boolean;
 }
 
@@ -74,21 +74,23 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
     const chief = request.phase === 'chief';
+    const discussion = request.phase === 'discussion';
     const model = chief ? request.model ?? this.model : this.model;
-    const readonly = request.phase === 'planning' || request.phase === 'chat';
+    const readonly = request.phase === 'planning' || request.phase === 'chat' || discussion;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
     const cliExecutable = cli?.command.replace(/^'|'$/g, '');
     if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
-    if (this.bypassPermissions && !chief) {
+    if (this.bypassPermissions && !chief && !discussion) {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(this.model ? ['--model', this.model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
       return this.runProcess(request, args);
     }
     const settings = {
       disableAllHooks: true,
       permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: [],
+        ...(discussion ? { deny: ['Edit', 'Write', 'Bash'] } : {}),
         ...(chief ? {
           allow: [`Bash(${cliExecutable} *)`],
           deny: ['Edit', 'Write', `Read(${join(request.cwd, '.muon').replace(/^\//, '//')}/**)`, 'Read(./.env)', 'Read(./.env.*)'],
@@ -115,28 +117,51 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--settings', JSON.stringify(settings),
       ...(request.sessionId ? ['--resume', request.sessionId] : []),
     ];
+    return this.runProcess(request, args, chief ? { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } : undefined);
+  }
+
+  private async runProcess(request: AgentRequest, args: string[], env?: NodeJS.ProcessEnv): Promise<AgentResult> {
     let process: JsonProcess | undefined;
     let sessionId = request.sessionId;
+    let reportedSession = false;
     try {
       return await new Promise<AgentResult>((resolve, reject) => {
+        let settled = false;
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
         process = new JsonProcess({
           executable: this.executable, args, cwd: request.cwd, signal: request.signal,
-          ...(chief ? { env: { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } } : {}),
-          onFault: reject,
+          ...(env ? { env } : {}),
+          onFault: fail,
           onRecord: (value) => {
             const frame = record(value);
-            if (!frame) return;
-            sessionId = text(frame.session_id) ?? sessionId;
+            if (!frame || settled || request.signal?.aborted) return;
+            if (frame.session_id !== undefined) {
+              const confirmed = text(frame.session_id);
+              if (!confirmed || /\s/.test(confirmed) || (sessionId && sessionId !== confirmed)) {
+                fail(new Error('Claude did not confirm a stable session identity.'));
+                return;
+              }
+              sessionId = confirmed;
+              if (!reportedSession) {
+                reportedSession = true;
+                request.onSessionId?.(sessionId);
+              }
+            }
             const progress = progressFromFrame(frame);
             if (progress) request.onProgress?.(progress);
             if (frame.type !== 'result') return;
             if (frame.is_error === true || (frame.subtype && frame.subtype !== 'success')) {
               const errors = Array.isArray(frame.errors) ? frame.errors.filter((error) => typeof error === 'string').join('; ') : undefined;
-              reject(new Error(text(frame.result) ?? errors ?? 'Claude could not complete the task.'));
+              fail(new Error(text(frame.result) ?? errors ?? 'Claude could not complete the task.'));
               return;
             }
             const result = text(frame.result);
-            if (!result) { reject(new Error('Claude returned no final result.')); return; }
+            if (!result) { fail(new Error('Claude returned no final result.')); return; }
+            settled = true;
             resolve({ text: result, ...(sessionId ? { sessionId } : {}) });
           },
         });
@@ -145,19 +170,5 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     } finally {
       await process?.stop();
     }
-  }
-
-  private async runProcess(request: AgentRequest, args: string[]): Promise<AgentResult> {
-    let process: JsonProcess | undefined;
-    let sessionId = request.sessionId;
-    try {
-      return await new Promise<AgentResult>((resolve, reject) => {
-        process = new JsonProcess({ executable: this.executable, args, cwd: request.cwd, signal: request.signal, onFault: reject, onRecord: value => {
-          const frame = record(value); if (!frame) return; sessionId = text(frame.session_id) ?? sessionId; const progress = progressFromFrame(frame); if (progress) request.onProgress?.(progress); if (frame.type !== 'result') return;
-          if (frame.is_error === true || (frame.subtype && frame.subtype !== 'success')) { reject(new Error(text(frame.result) ?? 'Claude could not complete the task.')); return; }
-          const result = text(frame.result); if (!result) { reject(new Error('Claude returned no final result.')); return; } resolve({ text: result, ...(sessionId ? { sessionId } : {}) });
-        }}); process.writePrompt(request.prompt);
-      });
-    } finally { await process?.stop(); }
   }
 }

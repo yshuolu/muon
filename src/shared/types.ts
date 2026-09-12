@@ -27,6 +27,19 @@ export interface PlanDiscussionMessage {
   planId: string;
   userId?: string;
 }
+export interface TaskComment {
+  id: string; role: 'user' | 'assistant'; content: string; createdAt: string;
+  userId?: string; runId?: string; replyToIds?: string[];
+  /** Owner-supplied idempotency key and requested action. */
+  requestId?: string; mode?: 'message' | 'replan';
+}
+export interface TaskFollowUp {
+  status: 'queued' | 'interrupting' | 'responding' | 'failed';
+  commentIds: string[]; mode: 'message' | 'replan'; error?: string;
+}
+export interface CommentOnTaskInput {
+  content: string; requestId: string; mode?: 'message' | 'replan';
+}
 export interface Evidence {
   id: string; kind: 'test' | 'screenshot' | 'recording' | 'note'; title: string;
   description: string; result?: 'passed' | 'failed' | 'skipped';
@@ -36,8 +49,8 @@ export interface Evidence {
 export interface ChangedFile { path: string; status: string; additions: number; deletions: number }
 export interface Activity { id: string; text: string; createdAt: string }
 export interface AgentRun {
-  id: string; phase: 'planning' | 'building' | 'verification'; provider: Provider;
-  status: 'running' | 'succeeded' | 'failed' | 'canceled'; startedAt: string;
+  id: string; phase: 'planning' | 'building' | 'verification' | 'discussion'; provider: Provider;
+  status: 'running' | 'succeeded' | 'failed' | 'canceled' | 'interrupted'; startedAt: string;
   finishedAt?: string; sessionId?: string; error?: string; planId?: string;
 }
 export interface Task {
@@ -51,6 +64,8 @@ export interface Task {
   error?: string;
   runs?: AgentRun[];
   planDiscussion?: PlanDiscussionMessage[];
+  comments?: TaskComment[];
+  followUp?: TaskFollowUp;
   kind?: 'coding' | 'group';
   recovery?: { mode: 'retry' | 'resume' | 'fix' | 'replan'; feedback: string; requestedAt: string };
 }

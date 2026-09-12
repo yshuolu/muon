@@ -6,10 +6,13 @@ export class DemoAdapter implements AgentAdapter {
   constructor(readonly provider: 'claude' | 'codex') {}
   async available() { return true; }
   async run(request: AgentRequest) {
+    const sessionId = request.sessionId ?? `demo-${this.provider}-session`;
+    request.onSessionId?.(sessionId);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, 1700);
       request.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Demo run canceled.')); }, { once: true });
     });
+    if (request.phase === 'discussion') return { text: 'Demo reply: your follow-up is saved in this task. This is an illustrative conversation; no real agent has inspected or changed your repository.', sessionId };
     if (request.phase === 'planning') {
       const result = { text: '# RFC: A focused, reviewable implementation\n\n> Demo content — no agent has run against your repository.\n\n## Problem\nMake the requested workflow clear, reliable, and easy to verify.\n\n## Proposed approach\nKeep task state in the domain layer, expose it through the local API, and render the final results in the workspace.\n\n## Implementation plan\n1. Extend the domain contract.\n2. Implement the behavior behind its existing interface.\n3. Connect the interface and cover meaningful edge cases.\n\n## Verification\nRun the focused tests and inspect the user flow. Attach observed results and screenshots.\n\n## Risks\nConcurrent updates must preserve the current approval and task state.' };
       if (request.prompt.includes('Return ONLY a JSON object with exactly {\"reply\":')) result.text = JSON.stringify({ reply: 'Demo reply: your comment is saved and a new illustrative RFC is ready. No real agent has run; use the local workspace to discuss your project with Claude or Codex.', content: result.text });

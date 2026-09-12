@@ -42,6 +42,9 @@ muon tasks evidence MUO-3
 muon tasks files MUO-3
 muon tasks activity MUO-3
 muon tasks runs MUO-3
+muon tasks comments MUO-3
+muon tasks comment MUO-3 --json '{"requestId":"1c1ddc66-3593-414e-b11b-95c6b9216b31","content":"Explain the verification result."}'
+muon tasks retry-comments MUO-3
 muon tasks subtasks MUO-1
 muon tasks dependencies MUO-3
 
@@ -51,11 +54,26 @@ muon chief messages
 muon chief send --json '{"content":"Break authentication into reviewed coding tasks."}'
 ```
 
-Task references accept UUIDs or project identifiers. `tasks MUO-3 evidence` and `tasks MUO-3 discussion` are also accepted for task subresources. Creation and edits use the API’s validated JSON fields; protected lifecycle state and RFC ownership cannot be overridden by JSON or by using the generic API command. Exact plan IDs are mandatory for approvals and review comments so a stale decision cannot approve or revise a later RFC.
+Task references accept UUIDs or project identifiers. `tasks MUO-3 evidence`, `tasks MUO-3 discussion`, and `tasks MUO-3 comments` are also accepted for task subresources. Creation and edits use the API’s validated JSON fields; protected lifecycle state and RFC ownership cannot be overridden by JSON or by using the generic API command. Exact plan IDs are mandatory for approvals and RFC review comments so a stale decision cannot approve or revise a later RFC.
+
+## Following up with the task agent
+
+Use `tasks comment` without a plan ID to send a general follow-up. An active agent is interrupted, its shutdown is confirmed, and a read-only reply runs in the retained session and worktree. The reply is saved in `tasks comments`, then interrupted work resumes under its existing RFC approval. Questions on Done or Blocked tasks preserve their state and evidence. Comments on unstarted tasks become planning context; canceled tasks and task groups do not accept follow-ups.
+
+Each submission requires a new UUID `requestId`. Keep that same ID, content, and mode if retrying an uncertain HTTP response so the comment is not duplicated. Use `mode: "replan"` when changing scope; the task returns to planning and requires fresh RFC approval. To retry a saved comment whose delivery failed, use `tasks retry-comments` instead of creating another comment.
+
+```sh
+muon tasks comment MUO-3 --file follow-up.json
+muon tasks comment MUO-3 --request-id 1c1ddc66-3593-414e-b11b-95c6b9216b31 --content "Also support keyboard navigation." --mode replan
+muon tasks comments MUO-3
+muon tasks retry-comments MUO-3
+```
+
+Bodies accept `content` (1–20,000 nonblank characters), `requestId`, and optional `mode` (`message`, the default, or `replan`). Posting and retrying follow-ups require the owner; chief credentials permit reads only. Delivery waits while dispatch is paused or all agent slots are occupied.
 
 ## Discussing an RFC
 
-The owner can post a comment on a pending RFC with `tasks comment`. The server persists the comment and queues the planning agent to reply and produce a revised RFC. Read `tasks discussion` for the conversation and `tasks plans` for the new pending plan ID. Continue commenting on each latest revision until it is ready, then run `tasks approve` with that exact ID. The owner must wait for the current revision to finish before posting another comment; stale, mid-revision, or approved plan references return 409.
+The owner can post a comment on a pending RFC with `tasks comment --plan-id ...` or a body containing `planId`. This existing form remains compatible and uses the RFC discussion resource. The server persists the comment and queues the planning agent to reply and produce a revised RFC. Read `tasks discussion` for the conversation and `tasks plans` for the new pending plan ID. Continue commenting on each latest revision until it is ready, then run `tasks approve` with that exact ID. The owner must wait for the current revision to finish before posting another comment; stale, mid-revision, or approved plan references return 409.
 
 Comments accept up to 20,000 nonblank characters. Previous comments, final agent replies, and RFC revisions remain in the task. The chief may read the discussion, but its credential cannot post owner comments or approve plans. For longer comments use a JSON file:
 

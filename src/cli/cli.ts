@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ApiClient, ApiError } from '../shared/api-client';
+import { taskCommentSchema } from '../shared/api-contract';
 
 export const CLI_HELP = `Muon — task system REST client
 
@@ -17,6 +18,9 @@ Usage: muon <resource> <command> [arguments] [options]
   tasks retry <id> [--mode retry|fix|replan] [--feedback <text>]
   tasks approve <id> --plan-id <exact-plan-id>
   tasks discussion <id>
+  tasks comments <id>
+  tasks comment <id> --json '{"requestId":"UUID","content":"...","mode":"message"}'
+  tasks retry-comments <id>
   tasks comment <id> --plan-id <id> --content <text>
   tasks request-changes <id> --plan-id <id> --feedback <text>
   tasks plans|evidence|files|activity|runs|subtasks|dependencies <id>
@@ -103,20 +107,41 @@ export async function runCli(args: string[], io: CliIO): Promise<number> {
       } else if (command === 'create') { expect(2); path = '/api/tasks'; method = 'POST'; body = await readBody(); }
       else if (command === 'get') { expect(3); path = `/api/tasks/${id(recordId)}`; }
       else if (command === 'update') { expect(3); path = `/api/tasks/${id(recordId)}`; method = 'PATCH'; body = await readBody(); }
-      else if (['cancel', 'retry', 'approve', 'request-changes', 'comment'].includes(command)) {
-        expect(3); path = `/api/tasks/${id(recordId)}/${command === 'comment' ? 'plan-discussion' : command}`; method = 'POST';
+      else if (command === 'comment') {
+        expect(3); method = 'POST';
         const input = await readBody(false) ?? {};
-        for (const [flag, key] of Object.entries(command === 'retry' ? { mode: 'mode', feedback: 'feedback' } : command === 'comment' ? { 'plan-id': 'planId', content: 'content' } : command === 'request-changes' ? { 'plan-id': 'planId', feedback: 'feedback' } : command === 'approve' ? { 'plan-id': 'planId' } : {})) {
+        for (const [flag, key] of Object.entries({ 'plan-id': 'planId', 'request-id': 'requestId', content: 'content', mode: 'mode' })) {
+          const value = option(flag);
+          if (value !== undefined) {
+            if (key in input) fail(`Specify ${key} in the body or as an option, not both.`);
+            input[key] = value;
+          }
+        }
+        if ('planId' in input) {
+          if (typeof input.planId !== 'string' || !input.planId.trim()) fail('The exact plan ID is required (--plan-id).');
+          if (typeof input.content !== 'string' || !input.content.trim()) fail('A plan discussion comment is required (--content).');
+          if ('requestId' in input || 'mode' in input) fail('RFC review comments cannot include task follow-up options.');
+          path = `/api/tasks/${id(recordId)}/plan-discussion`;
+          body = input;
+        } else {
+          const parsed = taskCommentSchema.safeParse(input);
+          if (!parsed.success) fail(`Invalid task comment: ${parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`);
+          path = `/api/tasks/${id(recordId)}/comments`;
+          body = parsed.data;
+        }
+      } else if (['cancel', 'retry', 'retry-comments', 'approve', 'request-changes'].includes(command)) {
+        expect(3); path = `/api/tasks/${id(recordId)}/${command === 'retry-comments' ? 'comments/retry' : command}`; method = 'POST';
+        const input = await readBody(false) ?? {};
+        for (const [flag, key] of Object.entries(command === 'retry' ? { mode: 'mode', feedback: 'feedback' } : command === 'request-changes' ? { 'plan-id': 'planId', feedback: 'feedback' } : command === 'approve' ? { 'plan-id': 'planId' } : {})) {
           const value = option(flag); if (value !== undefined) { if (key in input) fail(`Specify ${key} in the body or as an option, not both.`); input[key] = value; }
         }
-        if (['approve', 'request-changes', 'comment'].includes(command) && (typeof input.planId !== 'string' || !input.planId.trim())) fail('The exact plan ID is required (--plan-id).');
+        if (['approve', 'request-changes'].includes(command) && (typeof input.planId !== 'string' || !input.planId.trim())) fail('The exact plan ID is required (--plan-id).');
         if (command === 'request-changes' && (typeof input.feedback !== 'string' || !input.feedback.trim())) fail('Review feedback is required (--feedback).');
-        if (command === 'comment' && (typeof input.content !== 'string' || !input.content.trim())) fail('A plan discussion comment is required (--content).');
         body = input;
       } else if (command === 'plan') { expect(4); path = `/api/tasks/${id(recordId)}/plans/${id(words[3])}`; output = option('output'); planExport = output !== undefined; }
       else if (command === 'dependency-patch') { expect(5); path = `/api/tasks/${id(recordId)}/plans/${id(words[3])}/dependencies/${id(words[4])}/patch`; output = required('output'); }
       else {
-        const resources = ['plans', 'evidence', 'files', 'activity', 'runs', 'subtasks', 'dependencies', 'discussion'];
+        const resources = ['plans', 'evidence', 'files', 'activity', 'runs', 'subtasks', 'dependencies', 'discussion', 'comments'];
         expect(3);
         if (resources.includes(command)) path = `/api/tasks/${id(recordId)}/${command === 'discussion' ? 'plan-discussion' : command}`;
         else if (resources.includes(recordId)) path = `/api/tasks/${id(command)}/${recordId === 'discussion' ? 'plan-discussion' : recordId}`;

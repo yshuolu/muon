@@ -43,6 +43,15 @@ describe('plan conversation review state', () => {
     expect(state.canComment).toBe(true);
     expect(state.canApprove).toBe(false);
   });
+  it('waits for pending or failed task replies before permitting RFC decisions', () => {
+    for (const status of ['queued', 'interrupting', 'responding', 'failed'] as const) {
+      const state = planReviewState({ ...review, followUp: { status, commentIds: ['comment'], mode: 'message' } }, second.id, 'owner');
+      expect(state.discussing).toBe(true);
+      expect(state.canComment).toBe(false);
+      expect(state.canApprove).toBe(false);
+    }
+    expect(planReviewState(review, second.id, 'owner').canApprove).toBe(true);
+  });
   it('restricts decisions to the owner and never reopens an already approved plan', () => {
     expect(planReviewState(review, second.id, 'another-user').canComment).toBe(false);
     expect(planReviewState(review, second.id, 'another-user').canApprove).toBe(false);

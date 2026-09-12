@@ -69,3 +69,7 @@ Changed files are calculated against the saved initial commit, not just `HEAD`. 
 ## RFC discussion
 
 Owner comments queue another read-only planning turn in the task’s existing session and worktree. Each turn receives the complete persisted review conversation and the latest RFC, so retrying with a fresh provider session preserves context. Revision responses contain a concise Markdown answer and the complete Markdown RFC in a validated JSON envelope. Only these final results enter the UI. Initial planning still returns the RFC directly. Every revised RFC requires explicit owner approval before building.
+
+## Task follow-ups
+
+General follow-ups interrupt an active run and wait for confirmed shutdown before a read-only discussion turn uses the same provider session and task worktree. Adapters report session identity as soon as it is known so even an interrupted initial turn can be resumed. Only final replies become persisted task comments; provider transcripts remain outside the task record. Interrupted work resumes its prior phase under the approved RFC. An explicit replan follow-up requires a fresh owner approval, while questions on completed or blocked tasks preserve their lifecycle and evidence. Failed delivery retains the pending conversation for retry; unconfirmed shutdown continues to occupy its agent slot.
