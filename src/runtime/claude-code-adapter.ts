@@ -3,6 +3,44 @@ import { JsonProcess, executableAvailable, validateWorkingDirectory } from './js
 import { record, text } from './protocol-values.js';
 import { dirname, join, isAbsolute } from 'node:path';
 
+function compact(value: unknown, limit = 140): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+function progressFromFrame(frame: Record<string, unknown>): string | undefined {
+  if (frame.type !== 'assistant') return undefined;
+  const blocks = record(frame.message)?.content;
+  if (!Array.isArray(blocks)) return undefined;
+  for (const value of blocks) {
+    const block = record(value);
+    if (!block || block.type !== 'tool_use') continue;
+    const name = text(block.name);
+    const input = record(block.input);
+    if (name === 'Bash') {
+      const command = compact(input?.command);
+      if (command) return `Running ${command}`;
+    }
+    if (name === 'Read') {
+      const path = compact(input?.file_path);
+      if (path) return `Reading ${path}`;
+    }
+    if (name === 'Glob') {
+      const pattern = compact(input?.pattern);
+      if (pattern) return `Searching for ${pattern}`;
+    }
+    if (name === 'Grep') {
+      const pattern = compact(input?.pattern);
+      const path = compact(input?.path);
+      if (pattern && path) return `Searching for ${pattern} in ${path}`;
+      if (pattern) return `Searching for ${pattern}`;
+    }
+    if (name) return `Using ${name}`;
+  }
+  return undefined;
+}
+
 export interface ClaudeCodeOptions {
   allowedNetworkDomains?: string[];
   allowLocalBinding?: boolean;
@@ -80,6 +118,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const frame = record(value);
             if (!frame) return;
             sessionId = text(frame.session_id) ?? sessionId;
+            const progress = progressFromFrame(frame);
+            if (progress) request.onProgress?.(progress);
             if (frame.type !== 'result') return;
             if (frame.is_error === true || (frame.subtype && frame.subtype !== 'success')) {
               const errors = Array.isArray(frame.errors) ? frame.errors.filter((error) => typeof error === 'string').join('; ') : undefined;

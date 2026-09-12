@@ -27,7 +27,7 @@ process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', (
   if (prompt === 'malformed') { console.log('broken JSON'); return; }
   if (prompt === 'error') { console.log(JSON.stringify({type:'result',is_error:true,result:'Test command denied'})); return; }
   console.log(JSON.stringify({type:'system',subtype:'init',session_id:'claude-session'}));
-  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'thinking',thinking:'private'},{type:'text',text:'Working...'}]}}));
+  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'thinking',thinking:'private'},{type:'tool_use',name:'Read',input:{file_path:'src/project.ts'}},{type:'text',text:'Working...'}]}}));
   const result = Buffer.from(JSON.stringify({type:'result',subtype:'success',result:'Finished ✓',session_id:'claude-session'}) + '\\n');
   const split = result.indexOf(Buffer.from('✓')) + 1;
   process.stdout.write(result.subarray(0, split));
@@ -110,6 +110,13 @@ describe('ClaudeCodeAdapter', () => {
     expect(invocation.args[invocation.args.indexOf('--permission-mode') + 1]).toBe('plan');
     expect(invocation.args[invocation.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep');
     expect(JSON.parse(invocation.args[invocation.args.indexOf('--settings') + 1]).sandbox.network).toEqual({ allowedDomains: [], allowLocalBinding: false });
+  });
+
+  it('reports the chief tool action currently being performed', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture());
+    const progress: string[] = [];
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', onProgress: message => progress.push(message), chiefCli: { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' } });
+    expect(progress).toContain('Reading src/project.ts');
   });
 
   it('confines building and verification without bypassing permissions', async () => {

@@ -62,7 +62,7 @@ export interface AgentRuntimeConfig { model: string; thinking: string }
 export interface AppSnapshot {
   scope: Scope; project: Project; settings: Settings; tasks: Task[];
   attention: Attention[]; messages: ChiefMessage[];
-  runtime: { activeRuns: number; chiefRunning: boolean; providers: Record<Provider, boolean>; config?: Record<Provider, AgentRuntimeConfig>; demo: boolean };
+  runtime: { activeRuns: number; chiefRunning: boolean; chiefActivity?: string | null; providers: Record<Provider, boolean>; config?: Record<Provider, AgentRuntimeConfig>; demo: boolean };
 }
 export interface CreateTaskInput {
   title: string; description?: string; provider?: Provider; priority?: Priority;

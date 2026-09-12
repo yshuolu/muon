@@ -22,6 +22,7 @@ export class TaskService implements Dispatcher {
   private mutatingRepository = false;
   private stopped = false;
   private chiefActive = false;
+  private chiefActivity: string | null = null;
   private timer?: ReturnType<typeof setInterval>;
   private availability = { claude: false, codex: false };
   private get repo() { return this.options.repository; }
@@ -62,7 +63,7 @@ export class TaskService implements Dispatcher {
       claude: { model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]', thinking: process.env.MUON_CLAUDE_EFFORT ?? 'max' },
       codex: { model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra', thinking: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra' },
     } as const;
-    return { scope: this.scope, project, settings, tasks, attention, messages, runtime: { activeRuns: this.active.size, chiefRunning: this.chiefActive || !!pending, providers: this.availability, config, demo: !!this.options.demo } };
+    return { scope: this.scope, project, settings, tasks, attention, messages, runtime: { activeRuns: this.active.size, chiefRunning: this.chiefActive || !!pending, chiefActivity: this.chiefActive ? this.chiefActivity : null, providers: this.availability, config, demo: !!this.options.demo } };
   }
   async getTask(id: string) {
     const task = await this.repo.task(this.scope, id);
@@ -473,6 +474,7 @@ export class TaskService implements Dispatcher {
   }
   private launchChief() {
     this.chiefActive = true;
+    this.chiefActivity = 'Preparing workspace context…';
     const abort = new AbortController();
     let canRelease = true;
     let commands: ChiefCommandSession | undefined;
@@ -481,12 +483,15 @@ export class TaskService implements Dispatcher {
       if (!project.repositoryPath) throw new DomainError('Set a repository path in workspace settings so the chief of staff can inspect your project.');
       if (!this.options.chiefCommands && !this.options.demo) throw new DomainError('The chief command interface is not configured. Start Muon through its HTTP server.');
       if (this.stopped || abort.signal.aborted) return;
+      this.chiefActivity = 'Connecting task controls…';
       commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
       if (this.stopped || abort.signal.aborted) return;
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, signal: abort.signal, chiefCli: commands?.cli });
+      this.chiefActivity = 'Running Claude Code…';
+      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');
+      this.chiefActivity = 'Applying task updates…';
       // Task operations have already gone through CLI -> REST -> TaskService. A
       // model's final text is display-only and never interpreted as commands.
       await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content, createdAt: now(), taskIds: commands?.taskIds() ?? [] });
@@ -496,7 +501,7 @@ export class TaskService implements Dispatcher {
     }).finally(async () => {
       await commands?.close().catch(error => console.error("Chief command cleanup failed", error));
       await this.repo.setPendingChief(this.scope, null);
-      if (canRelease) { this.chiefActive = false; this.active.delete('chief'); }
+      if (canRelease) { this.chiefActive = false; this.chiefActivity = null; this.active.delete('chief'); }
       void this.tick().catch(console.error);
     });
     this.active.set('chief', { abort, done });

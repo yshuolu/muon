@@ -8,6 +8,7 @@ export interface AgentRequest {
   cwd: string;
   sessionId?: string;
   signal?: AbortSignal;
+  onProgress?: (message: string) => void;
   chiefCli?: { command: string; apiUrl: string; token: string };
 }
 
