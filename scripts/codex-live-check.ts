@@ -61,6 +61,9 @@ try {
   console.log(`Reviewed RFC v${plan.version} for the isolated acceptance fixture; approving exact revision.`);
   assert.equal((await request(`/tasks/${taskId}/approve`, { planId: plan.id })).status, 200);
   const done = await waitFor('done');
+  assert.deepEqual(done.sessions?.map(session => session.name), ['plan', 'build', 'verify']);
+  assert.equal(new Set(done.sessions?.map(session => session.providerSessionId)).size, 3, 'Each workflow session needs its own provider conversation.');
+  assert.ok(done.sessions?.every(session => session.providerSessionId));
   const actual = await exec(process.execPath, ['--test'], { cwd: done.worktree!.path });
   const module = await import(`${join(done.worktree!.path, 'slug.js')}?v=${Date.now()}`);
   assert.equal(module.slugify(' Hello World! '), 'hello-world');
@@ -74,7 +77,7 @@ try {
   const check = { passed: true, provider: 'codex', timestamp: new Date().toISOString(), root, taskId, worktree: done.worktree, planId: plan.id, phases: done.runs, evidence: done.evidence, changedFiles: done.changedFiles, independentTestOutput: actual.stdout, durationSeconds: Math.round((Date.now() - start) / 1000) };
   await writeFile(join(root, 'acceptance-result.json'), JSON.stringify(check, null, 2));
   await mkdir('docs', { recursive: true });
-  await writeFile('docs/codex-live-validation.md', `# Codex live acceptance\n\nPassed: ${check.timestamp}\n\nA real authenticated Codex app-server session completed the complete Muon HTTP/task-service workflow in an isolated Git repository.\n\n- Todo automatically dispatched to planning.\n- Planning produced a real RFC and made no worktree changes.\n- A stale RFC approval was rejected.\n- The test owner approved the exact RFC revision.\n- Building and verification used the same worktree and provider session.\n- Five independent host assertions and the task's actual Node test suite passed.\n- Both changed files and verification evidence were persisted.\n- The original checkout was unchanged.\n\nLocal evidence: \`${root}/acceptance-result.json\`\n\nThis test invokes the installed CLI using existing authentication. It is opt-in; run \`node --import tsx scripts/codex-live-check.ts\`.\n`);
+  await writeFile('docs/codex-live-validation.md', `# Codex live acceptance\n\nPassed: ${check.timestamp}\n\nReal authenticated Codex app-server sessions completed the Muon HTTP/task-service workflow in an isolated Git repository.\n\n- Todo automatically dispatched to planning.\n- Planning produced a real RFC and made no worktree changes.\n- A stale RFC approval was rejected.\n- The test owner approved the exact RFC revision.\n- Plan, Build, and Verify used distinct provider sessions in the same isolated worktree.\n- Five independent host assertions and the task's actual Node test suite passed.\n- Both changed files and verification evidence were persisted.\n- The original checkout was unchanged.\n\nLocal evidence: \`${root}/acceptance-result.json\`\n\nThis test invokes the installed CLI using existing authentication. It is opt-in; run \`node --import tsx scripts/codex-live-check.ts\`.\n`);
   console.log(JSON.stringify({ passed: true, durationSeconds: check.durationSeconds, root, changedFiles: check.changedFiles, tests: actual.stdout }, null, 2));
 } catch (error) {
   await writeFile(join(root, 'failure.json'), JSON.stringify({ passed: false, error: error instanceof Error ? error.message : String(error), timestamp: new Date().toISOString() }, null, 2));

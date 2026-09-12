@@ -1,6 +1,7 @@
-import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
+import type { AgentAdapter, AgentRequest, AgentResult, AgentSessionRequest } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { errorMessage, record, text } from './protocol-values.js';
+import { normalizeAgentRequest } from './session-request.js';
 import { createRequire } from 'node:module';
 
 type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
@@ -27,10 +28,12 @@ export class CodexAdapter implements AgentAdapter {
 
   available(): Promise<boolean> { return executableAvailable(this.executable, this.prefixArgs); }
 
-  async run(request: AgentRequest): Promise<AgentResult> {
+  async run(input: AgentRequest | AgentSessionRequest): Promise<AgentResult> {
+    const request = normalizeAgentRequest(input);
     if (request.provider !== this.provider) throw new Error('Codex adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const readonly = request.phase === 'planning' || request.phase === 'chief' || request.phase === 'chat';
+    const readonly = request.access === 'read-only';
+    const bypassPermissions = this.bypassPermissions && request.allowPermissionBypass;
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;
@@ -72,13 +75,13 @@ export class CodexAdapter implements AgentAdapter {
           const frame = record(value);
           if (!frame) return;
           if (typeof frame.method === 'string' && frame.id !== undefined) {
-            // The hardcoded workflow does not auto-grant tool escalation or user input.
+            // Session policy does not auto-grant tool escalation or user input.
             if (frame.method === 'item/commandExecution/requestApproval' || frame.method === 'item/fileChange/requestApproval') {
-              process?.send({ id: frame.id, result: { decision: this.bypassPermissions ? 'accept' : 'decline' } });
-              if (this.bypassPermissions) return;
+              process?.send({ id: frame.id, result: { decision: bypassPermissions ? 'accept' : 'decline' } });
+              if (bypassPermissions) return;
             } else if (frame.method === 'item/permissions/requestApproval') {
               process?.send({ id: frame.id, result: { permissions: {}, scope: 'turn' } });
-              if (this.bypassPermissions) return;
+              if (bypassPermissions) return;
             } else if (frame.method === 'mcpServer/elicitation/request') {
               process?.send({ id: frame.id, result: { action: 'decline', content: null } });
             } else {
@@ -111,7 +114,7 @@ export class CodexAdapter implements AgentAdapter {
             return;
           }
           if (Array.isArray(turn.items)) turn.items.forEach(captureItem);
-          const answer = (request.phase === 'planning' ? planText : undefined) ?? finalText ?? legacyText;
+          const answer = (request.session === 'plan' ? planText : undefined) ?? finalText ?? legacyText;
           if (!answer) { fail(new Error('Codex completed without a final result.')); return; }
           resolveResult({ text: answer, sessionId });
         },
@@ -146,12 +149,14 @@ export class CodexAdapter implements AgentAdapter {
       if (!configuration) throw new Error('Codex could not resolve isolated task configuration. Use the app-managed CLI.');
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
       const config = { mcp_servers: mcpServers, features: isolatedFeatures,
+        ...(request.session === 'research' ? { web_search: 'live' } : {}),
         ...(this.model ? { model: this.model } : {}),
         ...(this.reasoningEffort ? { model_reasoning_effort: this.reasoningEffort } : {}),
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
-        cwd: request.cwd, approvalPolicy: 'never', sandbox: this.bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
+        cwd: request.cwd, approvalPolicy: 'never', sandbox: bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
+        ...(request.systemPrompt ? { developerInstructions: request.systemPrompt } : {}),
         config,
       }));
       sessionId = text(record(opened?.thread)?.id);
@@ -163,7 +168,7 @@ export class CodexAdapter implements AgentAdapter {
         input: [{ type: 'text', text: request.prompt }],
         cwd: request.cwd,
         approvalPolicy: 'never',
-        sandboxPolicy: this.bypassPermissions
+        sandboxPolicy: bypassPermissions
           ? { type: 'dangerFullAccess' }
           : readonly
           ? { type: 'readOnly' }

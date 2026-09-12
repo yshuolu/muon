@@ -23,12 +23,15 @@ muon settings get
 muon settings update --json '{"maxConcurrentAgents":2,"dispatcherEnabled":true}'
 
 muon tasks list --status todo --provider claude
+muon tasks list --workflow research
 muon tasks list --parent MUO-1
 muon tasks list --parent null
 muon tasks list --blocked-by MUO-2 --search "authentication"
 muon tasks get MUO-3
 muon tasks create --json '{"title":"Authentication","kind":"group","status":"backlog"}'
 muon tasks create --json '{"title":"Implement sign in","parentId":"MUO-1","status":"todo"}'
+muon tasks create --workflow brainstorm --json '{"title":"Explore sign-in options"}'
+muon tasks create --workflow research --json '{"title":"Compare identity providers"}'
 muon tasks update MUO-3 --json '{"priority":1,"blockedByIds":["MUO-2"]}'
 muon tasks cancel MUO-3
 muon tasks retry MUO-3 --mode fix --feedback "Fix the failing password reset check."
@@ -52,6 +55,18 @@ muon chief send --json '{"content":"Break authentication into reviewed coding ta
 ```
 
 Task references accept UUIDs or project identifiers. `tasks MUO-3 evidence` and `tasks MUO-3 discussion` are also accepted for task subresources. Creation and edits use the API’s validated JSON fields; protected lifecycle state and RFC ownership cannot be overridden by JSON or by using the generic API command. Exact plan IDs are mandatory for approvals and review comments so a stale decision cannot approve or revise a later RFC.
+
+## Selecting a workflow
+
+`tasks create --workflow brainstorm|research|develop` adds a workflow to the JSON or file body. Specify it either in the body or as a flag; supplying both is rejected. Develop is the default. Brainstorm and Research each produce a final task result without requiring a Git repository, RFC review, building, or code verification. Develop uses Plan, owner approval, Build, and Verify. Task groups remain organizational containers and cannot select workflows. Workflow selection cannot be changed with `tasks update`.
+
+The owner can reuse an exact approved RFC through Develop's JSON parameters:
+
+```sh
+muon tasks create --json '{"title":"Implement sign in","description":"The exact approved description","blockedByIds":[],"workflow":{"kind":"develop","params":{"approvedPlan":{"taskId":"MUO-3","planId":"EXACT-APPROVED-PLAN-ID"}}}}'
+```
+
+The source must be owned by the same owner in this project, have no children, and have a current RFC approved by that owner. Copy its exact title, description, and dependency set into the new task. Muon retains the approved plan, frozen dependency snapshots, and base commit, then queues Build. A stale reference or changed scope is rejected, and the chief cannot import approvals. To change scope, create a normal Develop task and review its new RFC.
 
 ## Discussing an RFC
 
@@ -99,3 +114,5 @@ muon api GET /api/artifacts/ARTIFACT-ID --output screenshot.png
 ```
 
 Generic paths must stay within `/api/` on the configured origin. Bearer credentials, permissions, validation, conflicts, and owner approval checks behave exactly as they do for named commands. The shared `ApiClient` is transport-only and also works in the browser with a same-origin `/api` base.
+
+Read a task’s logical sessions with `muon tasks sessions MUO-12` and its saved ideas or reports with `muon tasks outputs MUO-12`. `tasks runs` retains per-attempt history.

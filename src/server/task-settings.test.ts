@@ -1,24 +1,26 @@
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentResult, WorkspaceProvider } from '../runtime';
 import type { Scope } from '../shared/types';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
+import { observeAgentRequest, type ObservedAgentRequest } from './test-agent-request';
 
 const scope: Scope = { workspaceId: 'workspace', projectId: 'project', userId: 'owner' };
 const fixtures: Array<{ service: TaskService; repo: SqliteRepository }> = [];
 async function fixture() {
   const repo = new SqliteRepository(':memory:');
   await repo.initialize(scope, { id: 'project', workspaceId: 'workspace', ownerUserId: 'owner', identifier: 'MUO', name: 'Test project', repositoryPath: '/test/repository' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
-  const calls: AgentRequest[] = [];
+  const calls: ObservedAgentRequest[] = [];
   const adapter: AgentAdapter = {
     provider: 'claude', available: async () => true,
     run: request => new Promise<AgentResult>((_resolve, reject) => {
-      calls.push(request);
+      calls.push(observeAgentRequest(request));
       request.signal?.addEventListener('abort', () => reject(new Error('Canceled test run')), { once: true });
     }),
   };
   const workspaces: WorkspaceProvider = {
+    ensureScratch: async ({ taskId }) => ({ path: `/test/scratch/${taskId}` }),
     validateRepository: vi.fn(async () => undefined),
     ensure: async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) }),
     changedFiles: async () => [],

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -28,6 +28,24 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('LocalWorktreeProvider', () => {
+  it('reuses a repository-free scratch directory across provider restarts', async () => {
+    await rm(repository, { recursive: true });
+    const first = await new LocalWorktreeProvider(root).ensureScratch({ taskId: 'research-task' });
+    const second = await new LocalWorktreeProvider(root).ensureScratch({ taskId: 'research-task' });
+    expect(second).toEqual(first);
+    expect(await readdir(first.path)).toEqual([]);
+    await expect(new LocalWorktreeProvider(root).ensureScratch({ taskId: '../outside' })).rejects.toThrow('Invalid task ID');
+  });
+
+  it('rejects scratch-directory symlinks before creating files outside storage', async () => {
+    const outside = join(directory, 'outside');
+    await mkdir(outside);
+    await mkdir(root);
+    await symlink(outside, join(root, 'scratch'));
+    await expect(new LocalWorktreeProvider(root).ensureScratch({ taskId: 'research-task' })).rejects.toThrow('symbolic link');
+    expect(await readdir(outside)).toEqual([]);
+  });
+
   it('reuses one isolated worktree and retains its original base across restarts', async () => {
     const provider = new LocalWorktreeProvider(root);
     const [first, parallel] = await Promise.all([

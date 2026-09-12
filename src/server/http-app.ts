@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { resolve } from 'node:path';
 import { DomainError, ConflictError, type ArtifactStore } from './ports';
 import type { TaskService } from './task-service';
-import type { Task } from '../shared/types';
+import type { CreateTaskInput, Task } from '../shared/types';
+import { taskWorkflow } from '../shared/workflows';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
   listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema,
@@ -13,6 +14,7 @@ import {
 
 export interface HttpRequestAccess {
   authorize(request: Request): void | Promise<void>;
+  authorizeTaskCreation?(request: Request, input: CreateTaskInput): void;
   observe?(request: Request, response: Response): void | Promise<void>;
 }
 export function createHttpApp(service: TaskService, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string; access?: HttpRequestAccess } = {}) {
@@ -69,6 +71,13 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
       ...(input.blockedByIds ? { blockedByIds: input.blockedByIds.map(relationId) } : {}),
     };
   };
+  const resolveCreation = async (input: CreateTaskInput): Promise<CreateTaskInput> => {
+    const resolved = await resolveRelations(input);
+    if (resolved.workflow?.kind !== 'develop' || !resolved.workflow.params?.approvedPlan) return resolved;
+    const approvedPlan = resolved.workflow.params.approvedPlan;
+    const source = await taskByReference(approvedPlan.taskId);
+    return { ...resolved, workflow: { kind: 'develop', params: { approvedPlan: { ...approvedPlan, taskId: source.id } } } };
+  };
   app.get('/api/project', async c => c.json((await service.snapshot()).project));
   app.get('/api/settings', async c => c.json((await service.snapshot()).settings));
   app.get('/api/runtime', async c => c.json((await service.snapshot()).runtime));
@@ -90,10 +99,11 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
       (blockedById === undefined || task.blockedByIds.includes(blockedById)) &&
       (query.provider === undefined || task.provider === query.provider) &&
       (query.kind === undefined || (task.kind ?? 'coding') === query.kind) &&
+      (query.workflow === undefined || task.kind !== 'group' && taskWorkflow(task).kind === query.workflow) &&
       (!search || [task.identifier, task.title, task.description, ...task.labels].some(value => value.toLowerCase().includes(search)))));
   });
   app.get('/api/tasks/:id', async c => c.json(await taskByReference(c.req.param('id'))));
-  for (const [resource, property] of [['plans', 'plans'], ['evidence', 'evidence'], ['files', 'changedFiles'], ['activity', 'activity'], ['runs', 'runs']] as const) {
+  for (const [resource, property] of [['plans', 'plans'], ['evidence', 'evidence'], ['files', 'changedFiles'], ['activity', 'activity'], ['runs', 'runs'], ['sessions', 'sessions'], ['outputs', 'outputs']] as const) {
     app.get(`/api/tasks/:id/${resource}`, async c => c.json((await taskByReference(c.req.param('id')))[property] ?? []));
   }
   app.get('/api/tasks/:id/plan-discussion', async c => c.json((await taskByReference(c.req.param('id'))).planDiscussion ?? []));
@@ -127,7 +137,11 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
       'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff',
     } });
   });
-  app.post('/api/tasks', async c => c.json(await service.createTask(await resolveRelations(createTaskSchema.parse(await c.req.json()))), 201));
+  app.post('/api/tasks', async c => {
+    const input = createTaskSchema.parse(await c.req.json());
+    options.access?.authorizeTaskCreation?.(c.req.raw, input);
+    return c.json(await service.createTask(await resolveCreation(input)), 201);
+  });
   app.patch('/api/tasks/:id', async c => {
     const input = editTaskSchema.parse(await c.req.json());
     return c.json(await service.editTask((await taskByReference(c.req.param('id'))).id, await resolveRelations(input)));
@@ -168,7 +182,7 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
   });
   app.post('/api/planning-chats/:id/taskify', async c => {
     const input = createTaskSchema.parse(await c.req.json());
-    return c.json(await service.taskifyPlanningChat(c.req.param('id'), await resolveRelations(input)), 201);
+    return c.json(await service.taskifyPlanningChat(c.req.param('id'), await resolveCreation(input)), 201);
   });
   app.delete('/api/planning-chats/:id', async c => {
     service.discardPlanningChat(c.req.param('id')); return c.json({ ok: true });

@@ -33,7 +33,9 @@ The chief may manage task records through its authorized CLI calls. It cannot ap
 | `GET /tasks/:task/evidence` | `Evidence[]`, including history and `runId` associations |
 | `GET /tasks/:task/files` | `ChangedFile[]` |
 | `GET /tasks/:task/activity` | `Activity[]` with concise record change descriptions |
-| `GET /tasks/:task/runs` | `AgentRun[]` with phase, timestamps, outcome, and RFC association |
+| `GET /tasks/:task/sessions` | Durable logical sessions, current state, provider conversation, and assembled input |
+| `GET /tasks/:task/outputs` | Saved Brainstorm ideas or Research reports with producing session/attempt identity |
+| `GET /tasks/:task/runs` | `AgentRun[]` with session identity, phase, timestamps, outcome, and RFC association |
 | `GET /tasks/:task/subtasks` | Direct child `Task[]`; use each child’s resource to traverse deeper |
 | `GET /tasks/:task/dependencies` | Direct prerequisite `Task[]`, in the task’s `blockedByIds` order |
 | `GET /attention` | `Attention[]`; `?unread=true` returns unread records, `?unread=false` returns read records |
@@ -52,6 +54,7 @@ Task-list filters can be combined with AND semantics:
 | `blockedById` | UUID/identifier of a direct prerequisite |
 | `provider` | `claude` or `codex` |
 | `kind` | `coding` or `group`; older records without a kind count as coding |
+| `workflow` | `brainstorm`, `research`, or `develop`; older executable tasks without a workflow count as develop; groups have no workflow |
 | `search` | Case-insensitive substring in identifier, title, description, or any label; maximum 1,000 characters |
 
 Omitted filters impose no constraint. Each parameter accepts one value. Unrecognized query parameters and invalid enum values return 400; a parent or blocker reference outside the scoped task collection returns 404. Task collections preserve repository insertion order. Plans, runs, activity, and chief messages preserve their stored history order. There is no pagination in the local implementation.
@@ -70,31 +73,35 @@ Artifact downloads support a single HTTP byte range, including open-ended and su
 | `POST /tasks/:task/approve` | `{ "planId": "…" }` | 200 `Task` with owner-approved plan queued for building |
 | `POST /tasks/:task/plan-discussion` | `{ "planId": "…", "content": "…" }` | 200 `Task` with the owner comment persisted and revised planning queued |
 | `POST /tasks/:task/request-changes` | `{ "planId": "…", "feedback": "…" }` | 200 `Task`; compatibility alias that posts feedback to the RFC discussion |
-| `POST /tasks/:task/retry` | `{ "mode"?: "retry" \| "fix" \| "replan", "feedback"?: "…" }` | 200 `Task` |
+| `POST /tasks/:task/retry` | `{ "mode"?: "retry" \| "resume" \| "fix" \| "replan", "feedback"?: "…" }` | 200 `Task` |
 | `POST /attention/:attentionId/read` | `{}` | 200 `{ "ok": true }` |
 | `POST /chief/messages` | `{ "content": "…" }` | 202 persisted user `ChiefMessage` |
 | `POST /planning-chats` | `{}` | 201 disposable read-only planning chat |
 | `GET /planning-chats/:id` |  | Current planning chat messages and activity |
 | `POST /planning-chats/:id/messages` | `{ "content": "…" }` | 202 queued read-only planning reply |
-| `POST /planning-chats/:id/taskify` | `CreateTaskRequest` | 201 creates a normal task with the chat transcript in its description |
+| `POST /planning-chats/:id/taskify` | `CreateTaskRequest` | 201 creates a task using its selected workflow; includes the transcript unless reusing approved scope |
 | `DELETE /planning-chats/:id` | `{}` | 200 discards the chat and aborts an active reply |
 | `PATCH /settings` | `UpdateSettingsRequest` | 200 `{ "ok": true }`; read `/settings` and `/project` for updated records |
 
-Task creation requires a nonempty title (maximum 240 characters). Optional fields are description (30,000 characters), provider, priority (0–4), status (`backlog` or `todo`), labels (up to 20 strings, 40 characters each), parentId (nullable), blockedByIds (up to 100 references), and kind (`coding` or `group`). The server supplies scope, owner, stable ID, sequence identifier, timestamps, and initial workflow fields. Both relation fields accept UUIDs or identifiers and are resolved inside the current project. Labels are normalized by the service.
+Task creation requires a nonempty title (maximum 240 characters). Optional fields are description (30,000 characters), provider, priority (0–4), status (`backlog` or `todo`), labels (up to 20 strings, 40 characters each), parentId (nullable), blockedByIds (up to 100 references), kind (`coding` or `group`), and workflow. The server supplies scope, owner, stable ID, sequence identifier, timestamps, and initial workflow fields. Both relation fields accept UUIDs or identifiers and are resolved inside the current project. Labels are normalized by the service.
 
-Task editing permits those same descriptive, priority, provider, label, and relation fields, but cannot change `kind`; its permitted statuses are `backlog`, `todo`, and `canceled`. The service restricts which records are still editable and rejects relation cycles. To remove a parent use `"parentId": null`; to remove all dependencies use `"blockedByIds": []`. Omitted fields are unchanged. Active workflow state, plans, evidence, runs, ownership, and completed outcomes cannot be set through a generic patch. They are written by the server’s approved workflow.
+`workflow` accepts `{ "kind": "brainstorm" }`, `{ "kind": "research" }`, or `{ "kind": "develop", "params"?: { "approvedPlan"?: { "taskId": "…", "planId": "…" } } }`. Omission selects Develop for executable tasks. Groups cannot select a workflow. Brainstorm and Research each run one session and complete with a durable final result; they do not require a repository or fabricate a plan approval or test pass. Develop normally composes Plan, Build, and Verify sessions, with the task paused for owner approval after Plan. The response stores the resolved workflow kind, version, parameters, and ordered session definitions. Clients cannot submit arbitrary sessions or workflow code.
+
+An owner may supply `develop.params.approvedPlan` to begin at Build. `taskId` accepts a UUID or identifier and `planId` identifies the source task's exact current approved RFC. The source must belong to the same project and owner, record that owner's approval, and have no children. The new task's title, description, and dependency set must match the source's approved scope. Muon copies the approved RFC, its frozen dependency inputs, and its worktree base commit, retaining the source reference. Chief credentials cannot import approvals. Invalid or stale references cannot authorize building; use normal Develop planning for changed scope.
+
+Task editing permits those same descriptive, priority, provider, label, and relation fields, but cannot change `kind` or `workflow`; its permitted statuses are `backlog`, `todo`, and `canceled`. The service restricts which records are still editable and rejects relation cycles. To remove a parent use `"parentId": null`; to remove all dependencies use `"blockedByIds": []`. Omitted fields are unchanged. Active workflow state, plans, evidence, runs, ownership, and completed outcomes cannot be set through a generic patch. They are written by the server’s approved workflow.
 
 Approval and discussion comments must include the exact current pending `planId`. A stale, already-approved, canceled, or currently revising RFC returns 409. Discussion comments require nonblank content of at most 20,000 characters; content is trimmed before storage. The server records the owner identity, closes that pending RFC for review, and queues the planning agent to respond and revise it. Poll the discussion and plans resources for the final reply and new pending RFC. Repeat this comment–revision conversation until the owner approves the latest exact plan ID. Each message has `id`, `role` (`user` or `assistant`), `content`, `createdAt`, and `planId`; owner comments also record `userId`. Agent replies link to the newly produced RFC. Older comments and RFCs remain available after approval. Reads return an empty array for older tasks with no discussion.
 
 Discussion posts are owner operations; a chief bearer credential may read the conversation but cannot post as the owner. The legacy `request-changes` endpoint remains supported and delegates to the same discussion operation, mapping `feedback` to `content`. New clients should use the conversation resource. Neither comments nor assistant replies approve implementation.
 
-Recovery preserves prior attempts and artifacts: `retry` resumes the failed phase, `fix` returns to building within the approved scope, and `replan` requires a fresh owner review before building. Recovery feedback is optional and limited to 20,000 characters. The service validates whether each operation is appropriate for the task’s current state.
+Recovery preserves prior attempts and artifacts: `retry` repeats the failed session, `resume` continues its saved provider conversation when available, `fix` returns Develop work to building within the approved scope, and `replan` requires a fresh owner review before building. Brainstorm and Research support retry and resume, without Develop's fix or replan transitions. Recovery feedback is optional and limited to 20,000 characters. The service validates whether each operation is appropriate for the task’s current state.
 
 Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnabled` (boolean), `defaultProvider`, `repositoryPath`, and `projectName`. Repository changes require a valid committed Git root and are rejected while they would disrupt current work. Changing project display name does not change its stable project ID or task identifier prefix.
 
 Chief messages accept 1–30,000 nonblank characters. A simultaneous or already-pending chief request returns 409. A 202 response means the request was recorded for dispatch; poll `/chief/messages` and `/runtime` for the final result. Creating a Todo task similarly records it immediately; the dispatcher selects eligible work within the shared concurrency limit.
 
-Planning chats are separate, disposable read-only threads. They are held in memory, excluded from `/state`, the Chief history, and task navigation, and can be addressed through their `/planning-chats/:id` URL while the local server is running. Their provider may inspect the configured repository but cannot edit files or mutate tasks. Taskification is explicit; it copies the conversation into the new task description within the normal 30,000-character description limit, after which the normal RFC approval workflow applies.
+Planning chats are separate, disposable read-only threads. They are held in memory, excluded from `/state`, the Chief history, and task navigation, and can be addressed through their `/planning-chats/:id` URL while the local server is running. Their provider may inspect the configured repository but cannot edit files or mutate tasks. Taskification is explicit; it copies the conversation into the new task description within the normal 30,000-character description limit, after which the selected task workflow applies. Reusing an approved plan preserves its exact description instead of appending the chat transcript. Chats can use a scratch directory when no repository is configured. Use a Brainstorm or Research task when the exploratory result should be durable and participate in task dependencies.
 
 ## Errors
 

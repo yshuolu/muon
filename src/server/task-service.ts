@@ -1,8 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, RetryTaskInput, Scope, Settings, Task } from '../shared/types';
+import { createHash, randomUUID } from 'node:crypto';
+import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, Plan, ResultInput, SessionOutput, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, RetryTaskInput, Scope, Settings, Task } from '../shared/types';
 import { AgentProcessUnreapedError, type AgentAdapter, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
-import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, verificationSchema } from './agent-prompts';
+import { chiefPrompt, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, verificationSchema } from './agent-prompts';
+
+import { currentSessionName, defineWorkflow, sessionPhase, taskWorkflow, type SessionName } from '../shared/workflows';
+import { workflowInputSchema } from '../shared/api-contract';
+import { buildSessionInput, SessionRunner, SESSION_POLICIES, SESSION_SYSTEM_PROMPT } from './session-runner';
+import { createSessions, initializeSessions } from './session-state';
 
 const now = () => new Date().toISOString();
 const terminal = (task: Task) => task.status === 'done' || task.status === 'canceled';
@@ -33,7 +38,9 @@ export class TaskService implements Dispatcher {
     const results = await Promise.allSettled([this.options.adapters.claude.available(), this.options.adapters.codex.available()]);
     this.availability = { claude: results[0].status === 'fulfilled' && results[0].value, codex: results[1].status === 'fulfilled' && results[1].value };
     let interrupted = false;
-    for (const task of await this.repo.tasks(this.scope)) {
+    for (const record of await this.repo.tasks(this.scope)) {
+      const migrated = initializeSessions(record);
+      const task = migrated === record ? record : await this.repo.saveTask(this.scope, migrated, record.version);
       if (task.runId || task.status === 'in_progress') {
         interrupted = true;
         const saved = await this.change(task, { status: 'blocked', runId: undefined, error: 'The local server stopped during this run. Review the worktree, then retry.' }, 'Run interrupted; worktree and results retained.');
@@ -70,21 +77,47 @@ export class TaskService implements Dispatcher {
   async getTask(id: string) {
     const task = await this.repo.task(this.scope, id);
     if (!task) throw new DomainError('Task not found.', 404);
-    return task;
+    const migrated = initializeSessions(task);
+    return migrated === task ? task : this.repo.saveTask(this.scope, migrated, task.version);
   }
   private async change(task: Task, patch: Partial<Task>, activity?: string) {
-    let runs = task.runs ?? [];
+    let runs = patch.runs ?? task.runs ?? [];
+    let sessions = patch.sessions ?? task.sessions ?? [];
+    const currentSessionId = patch.currentSessionId ?? task.currentSessionId;
     if (patch.runId && patch.runId !== task.runId) {
-      runs = [...runs, { id: patch.runId, phase: patch.phase as 'planning' | 'building' | 'verification', provider: task.provider, status: 'running', startedAt: now(), planId: task.plans.at(-1)?.id }];
+      const session = sessions.find(item => item.id === currentSessionId);
+      if (!session) throw new DomainError('The task has no current agent session.');
+      runs = [...runs, {
+        id: patch.runId, phase: sessionPhase(session.name) as NonNullable<Task['runs']>[number]['phase'],
+        provider: task.provider, status: 'running', startedAt: now(), planId: task.plans.at(-1)?.id,
+        agentSessionId: session.id, sessionName: session.name,
+      }];
+      sessions = sessions.map(item => item.id === session.id ? { ...item, status: 'running' } : item);
+      patch.activeSessionId = session.id;
     } else if (task.runId && Object.hasOwn(patch, 'runId') && !patch.runId) {
-      runs = runs.map(run => run.id === task.runId ? { ...run, status: patch.status === 'blocked' ? 'failed' : patch.status === 'canceled' ? 'canceled' : 'succeeded', finishedAt: now(), sessionId: patch.sessionId ?? task.sessionId, error: patch.error } : run);
+      const status = patch.status === 'blocked' ? 'failed' : patch.status === 'canceled' ? 'canceled' : 'succeeded';
+      const providerSessionId = patch.sessionId ?? sessions.find(item => item.id === task.activeSessionId)?.providerSessionId;
+      runs = runs.map(run => run.id === task.runId ? { ...run, status, finishedAt: now(), sessionId: providerSessionId, providerSessionId, error: patch.error } : run);
+      sessions = sessions.map(session => session.id === task.activeSessionId ? { ...session, status, providerSessionId } : session);
+      patch.activeSessionId = undefined;
     }
-    return this.repo.saveTask(this.scope, { ...task, ...patch, runs, updatedAt: now(), activity: activity ? [...task.activity, { id: randomUUID(), text: activity, createdAt: now() }] : task.activity }, task.version);
+    return this.repo.saveTask(this.scope, { ...task, ...patch, sessions, runs, updatedAt: now(), activity: activity ? [...task.activity, { id: randomUUID(), text: activity, createdAt: now() }] : task.activity }, task.version);
   }
+
   private async notify(task: Task, kind: Attention['kind'], description: string) {
     const id = `${task.id}:${kind}`;
     const existing = (await this.repo.attention(this.scope)).find(item => item.id === id);
     await this.repo.putAttention(this.scope, { id, taskId: task.id, kind, title: task.title, description, createdAt: existing?.createdAt ?? now(), readAt: existing?.readAt });
+  }
+  private continuation(task: Task): Pick<Task, 'currentSessionId' | 'phase' | 'status' | 'completedAt'> {
+    const definitions = taskWorkflow(task).sessions;
+    const index = definitions.findIndex(session => session.name === currentSessionName(task));
+    if (index < 0) throw new DomainError('The current session is not part of this workflow.');
+    const next = definitions[index + 1];
+    if (!next) return { currentSessionId: task.currentSessionId, phase: 'complete', status: 'done', completedAt: now() };
+    const session = task.sessions?.find(item => item.name === next.name);
+    if (!session) throw new DomainError('The next workflow session is missing.');
+    return { currentSessionId: session.id, phase: sessionPhase(next.name), status: 'todo', completedAt: undefined };
   }
   private async reconcileProjectCompletion() {
     const tasks = await this.repo.tasks(this.scope);
@@ -98,9 +131,10 @@ export class TaskService implements Dispatcher {
     const project = await this.repo.project(this.scope);
     const last = completed.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
     const canceled = tasks.filter(task => task.status === 'canceled').length;
-    const codingCount = completed.filter(task => task.kind !== 'group').length;
-    const groupCount = completed.length - codingCount;
-    await this.repo.putAttention(this.scope, { id: `project:${project.id}:completed`, taskId: last.id, kind: 'project_completed', title: `${project.name} is complete`, description: `${codingCount} completed coding task${codingCount === 1 ? ' has' : 's have'} passed verification.${groupCount ? ` ${groupCount} task group${groupCount === 1 ? ' has' : 's have'} all subtasks complete.` : ''}${canceled ? ` ${canceled} task${canceled === 1 ? ' was' : 's were'} canceled.` : ''} No project work remains in the queue or backlog. Branches and evidence are ready for your review.`, createdAt: now() });
+    const codingCount = completed.filter(task => task.kind !== 'group' && taskWorkflow(task).kind === 'develop').length;
+    const groupCount = completed.filter(task => task.kind === 'group').length;
+    const knowledgeCount = completed.length - codingCount - groupCount;
+    await this.repo.putAttention(this.scope, { id: `project:${project.id}:completed`, taskId: last.id, kind: 'project_completed', title: `${project.name} is complete`, description: `${codingCount} completed coding task${codingCount === 1 ? ' has' : 's have'} passed verification.${knowledgeCount ? ` ${knowledgeCount} research or brainstorming task${knowledgeCount === 1 ? ' has' : 's have'} saved results.` : ''}${groupCount ? ` ${groupCount} task group${groupCount === 1 ? ' has' : 's have'} all subtasks complete.` : ''}${canceled ? ` ${canceled} task${canceled === 1 ? ' was' : 's were'} canceled.` : ''} No project work remains in the queue or backlog. Results and applicable evidence are ready for your review.`, createdAt: now() });
   }
   private async reconcileGroups() {
     const tasks = await this.repo.tasks(this.scope);
@@ -155,16 +189,47 @@ export class TaskService implements Dispatcher {
     };
     for (const node of nodes) visit(node.id);
   }
+  private async approvedPlanInput(input: CreateTaskInput): Promise<Plan | undefined> {
+    const reference = input.workflow?.kind === 'develop' ? input.workflow.params?.approvedPlan : undefined;
+    if (!reference) return undefined;
+    const source = await this.getTask(reference.taskId);
+    const plan = source.plans.at(-1);
+    if (source.ownerUserId !== this.scope.userId || plan?.reviewedBy !== this.scope.userId) {
+      throw new DomainError('Only the owner may reuse an approved plan.', 403);
+    }
+    if (source.kind === 'group' || taskWorkflow(source).kind !== 'develop' || source.status === 'canceled'
+      || plan?.id !== reference.planId || plan.status !== 'approved' || !plan.reviewedAt) {
+      throw new DomainError('The supplied plan is not the current approved RFC.', 409);
+    }
+    const dependencies = (ids: string[]) => [...new Set(ids)].sort().join('\0');
+    if (input.title.trim() !== source.title || (input.description ?? '') !== source.description
+      || dependencies(input.blockedByIds ?? []) !== dependencies(source.blockedByIds)) {
+      throw new DomainError('An approved plan can only be reused with its original title, description, and dependencies. Create a new plan for changed scope.');
+    }
+    if ((await this.repo.tasks(this.scope)).some(task => task.parentId === source.id)) {
+      throw new DomainError('Plans with subtasks require a new integration plan.');
+    }
+    const baseCommit = plan.baseCommit ?? source.worktree?.baseCommit;
+    if (!baseCommit && !this.options.demo) throw new DomainError('The approved plan has no retained repository base. Create a new plan.');
+    return { ...plan, id: randomUUID(), version: 1, source: { ...reference }, baseCommit };
+  }
+
   async createTask(input: CreateTaskInput) {
     if (!input.title.trim()) throw new DomainError('Task title cannot be empty.');
+    if (input.workflow) input = { ...input, workflow: workflowInputSchema.parse(input.workflow) };
+    if (input.kind === 'group' && input.workflow) throw new DomainError('Task groups do not have agent workflows.');
+    const workflow = input.kind === 'group' ? undefined : defineWorkflow(input.workflow);
+    const approvedPlan = await this.approvedPlanInput(input);
+    const sessions = workflow ? createSessions(workflow) : [];
     const id = randomUUID(); const timestamp = now();
     await this.validateRelations(id, input.parentId ?? null, input.blockedByIds ?? []);
     const settings = await this.repo.settings(this.scope);
     const task = await this.repo.insertTask(this.scope, {
       id, identifier: '', ...this.scope, ownerUserId: this.scope.userId,
-      title: input.title.trim(), description: input.description ?? '', status: input.status ?? 'todo', phase: 'idle', kind: input.kind ?? 'coding',
+      title: input.title.trim(), description: input.description ?? '', status: input.status ?? 'todo', phase: approvedPlan ? 'building' : 'idle', kind: input.kind ?? 'coding',
       priority: input.priority ?? 0, provider: input.provider ?? settings.defaultProvider, labels: [...new Set(input.labels?.map(label => label.trim()) ?? [])],
-      parentId: input.parentId ?? null, blockedByIds: input.blockedByIds ?? [], plans: [], planDiscussion: [], evidence: [], changedFiles: [],
+      parentId: input.parentId ?? null, blockedByIds: [...new Set(input.blockedByIds ?? [])], plans: approvedPlan ? [approvedPlan] : [], planDiscussion: [], evidence: [], changedFiles: [],
+      workflow, sessions, currentSessionId: sessions[0]?.id, outputs: [], sessionSystemPrompt: SESSION_SYSTEM_PROMPT,
       summary: '', runs: [], activity: [{ id: randomUUID(), text: 'Task created.', createdAt: timestamp }], createdAt: timestamp, updatedAt: timestamp, version: 1,
     });
     await this.reconcileGroups();
@@ -190,7 +255,15 @@ export class TaskService implements Dispatcher {
       await this.reconcileProjectCompletion();
       return saved;
     }
-    if (task.kind === 'group' ? task.status === 'canceled' : !['backlog', 'todo'].includes(task.status) || task.phase !== 'idle') throw new DomainError('Only unstarted coding tasks and active task groups can be edited. Use plan feedback or retry for work already underway.');
+    const unstartedImport = !!task.workflow?.params?.approvedPlan && !task.runId && !task.runs?.length
+      && ['backlog', 'todo'].includes(task.status);
+    if (unstartedImport) {
+      if (Object.keys(input).some(key => !['status', 'priority', 'provider', 'labels'].includes(key))) {
+        throw new DomainError('The imported RFC fixes this task’s scope. Create a new plan to change the title, description, or dependencies.');
+      }
+    } else if (task.kind === 'group' ? task.status === 'canceled' : !['backlog', 'todo'].includes(task.status) || task.phase !== 'idle') {
+      throw new DomainError('Only unstarted tasks and active task groups can be edited. Use plan feedback or retry for work already underway.');
+    }
     if (input.title !== undefined) {
       if (!input.title.trim()) throw new DomainError('Task title cannot be empty.');
       input.title = input.title.trim();
@@ -209,7 +282,7 @@ export class TaskService implements Dispatcher {
     const current = task.plans.at(-1);
     if (task.status !== 'in_review' || task.phase !== 'plan_review' || current?.id !== planId || current.status !== 'pending') throw new DomainError('This RFC is no longer awaiting approval. Refresh to review the latest version.', 409);
     const plans = task.plans.map(plan => plan.id === planId ? { ...plan, status: 'approved' as const, reviewedAt: now(), reviewedBy: this.scope.userId } : plan);
-    const saved = await this.change(task, { plans, status: 'todo', phase: 'building', error: undefined }, `RFC v${current.version} approved by owner. Implementation queued.`);
+    const saved = await this.change(task, { ...this.continuation(task), plans, sessionId: undefined, error: undefined }, `RFC v${current.version} approved by owner. Implementation queued.`);
     await this.repo.removeAttention(this.scope, id, 'plan_approval');
     void this.tick().catch(console.error);
     return saved;
@@ -241,16 +314,28 @@ export class TaskService implements Dispatcher {
     if (task.kind === 'group') throw new DomainError('Task groups do not run agents. Resolve their subtasks instead.');
     const mode = input.mode ?? 'retry';
     if (!['retry', 'resume', 'fix', 'replan'].includes(mode)) throw new DomainError('Unknown recovery mode.');
-    if (mode === 'resume' && !task.sessionId) throw new DomainError('This task has no saved provider session to resume. Retry the current step instead.');
-    if (mode === 'fix' && !['building', 'verification'].includes(task.phase)) throw new DomainError('Only implementation or verification failures can return to building. Replan instead.');
+    const currentName = currentSessionName(task);
+    const currentSession = task.sessions?.find(session => session.id === task.currentSessionId);
+    if (mode === 'resume' && !currentSession?.providerSessionId) throw new DomainError('This task has no saved provider session to resume. Retry the current session instead.');
+    if ((mode === 'fix' || mode === 'replan') && taskWorkflow(task).kind !== 'develop') throw new DomainError('Only Develop tasks can fix an implementation or replan. Retry this session instead.');
+    if (mode === 'fix' && currentName !== 'build' && currentName !== 'verify') throw new DomainError('Only implementation or verification failures can return to building. Replan instead.');
     if (mode === 'replan' && task.ownerUserId !== this.scope.userId) throw new DomainError('Only the task owner may request a replacement RFC.', 403);
-    const currentPhase = task.phase === 'building' || task.phase === 'verification' ? task.phase : 'planning';
-    const phase = mode === 'replan' ? 'planning' : mode === 'fix' ? 'building' : currentPhase;
-    if (phase !== 'planning' && task.plans.at(-1)?.status !== 'approved') throw new DomainError('An approved RFC is required before implementation.');
+    const name = mode === 'replan' ? 'plan' : mode === 'fix' ? 'build' : currentName;
+    if (SESSION_POLICIES[name].requiresApprovedPlan && task.plans.at(-1)?.status !== 'approved') throw new DomainError('An approved RFC is required before implementation.');
+    const workflow = mode === 'replan' ? defineWorkflow() : taskWorkflow(task);
+    const existing = task.sessions ?? [];
+    const start = workflow.sessions.findIndex(session => session.name === name);
+    const sessions = workflow.sessions.map((definition, index) => {
+      const session = existing.find(item => item.name === definition.name) ?? createSessions({ ...workflow, sessions: [definition] })[0];
+      return index < start || mode === 'resume' ? session : { ...session, status: 'pending' as const, providerSessionId: undefined, input: undefined, inputDigest: undefined };
+    });
     const feedback = input.feedback?.trim() ?? '';
     const plans = mode === 'replan' ? task.plans.map((plan, index) => index === task.plans.length - 1 ? { ...plan, status: 'changes_requested' as const, feedback: feedback || 'Replan after the interrupted or failed task.', reviewedAt: now(), reviewedBy: this.scope.userId } : plan) : task.plans;
     const recovery = { mode, feedback, requestedAt: now() };
-    const saved = await this.change(task, { status: 'todo', phase, error: undefined, runId: undefined, sessionId: mode === 'resume' ? task.sessionId : undefined, plans, recovery }, mode === 'replan' ? 'Replanning requested. A new RFC requires owner approval before implementation.' : mode === 'fix' ? 'Implementation remediation queued within the approved RFC.' : mode === 'resume' ? 'Interrupted run resume queued.' : 'Retry queued.');
+    const saved = await this.change(task, {
+      status: 'todo', phase: sessionPhase(name), workflow, sessions, currentSessionId: sessions[start].id,
+      error: undefined, runId: undefined, sessionId: mode === 'resume' ? currentSession?.providerSessionId : undefined, plans, recovery,
+    }, mode === 'replan' ? 'Replanning requested. A new RFC requires owner approval before implementation.' : mode === 'fix' ? 'Implementation remediation queued within the approved RFC.' : mode === 'resume' ? 'Interrupted session resume queued.' : 'Session retry queued.');
     await this.repo.removeAttention(this.scope, id, 'blocked');
     void this.tick().catch(console.error);
     return saved;
@@ -316,13 +401,13 @@ export class TaskService implements Dispatcher {
     if (this.active.size + this.planningChatReservations.size >= settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
     this.planningChatReservations.add(id);
     const project = await this.repo.project(this.scope);
-    if (!project.repositoryPath) { this.planningChatReservations.delete(id); throw new DomainError('Set a repository path before starting a planning chat.'); }
     const message: PlanningChatMessage = { id: randomUUID(), role: 'user', content, createdAt: now() };
     chat.messages = [...chat.messages, message]; chat.updatedAt = now(); chat.error = undefined; chat.busy = true; chat.activity = 'Thinking through your idea…';
     const abort = new AbortController();
     const key = `planning-chat:${id}`;
     const done = Promise.resolve().then(async () => {
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chat', prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
+      const cwd = await this.readOnlyDirectory(`chat-${id}`, project.repositoryPath);
+      const result = await this.options.adapters.claude.run({ provider: 'claude', session: 'chat', access: 'read-only', input: { systemPrompt: SESSION_SYSTEM_PROMPT, instructions: planningChatPrompt(project, chat.messages), context: JSON.stringify({ project, messages: chat.messages }) }, cwd, signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
       if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
       const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: result.text.trim(), createdAt: now() };
       chat.messages = [...chat.messages, reply]; chat.updatedAt = now();
@@ -340,7 +425,8 @@ export class TaskService implements Dispatcher {
     if (chat.busy) throw new DomainError('Wait for the planning reply before creating the task.', 409);
     const transcript = chat.messages.map(message => `**${message.role === 'user' ? 'You' : 'Planning partner'}:**\n${message.content}`).join('\n\n');
     const context = transcript ? `\n\n## Planning conversation\n\n${transcript}` : '';
-    const description = `${input.description ?? ''}${context}`.slice(0, 30_000);
+    const importingPlan = input.workflow?.kind === 'develop' && input.workflow.params?.approvedPlan;
+    const description = importingPlan ? input.description ?? '' : `${input.description ?? ''}${context}`.slice(0, 30_000);
     const task = await this.createTask({ ...input, description });
     this.planningChats.delete(id);
     return task;
@@ -372,7 +458,7 @@ export class TaskService implements Dispatcher {
       if (this.stopped) return;
       if (pending && !this.chiefActive) this.launchChief();
       if (!settings.dispatcherEnabled) return;
-      if (!(await this.repo.project(this.scope)).repositoryPath) return;
+      const project = await this.repo.project(this.scope);
       const tasks = await this.repo.tasks(this.scope);
       const eligible = tasks.filter(task => task.kind !== 'group' && task.status === 'todo' && !task.runId && !this.active.has(task.id)
         && task.blockedByIds.every(id => tasks.find(item => item.id === id)?.status === 'done')
@@ -380,22 +466,36 @@ export class TaskService implements Dispatcher {
       eligible.sort((a, b) => (a.priority || 5) - (b.priority || 5) || a.createdAt.localeCompare(b.createdAt));
       for (const task of eligible) {
         if (this.active.size >= settings.maxConcurrentAgents || this.stopped) break;
-        const phase = task.phase === 'building' || task.phase === 'verification' ? task.phase : 'planning';
-        if (phase !== 'planning' && task.plans.at(-1)?.status !== 'approved') {
+        const name = currentSessionName(task);
+        const policy = SESSION_POLICIES[name];
+        if (policy.requiresRepository && !project.repositoryPath) continue;
+        if (!taskWorkflow(task).sessions.some(session => session.name === name)) {
+          const saved = await this.change(task, { status: 'blocked', error: 'The current session is not part of this workflow.' });
+          await this.notify(saved, 'blocked', saved.error!);
+          continue;
+        }
+        if (policy.requiresApprovedPlan && task.plans.at(-1)?.status !== 'approved') {
           const saved = await this.change(task, { status: 'blocked', error: 'The latest RFC requires owner approval.' }, 'Dispatch blocked: no approved RFC.');
           await this.notify(saved, 'blocked', saved.error!); continue;
         }
+        const definitions = taskWorkflow(task).sessions;
+        const previous = definitions.slice(0, definitions.findIndex(session => session.name === name));
+        if (previous.some(definition => task.sessions?.find(session => session.name === definition.name)?.status !== 'succeeded')) {
+          const saved = await this.change(task, { status: 'blocked', error: 'An earlier workflow session has not completed. Retry the unfinished session first.' });
+          await this.notify(saved, 'blocked', saved.error!);
+          continue;
+        }
         try {
-          const claimed = await this.change(task, { runId: randomUUID(), status: 'in_progress', phase }, `${phase[0].toUpperCase()}${phase.slice(1)} started.`);
+          const claimed = await this.change(task, { runId: randomUUID(), status: 'in_progress', phase: sessionPhase(name) }, `${name[0].toUpperCase()}${name.slice(1)} session started.`);
           if (this.stopped) { await this.change(claimed, { status: 'todo', runId: undefined }); break; }
-          this.launchTask(claimed, phase);
+          this.launchSession(claimed, name);
         } catch (error) { if (!(error instanceof ConflictError)) throw error; }
       }
   }
-  private launchTask(task: Task, phase: 'planning' | 'building' | 'verification') {
+  private launchSession(task: Task, name: SessionName) {
     const abort = new AbortController();
     let canRelease = true;
-    const done = Promise.resolve().then(() => this.runTask(task, phase, abort.signal)).catch(async error => {
+    const done = Promise.resolve().then(() => this.runSession(task, name, abort.signal)).catch(async error => {
       if (error instanceof AgentProcessUnreapedError) canRelease = false;
       await this.fail(task.id, task.runId!, error);
       if (!canRelease) {
@@ -418,14 +518,32 @@ export class TaskService implements Dispatcher {
     });
     this.active.set(task.id, { abort, done });
   }
-  private async runTask(task: Task, phase: 'planning' | 'building' | 'verification', signal: AbortSignal) {
+  private async readOnlyDirectory(taskId: string, repositoryPath: string): Promise<string> {
+    if (repositoryPath) return repositoryPath;
+    if (!this.options.workspaces.ensureScratch) throw new DomainError('The workspace provider cannot prepare a repository-free session.');
+    return (await this.options.workspaces.ensureScratch({ taskId })).path;
+  }
+  private async runSession(task: Task, name: SessionName, signal: AbortSignal) {
     const project = await this.repo.project(this.scope);
-    if (!project.repositoryPath) throw new DomainError('Set a Git repository path in workspace settings to start coding tasks.');
-    const worktree = await this.options.workspaces.ensure({ repositoryPath: project.repositoryPath, taskId: task.id });
-    if (task.worktree && (task.worktree.path !== worktree.path || task.worktree.branch !== worktree.branch || task.worktree.baseCommit !== worktree.baseCommit)) throw new DomainError('The task worktree identity changed. Inspect its branch and base before retrying.');
+    const policy = SESSION_POLICIES[name];
+    if (policy.requiresRepository && !project.repositoryPath) throw new DomainError('Set a Git repository path in workspace settings to start Develop tasks.');
     let current = await this.getTask(task.id);
     if (current.runId !== task.runId || signal.aborted) return;
-    current = await this.change(current, { worktree });
+    let worktree = current.worktree;
+    let cwd: string;
+    if (policy.requiresRepository) {
+      worktree = await this.options.workspaces.ensure({
+        repositoryPath: project.repositoryPath, taskId: task.id,
+        baseRef: current.plans.at(-1)?.baseCommit,
+      });
+      if (current.worktree && (current.worktree.path !== worktree.path || current.worktree.branch !== worktree.branch || current.worktree.baseCommit !== worktree.baseCommit)) throw new DomainError('The task worktree identity changed. Inspect its branch and base before retrying.');
+      cwd = worktree.path;
+      current = await this.getTask(task.id);
+      if (current.runId !== task.runId || signal.aborted) return;
+      current = await this.change(current, { worktree });
+    } else {
+      cwd = await this.readOnlyDirectory(task.id, project.repositoryPath);
+    }
     const allTasks = await this.repo.tasks(this.scope);
     const related = new Map<string, Task>();
     const visitRelated = (item: Task) => {
@@ -443,13 +561,18 @@ export class TaskService implements Dispatcher {
         }
       }
     };
-    for (const item of allTasks.filter(related => related.parentId === task.id || current.blockedByIds.includes(related.id))) visitRelated(item);
+    for (const item of allTasks.filter(item => item.parentId === task.id || current.blockedByIds.includes(item.id))) visitRelated(item);
     const relatedTasks = [...related.values()];
-    let dependencyInputs: DependencyInput[];
-    if (phase === 'planning') {
-      dependencyInputs = [];
-      let totalBytes = 0;
-      for (const dependency of relatedTasks.filter(item => item.kind !== 'group')) {
+    let dependencyInputs: DependencyInput[] = [];
+    let resultInputs: ResultInput[];
+    if (!policy.requiresApprovedPlan) {
+      resultInputs = relatedTasks.filter(item => item.kind !== 'group').map(item => {
+        const result = { taskId: item.id, identifier: item.identifier, summary: item.summary, outputs: item.outputs ?? [] };
+        return { ...result, sha256: createHash('sha256').update(JSON.stringify(result)).digest('hex'), capturedAt: now() };
+      });
+      let totalBytes = Buffer.byteLength(JSON.stringify(resultInputs));
+      if (totalBytes > 512 * 1024) throw new DomainError('Combined dependency results exceed 512 KiB. Split this task.');
+      if (name === 'plan') for (const dependency of relatedTasks.filter(item => item.kind !== 'group' && taskWorkflow(item).kind === 'develop')) {
         if (!this.options.workspaces.exportChanges || !dependency.worktree) {
           if (this.options.demo) continue;
           throw new DomainError(`Cannot export completed task ${dependency.identifier}. Its workspace provider must supply the dependency's actual changes before an integration RFC can be reviewed.`);
@@ -460,34 +583,67 @@ export class TaskService implements Dispatcher {
         dependencyInputs.push({ taskId: dependency.id, identifier: dependency.identifier, title: dependency.title, capturedAt: now(), changes });
       }
     } else {
-      const approved = current.plans.findLast(plan => plan.status === 'approved');
-      dependencyInputs = approved?.dependencyInputs ?? [];
-      if (!this.options.demo && relatedTasks.some(item => item.kind !== 'group' && !dependencyInputs.some(input => input.taskId === item.id))) throw new DomainError('The approved RFC has no snapshot of these dependency changes. Request a new RFC before integrating them.');
+      const approved = current.plans.at(-1);
+      if (!approved || approved.status !== 'approved' || approved.reviewedBy !== current.ownerUserId) throw new DomainError('The latest RFC requires owner approval.');
+      dependencyInputs = approved.dependencyInputs ?? [];
+      resultInputs = approved.resultInputs ?? [];
+      if (!this.options.demo && relatedTasks.some(item => item.kind !== 'group' && taskWorkflow(item).kind === 'develop' && !dependencyInputs.some(input => input.taskId === item.id))) throw new DomainError('The approved RFC has no snapshot of these dependency changes. Request a new RFC before integrating them.');
+      if (relatedTasks.some(item => item.kind !== 'group' && taskWorkflow(item).kind !== 'develop' && !resultInputs.some(input => input.taskId === item.id))) throw new DomainError('The approved RFC has no snapshot of these dependency results. Request a new RFC.');
     }
     current = await this.getTask(task.id);
     if (current.runId !== task.runId || signal.aborted) return;
-    const result = await this.options.adapters[task.provider].run({ provider: task.provider, phase, prompt: codingPrompt(current, phase, relatedTasks, dependencyInputs), cwd: worktree.path, sessionId: current.sessionId, signal });
+    const session = current.sessions?.find(item => item.id === current.activeSessionId);
+    if (!session || session.name !== name) throw new DomainError('The active agent session changed.');
+    const frozenRelated = relatedTasks.map(item => {
+      const result = resultInputs.find(input => input.taskId === item.id);
+      return result ? { ...item, summary: result.summary, outputs: result.outputs } : item;
+    });
+    const input = buildSessionInput(current, name, frozenRelated, dependencyInputs, resultInputs);
+    const inputDigest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    current = await this.change(current, {
+      sessions: current.sessions!.map(item => item.id === session.id ? { ...item, input, inputDigest } : item),
+      runs: current.runs?.map(run => run.id === current.runId ? { ...run, input, inputDigest } : run),
+    });
+    if (signal.aborted || this.stopped) return;
+    const result = await new SessionRunner(this.options.adapters).run(session, input, {
+      provider: current.provider, cwd, signal,
+    });
     current = await this.getTask(task.id);
     if (current.runId !== task.runId || signal.aborted) return;
     if (!result.text.trim()) throw new DomainError('The agent returned no final result.');
-    if (phase === 'planning') {
+    if (result.text.length > 300_000) throw new DomainError('The session result exceeds 300,000 characters.');
+    if (name === 'brainstorm' || name === 'research') {
+      const output: SessionOutput = {
+        id: randomUUID(), sessionId: session.id, runId: task.runId!,
+        kind: name === 'brainstorm' ? 'ideas' : 'report', content: result.text.trim(), format: 'markdown', createdAt: now(),
+      };
+      const saved = await this.change(current, {
+        outputs: [...(current.outputs ?? []), output], summary: output.content,
+        ...this.continuation(current), runId: undefined,
+        sessionId: result.sessionId,
+      }, `${name === 'brainstorm' ? 'Brainstorm' : 'Research'} session completed. Result saved.`);
+      await this.notify(saved, 'completed', saved.summary);
+      return;
+    }
+    if (!worktree) throw new DomainError('Develop sessions require an isolated worktree.');
+    if (name === 'plan') {
       let revision: { reply: string; content: string } | undefined;
       if (hasPendingPlanDiscussion(current)) {
         try { revision = planRevisionSchema.parse(parseJsonResult(result.text)); }
         catch { throw new DomainError('The agent did not return a valid review reply and complete revised RFC. Your comment is saved; retry planning to continue the conversation.'); }
       }
       const content = revision?.content ?? result.text;
-      const plan = { id: randomUUID(), version: current.plans.length + 1, format: !revision && /^\s*(<!doctype html|<html)/i.test(content) ? 'html' as const : 'markdown' as const, content, status: 'pending' as const, createdAt: now(), dependencyInputs };
+      const plan = { id: randomUUID(), version: current.plans.length + 1, format: !revision && /^\s*(<!doctype html|<html)/i.test(content) ? 'html' as const : 'markdown' as const, content, status: 'pending' as const, createdAt: now(), dependencyInputs, resultInputs, baseCommit: worktree.baseCommit };
       const planDiscussion: PlanDiscussionMessage[] = revision ? [...(current.planDiscussion ?? []), { id: randomUUID(), role: 'assistant', content: revision.reply, createdAt: plan.createdAt, planId: plan.id }] : current.planDiscussion ?? [];
       const saved = await this.change(current, { plans: [...current.plans, plan], planDiscussion, phase: 'plan_review', status: 'in_review', runId: undefined, sessionId: result.sessionId ?? current.sessionId }, `RFC v${plan.version} is ready for owner review.`);
       await this.notify(saved, 'plan_approval', 'Review and approve the RFC to start implementation.');
       return;
     }
-    if (phase === 'building') {
+    if (name === 'build') {
       const changedFiles = await this.options.workspaces.changedFiles(worktree);
       current = await this.getTask(task.id);
       if (current.runId !== task.runId || signal.aborted) return;
-      await this.change(current, { summary: result.text, changedFiles, status: 'todo', phase: 'verification', runId: undefined, sessionId: result.sessionId }, 'Implementation finished. Verification queued.');
+      await this.change(current, { ...this.continuation(current), summary: result.text, changedFiles, runId: undefined, sessionId: result.sessionId }, 'Implementation finished. Verification queued.');
       return;
     }
     const verification = verificationSchema.parse(parseJsonResult(result.text));
@@ -514,7 +670,7 @@ export class TaskService implements Dispatcher {
     const testEvidence = evidence.filter(item => item.kind === 'test');
     const verified = testEvidence.some(item => item.result === 'passed') && !testEvidence.some(item => item.result === 'failed' || item.result === 'skipped');
     const error = verified ? undefined : failedAttachments ? `Verification requires attention: ${failedAttachments} evidence attachment${failedAttachments === 1 ? '' : 's'} could not be stored. Test steps, results, and available assets were retained. Inspect the evidence before retrying.` : 'Verification did not pass all reported tests. Inspect the evidence, then retry verification, fix the implementation, or request a new RFC.';
-    const saved = await this.change(current, { evidence: [...current.evidence, ...evidence], changedFiles, summary: verification.summary, status: verified ? 'done' : 'blocked', phase: verified ? 'complete' : 'verification', runId: undefined, sessionId: result.sessionId, completedAt: verified ? now() : undefined, error }, verified ? 'Verification passed. Task completed; branch retained for review.' : 'Verification requires attention.');
+    const saved = await this.change(current, { ...(verified ? this.continuation(current) : { status: 'blocked' as const, phase: 'verification' as const, completedAt: undefined }), evidence: [...current.evidence, ...evidence], changedFiles, summary: verification.summary, runId: undefined, sessionId: result.sessionId, error }, verified ? 'Verification passed. Task completed; branch retained for review.' : 'Verification requires attention.');
     await this.notify(saved, verified ? 'completed' : 'blocked', verified ? verification.summary : saved.error!);
   }
   private async fail(id: string, runId: string, error: unknown) {
@@ -536,14 +692,15 @@ export class TaskService implements Dispatcher {
     let commands: ChiefCommandSession | undefined;
     const done = Promise.resolve().then(async () => {
       const [project, messages] = await Promise.all([this.repo.project(this.scope), this.repo.messages(this.scope)]);
-      if (!project.repositoryPath) throw new DomainError('Set a repository path in workspace settings so the chief of staff can inspect your project.');
       if (!this.options.chiefCommands && !this.options.demo) throw new DomainError('The chief command interface is not configured. Start Muon through its HTTP server.');
       if (this.stopped || abort.signal.aborted) return;
       this.chiefActivity = 'Connecting task controls…';
       commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
       if (this.stopped || abort.signal.aborted) return;
       this.chiefActivity = 'Running Claude Code…';
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
+      const cwd = await this.readOnlyDirectory(`chief-${createHash('sha256').update(JSON.stringify(this.scope)).digest('hex').slice(0, 16)}`, project.repositoryPath);
+      if (this.stopped || abort.signal.aborted) return;
+      const result = await this.options.adapters.claude.run({ provider: 'claude', session: 'chief', access: 'read-only', input: { systemPrompt: SESSION_SYSTEM_PROMPT, instructions: chiefPrompt(project, messages, commands?.cli.command), context: JSON.stringify({ project }) }, cwd, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');

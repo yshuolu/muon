@@ -1,6 +1,6 @@
 # Muon
 
-A local, task-first workspace for directing coding agents. Describe work to a Claude Code chief of staff, organize tasks and subtasks, approve their RFCs, and review verified results. The interface shows outcomes and milestones, never tool-call or reasoning transcripts.
+A local, task-first workspace for directing agents. Brainstorm ideas, research questions, or develop code with Claude Code and Codex. Organize tasks and subtasks, approve implementation RFCs, and review durable results. The interface shows outcomes and milestones, never tool-call or reasoning transcripts.
 
 ## Run
 
@@ -11,7 +11,7 @@ pnpm install
 pnpm run user
 ```
 
-Open **http://127.0.0.1:5173**. `pnpm run user` is the normal local user launch command: it starts the real API and web app together. Open **Settings**, set the absolute path to a Git repository root with at least one commit, select your default agent, and set the concurrency limit. A task created in **Todo** automatically starts planning. **Backlog** captures work without starting an agent.
+Open **http://127.0.0.1:5173**. `pnpm run user` is the normal local user launch command: it starts the real API and web app together. Open **Settings**, select your default agent and concurrency limit. Develop tasks also require the absolute path to a Git repository root with at least one commit. A task created in **Todo** automatically queues its first session. **Backlog** captures work without starting an agent.
 
 `pnpm run dev` remains available as a development alias.
 
@@ -36,22 +36,36 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 
 ## The workflow
 
+Select a workflow when creating an executable task:
+
+| Workflow | Sessions | Completion |
+| --- | --- | --- |
+| Brainstorm | Brainstorm | Final ideas and tradeoffs saved on the task |
+| Research | Research | Final findings and sources saved on the task |
+| Develop (default) | Plan → owner approval → Build → Verify | Passing verification with durable evidence |
+
+Brainstorm and Research run without a Git repository. They use task context and finish without a code plan, build, or test gate. Every session starts a fresh provider conversation with explicit task context and previous outputs. Sessions share the task's workspace when one is needed; provider conversation history is not their handoff mechanism.
+
+Develop follows the implementation workflow:
+
 1. Create a task yourself or ask the chief of staff to create and prioritize work.
 2. The dispatcher selects eligible Todo tasks by priority, then creation time, up to the configured system limit. The chief consumes one slot too.
 3. Muon creates an isolated Git worktree. The selected agent inspects the code with read-only planning permissions and returns an RFC.
 4. The task pauses in **In review** and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
-5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
+5. The approved task queues for **Building**, then **Verification**, reusing its worktree and starting a fresh provider conversation for each session. Muon validates the worktree identity before each session.
 6. Passing verification creates a **Done** task with test steps, final summary, stored screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention.
 
-Reading an approval does not resolve it. Completion notifications can be acknowledged. When every task is Done or Canceled and at least one is verified, Attention also reports project completion with the canceled count. Adding new work clears that project completion notice. Done means verification passed; Muon keeps the branch/worktree for your review and does not merge, push, or deploy it.
+The owner can create a Develop task with an exact existing approved plan to start at Build. The source must have no children and the new task must match its approved title, description, and dependencies. Muon retains the approval, frozen inputs, and base commit; a changed scope requires a new RFC. See [workflow parameters](docs/rest-api.md#mutations).
+
+Reading an approval does not resolve it. Completion notifications can be acknowledged. When every task is Done or Canceled and at least one completed successfully, Attention also reports project completion with the canceled count. Adding new work clears that notice. Done means the selected workflow completed: Develop passed verification, while Brainstorm and Research produced a final result. Muon keeps code branches/worktrees for your review and does not merge, push, or deploy them.
 
 Choose **Task group** for an organizational parent: it never launches an agent and completes when its nonempty set of children and dependencies are Done. Nested groups are supported. Adding new work reopens a completed group. A canceled child remains visible and prevents successful group completion until you explicitly remove it from the group or cancel the group.
 
-Coding subtasks have independent RFCs, worktrees, and verification. They run independently unless dependencies connect them. A coding parent waits for children, then runs its own approved integration workflow. Muon exports completed dependency changes into immutable patches attached to the integration RFC, including uncommitted and untracked files. The Plan tab shows these inputs and downloads the exact patches; building uses the snapshots you reviewed. Completion does not merge sibling branches automatically. A canceled dependency or child does not unblock parent coding work until you resolve its scope.
+Each executable subtask selects its own workflow. Develop subtasks have independent RFCs, worktrees, and verification. Tasks run independently unless dependencies connect them. A Develop parent waits for children, then runs its own approved integration workflow. Muon supplies exploratory dependency results as context and exports completed Develop changes into immutable patches attached to the integration RFC, including uncommitted and untracked files. The Plan tab shows these inputs and downloads the exact patches; building uses the snapshots you reviewed. Completion does not merge sibling branches automatically. A canceled dependency or child does not unblock parent work until you resolve its scope.
 
-The chief creates groups and coding tasks, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
+The chief creates groups and tasks, selects workflows, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve or import RFC approvals, submit owner reviews, mark work complete, change settings, or clear attention.
 
-Blocked tasks offer **Retry**, **Fix implementation**, and **Request new RFC**. Retry repeats the failed phase. Fix returns an approved build or verification failure to building, then verifies again. A new RFC revokes the old approval and pauses for your new decision. Each attempt retains its evidence, and the Evidence tab distinguishes the latest attempt from earlier failures.
+Blocked tasks offer recovery appropriate to their workflow. Retry repeats the failed session. For Develop, Fix returns an approved build or verification failure to building, then verifies again; a new RFC revokes the old approval and pauses for your new decision. Each attempt retains its evidence, and the Evidence tab distinguishes the latest attempt from earlier failures.
 
 ## REST API and CLI
 
@@ -59,7 +73,7 @@ The HTTP service is the system of record. The web panel, owner CLI, and local ch
 
 ```sh
 pnpm run cli tasks list --status todo
-pnpm run cli tasks create --json '{"title":"Review API design","status":"backlog"}'
+pnpm run cli tasks create --workflow research --json '{"title":"Review API design","status":"backlog"}'
 pnpm run cli tasks get MUO-1
 pnpm run cli tasks plans MUO-1
 pnpm run cli attention list --unread
@@ -80,7 +94,7 @@ By default data lives in `.muon/local/` (demo: `.muon/demo/`):
 
 Normal shutdown stops agents and releases the local instance lock. On restart, interrupted tasks become Blocked, keep their worktrees, and pause automatic dispatch; they are never assumed successful. After a hard crash, inspect and stop any surviving agent processes before resuming dispatch or retrying a task. Muon cannot prove orphan process exit across a killed server. If an agent cannot confirm shutdown in a running server, its capacity slot stays reserved.
 
-Worktrees start from the repository's committed `HEAD`; uncommitted main-checkout changes, ignored dependencies, secrets, and local setup files are not copied. Agents plan necessary setup, then install dependencies within their own checkout after RFC approval. Sandbox/permission failures are surfaced in the task. Worktrees are retained and there is no automatic cleanup or merge action. Dependency patches are bounded to 256 KiB each and 512 KiB combined; larger integrations stop with an explanation instead of receiving incomplete code.
+Develop worktrees start from the repository's committed `HEAD`, or the frozen base when reusing an approved plan; uncommitted main-checkout changes, ignored dependencies, secrets, and local setup files are not copied. Agents plan necessary setup, then install dependencies within their own checkout after RFC approval. Sandbox/permission failures are surfaced in the task. Worktrees are retained and there is no automatic cleanup or merge action. Dependency patches are bounded to 256 KiB each and 512 KiB combined; larger integrations stop with an explanation instead of receiving incomplete code.
 
 ## Configuration
 
@@ -92,7 +106,7 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 | `MUON_CLAUDE_MODEL` | `claude-fable-5-1[1m]` | Claude Code model |
 | `MUON_CLAUDE_EFFORT` | `max` | Claude Code thinking effort |
 | `MUON_CLAUDE_ALLOWED_DOMAINS` | `registry.npmjs.org` | Legacy allowlist used when agent permission bypass is disabled |
-| `MUON_AGENT_BYPASS_PERMISSIONS` | enabled | Set to `0` to retain provider sandbox and approval restrictions; enabled runs Claude with `--dangerously-skip-permissions` and Codex with `danger-full-access` |
+| `MUON_AGENT_BYPASS_PERMISSIONS` | enabled | Set to `0` to retain provider sandbox restrictions for Build/Verify; named read-only sessions remain restricted |
 | `MUON_CLAUDE_ALLOW_LOCAL_SERVERS` | unset | Set to `1` when approved Claude tasks need to start a local preview/test server |
 | `MUON_CODEX_EXECUTABLE` | project-managed Codex CLI | Optional override for a specific Codex executable |
 | `MUON_CODEX_MODEL` | `gpt-6-astra` | Codex model |
@@ -102,7 +116,7 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 The app binds to loopback and rejects foreign hosts/origins. It has a fixed local owner, not a network authentication system. Do not expose this local server publicly.
 
-By default, Muon launches coding, planning, chat, and verification agents with the owner's full local permissions: Claude uses `--dangerously-skip-permissions`, and Codex uses `approvalPolicy: never` with `danger-full-access`. Set `MUON_AGENT_BYPASS_PERMISSIONS=0` to restore the restricted provider policies. The chief remains scoped to its Muon CLI so it cannot mutate tasks outside the server's owner boundary. Full access lets agents read or write outside isolated worktrees and use unrestricted network access; enable it only when that is your intended local policy.
+By default, Muon launches Build and Verify with the owner's full local permissions: Claude uses `--dangerously-skip-permissions`, and Codex uses `approvalPolicy: never` with `danger-full-access`. Set `MUON_AGENT_BYPASS_PERMISSIONS=0` to restore their restricted provider policies. Named Plan, Brainstorm, and Research sessions remain read-only; Research includes web tools. The chief remains scoped to its Muon CLI. Planning chats also use the shared input contract and remain read-only. Full access lets agents read or write outside isolated worktrees and use unrestricted network access; enable it only when that is your intended local policy.
 
 ## Architecture and validation
 

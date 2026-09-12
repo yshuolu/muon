@@ -1,4 +1,5 @@
 import type { AppSnapshot, Task } from '../../shared/types';
+import { taskWorkflow } from '../../shared/workflows';
 
 export function queueReasons(task: Task, snapshot: AppSnapshot): string[] {
   if (task.kind === 'group' && !['done', 'canceled'].includes(task.status)) {
@@ -19,11 +20,12 @@ export function queueReasons(task: Task, snapshot: AppSnapshot): string[] {
   if (children.length) reasons.push(`Waiting for ${children.length} unfinished subtask${children.length === 1 ? '' : 's'}`);
   const canceledChildren = snapshot.tasks.filter(item => item.parentId === task.id && item.status === 'canceled');
   if (canceledChildren.length) reasons.push(`${canceledChildren.length} canceled subtask${canceledChildren.length === 1 ? '' : 's'} require a scope decision. Open them and remove them from this parent if they are no longer in scope.`);
-  if (!snapshot.project.repositoryPath) reasons.push('Choose a repository in Settings');
+  const workflow = taskWorkflow(task);
+  if (workflow.kind === 'develop' && !snapshot.project.repositoryPath) reasons.push('Choose a repository in Settings');
   if (!snapshot.runtime.providers[task.provider]) reasons.push(`${task.provider === 'claude' ? 'Claude Code' : 'Codex'} is not installed or not on the server’s path`);
   if (!snapshot.settings.dispatcherEnabled) reasons.push('Automatic dispatch is paused');
   if (snapshot.runtime.activeRuns >= snapshot.settings.maxConcurrentAgents) reasons.push('All agent slots are occupied');
-  if (!reasons.length) reasons.push(task.phase === 'building' ? 'Plan approved · Build is next in the queue' : task.phase === 'verification' ? 'Verification is next in the queue' : 'Ready for planning · Waiting for dispatch');
+  if (!reasons.length) reasons.push(workflow.kind === 'brainstorm' ? 'Ready to brainstorm · Waiting for dispatch' : workflow.kind === 'research' ? 'Ready to research · Waiting for dispatch' : task.phase === 'building' ? 'Plan approved · Build is next in the queue' : task.phase === 'verification' ? 'Verification is next in the queue' : 'Ready for planning · Waiting for dispatch');
   return reasons;
 }
 

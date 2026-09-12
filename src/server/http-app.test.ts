@@ -1,6 +1,6 @@
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, AgentSessionRequest, WorkspaceProvider } from '../runtime';
 import { AgentProcessUnreapedError } from '../runtime';
 import type { ArtifactStore } from './ports';
 import { DomainError } from './ports';
@@ -8,12 +8,15 @@ import { createHttpApp } from './http-app';
 import { LocalChiefCommands } from './local-chief-commands';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
+import { observeAgentRequest, type ObservedAgentRequest } from './test-agent-request';
+import type { Task } from '../shared/types';
 
 class TestAdapter implements AgentAdapter {
-  calls: Array<{ request: AgentRequest; resolve: (result: AgentResult) => void; reject: (error: Error) => void }> = [];
+  calls: Array<{ request: ObservedAgentRequest; resolve: (result: AgentResult) => void; reject: (error: Error) => void }> = [];
   constructor(readonly provider: AgentProvider) {}
   async available() { return true; }
-  run(request: AgentRequest): Promise<AgentResult> {
+  run(input: AgentRequest | AgentSessionRequest): Promise<AgentResult> {
+    const request = observeAgentRequest(input);
     return new Promise((resolve, reject) => {
       request.signal?.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true });
       this.calls.push({ request, resolve, reject });
@@ -39,6 +42,7 @@ beforeEach(async () => {
   }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
   claude = new TestAdapter('claude'); codex = new TestAdapter('codex');
   workspaces = {
+    ensureScratch: vi.fn(async ({ taskId }) => ({ path: `/test/scratch/${taskId}` })),
     validateRepository: vi.fn(async path => { if (!path.startsWith('/')) throw new Error('Repository path must be absolute.'); }),
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => []),
@@ -71,6 +75,109 @@ async function enableDispatch() {
   await repository.saveSettings(scope, { ...await repository.settings(scope), dispatcherEnabled: true });
   await service.tick();
 }
+
+async function approvedTask(): Promise<Task> {
+  const source = await service.createTask({ title: 'Approved scope', description: 'Change only src/app.ts.', status: 'backlog' });
+  return repository.saveTask(scope, { ...source, status: 'done', phase: 'complete', plans: [{
+    id: 'approved-plan', version: 1, format: 'markdown', content: '# Approved scope\nChange only src/app.ts.',
+    status: 'approved', createdAt: source.createdAt, reviewedAt: source.createdAt, reviewedBy: scope.userId,
+    baseCommit: 'a'.repeat(40), dependencyInputs: [], resultInputs: [],
+  }] }, source.version);
+}
+
+describe('HTTP session workflows', () => {
+  it('creates and filters exactly Brainstorm, Research, and Develop workflows', async () => {
+    for (const kind of ['brainstorm', 'research', 'develop'] as const) {
+      const response = await request('/api/tasks', 'POST', { title: `Run ${kind}`, status: 'backlog', workflow: { kind } });
+      expect(response.status).toBe(201);
+      const task = await response.json();
+      expect(task.workflow).toMatchObject({ kind, sessions: kind === 'develop' ? [{ name: 'plan' }, { name: 'build' }, { name: 'verify' }] : [{ name: kind }] });
+      expect(await (await request(`/api/tasks?workflow=${kind}`)).json()).toEqual([task]);
+    }
+    await service.createTask({ title: 'Task group', kind: 'group', status: 'backlog' });
+    expect((await (await request('/api/tasks?workflow=develop')).json())).toHaveLength(1);
+    expect((await request('/api/tasks?workflow=custom')).status).toBe(400);
+  });
+
+  it('returns persisted sessions and knowledge outputs through readable task references', async () => {
+    const created = await request('/api/tasks', 'POST', { title: 'Compare the options', workflow: { kind: 'research' } });
+    const task = await created.json();
+    expect(await (await request(`/api/tasks/${task.identifier.toLowerCase()}/outputs`)).json()).toEqual([]);
+    expect(await (await request(`/api/tasks/${task.identifier}/sessions`)).json()).toMatchObject([{ name: 'research', status: 'pending' }]);
+    await enableDispatch();
+    await eventually(() => claude.calls.length === 1);
+    claude.calls[0].resolve({ text: '# Research\nFindings and source limitations.', sessionId: 'research-provider-session' });
+    await eventually(async () => (await service.getTask(task.id)).status === 'done');
+    const completed = await service.getTask(task.id);
+    expect(await (await request(`/api/tasks/${task.id}/sessions`)).json()).toEqual(completed.sessions);
+    expect(await (await request(`/api/tasks/${task.identifier}/outputs`)).json()).toEqual(completed.outputs);
+    expect(completed.outputs).toMatchObject([{ kind: 'report', content: '# Research\nFindings and source limitations.' }]);
+    expect((await request('/api/tasks/missing/sessions')).status).toBe(404);
+    expect((await request('/api/tasks/missing/outputs')).status).toBe(404);
+  });
+
+  it('rejects unsupported composition, access overrides, workflow edits, and group workflows', async () => {
+    const original = await service.createTask({ title: 'Original workflow', status: 'backlog' });
+    for (const workflow of [
+      { kind: 'custom' }, { kind: 'research', params: {} },
+      { kind: 'develop', params: { skipPlan: true } },
+      { kind: 'develop', sessions: [{ name: 'build' }] },
+      { kind: 'research', access: 'workspace-write' },
+      { kind: 'develop', params: { approvedPlan: { taskId: original.id, planId: 'invented', approved: true } } },
+    ]) expect((await request('/api/tasks', 'POST', { title: 'Invalid workflow', workflow })).status).toBe(400);
+    expect((await request(`/api/tasks/${original.id}`, 'PATCH', { workflow: { kind: 'research' } })).status).toBe(400);
+    expect((await request('/api/tasks', 'POST', { title: 'Group', kind: 'group', workflow: { kind: 'research' } })).status).toBe(400);
+    expect(await service.getTask(original.id)).toEqual(original);
+    expect(await repository.tasks(scope)).toHaveLength(1);
+  });
+
+  it('resolves an approved-plan source by readable ID while retaining Develop parameters', async () => {
+    const source = await approvedTask();
+    const response = await request('/api/tasks', 'POST', {
+      title: source.title, description: source.description, status: 'backlog',
+      workflow: { kind: 'develop', params: { approvedPlan: { taskId: source.identifier.toLowerCase(), planId: source.plans[0].id } } },
+    });
+    expect(response.status).toBe(201);
+    const imported = await response.json();
+    expect(imported.workflow).toMatchObject({ kind: 'develop', params: { approvedPlan: { taskId: source.id, planId: source.plans[0].id } }, sessions: [{ name: 'build' }, { name: 'verify' }] });
+    expect(imported.plans[0]).toMatchObject({ status: 'approved', reviewedBy: scope.userId, source: { taskId: source.id, planId: source.plans[0].id } });
+    expect(imported.plans[0].id).not.toBe(source.plans[0].id);
+    const queued = await request(`/api/tasks/${imported.id}`, 'PATCH', { status: 'todo' });
+    expect(queued.status).toBe(200);
+    expect(await queued.json()).toMatchObject({ status: 'todo', phase: 'building', workflow: imported.workflow, plans: imported.plans });
+    const changedScope = await request(`/api/tasks/${imported.id}`, 'PATCH', { title: 'Changed approved scope' });
+    expect(changedScope.status).toBe(400);
+    expect((await changedScope.json()).error).toContain('scope');
+    expect((await service.getTask(imported.id)).title).toBe(source.title);
+  });
+
+  it('rejects approved-plan reuse by the chief and when owner, scope, or dependencies change', async () => {
+    const source = await approvedTask();
+    const body = {
+      title: source.title, description: source.description, status: 'backlog',
+      workflow: { kind: 'develop', params: { approvedPlan: { taskId: source.identifier, planId: source.plans[0].id } } },
+    };
+    const controller = new AbortController();
+    const grant = await commands.open(scope, controller.signal);
+    try {
+      expect((await request('/api/tasks', 'POST', body, { authorization: `Bearer ${grant.cli.token}` })).status).toBe(403);
+    } finally { await grant.close(); }
+    const dependency = await service.createTask({ title: 'Additional dependency', status: 'backlog' });
+    expect((await request('/api/tasks', 'POST', { ...body, blockedByIds: [dependency.identifier] })).status).toBe(400);
+    expect((await request('/api/tasks', 'POST', { ...body, description: 'Expanded scope.' })).status).toBe(400);
+    const foreignScope = { ...scope, workspaceId: 'foreign-workspace', projectId: 'foreign-project' };
+    await repository.initialize(foreignScope, { id: foreignScope.projectId, workspaceId: foreignScope.workspaceId, ownerUserId: scope.userId, name: 'Foreign project', identifier: 'OTHER', repositoryPath: '/other/repo' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
+    const foreign = await repository.insertTask(foreignScope, { ...source, id: 'foreign-approved-task' });
+    for (const taskId of [foreign.id, foreign.identifier]) {
+      expect((await request('/api/tasks', 'POST', { ...body, workflow: { kind: 'develop', params: { approvedPlan: { taskId, planId: source.plans[0].id } } } })).status).toBe(404);
+      expect((await request(`/api/tasks/${taskId}/sessions`)).status).toBe(404);
+      expect((await request(`/api/tasks/${taskId}/outputs`)).status).toBe(404);
+    }
+    const anotherOwner = await repository.insertTask(scope, { ...source, id: 'another-owner-task', ownerUserId: 'another-owner' });
+    expect((await request('/api/tasks', 'POST', { ...body, workflow: { kind: 'develop', params: { approvedPlan: { taskId: anotherOwner.id, planId: source.plans[0].id } } } })).status).toBe(403);
+    expect(await repository.tasks(scope)).toHaveLength(3);
+  });
+});
 
 describe('HTTP validation and local boundary', () => {
   it('validates repository setup through the workspace provider before saving settings', async () => {

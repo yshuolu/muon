@@ -1,6 +1,7 @@
-import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
+import type { AgentAdapter, AgentRequest, AgentResult, AgentSessionRequest } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { record, text } from './protocol-values.js';
+import { normalizeAgentRequest, type NormalizedAgentRequest } from './session-request.js';
 import { dirname, join, isAbsolute } from 'node:path';
 
 function compact(value: unknown, limit = 140): string | undefined {
@@ -46,7 +47,7 @@ export interface ClaudeCodeOptions {
   allowLocalBinding?: boolean;
   model?: string;
   effort?: string;
-  /** Run every Muon provider phase with the owner's full local permissions. */
+  /** Allow full local permissions for writable sessions and legacy task requests. */
   bypassPermissions?: boolean;
 }
 
@@ -70,19 +71,26 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
   available(): Promise<boolean> { return executableAvailable(this.executable); }
 
-  async run(request: AgentRequest): Promise<AgentResult> {
+  async run(input: AgentRequest | AgentSessionRequest): Promise<AgentResult> {
+    const request = normalizeAgentRequest(input);
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const chief = request.phase === 'chief';
-    const readonly = request.phase === 'planning' || request.phase === 'chat';
+    const chief = request.session === 'chief';
+    const readonly = request.access === 'read-only';
+    const research = request.session === 'research';
+    const systemArgs = request.systemPrompt ? ['--append-system-prompt', request.systemPrompt] : [];
+    const tools = ['Read', 'Glob', 'Grep'];
+    if (chief) tools.push('Bash');
+    else if (!readonly) tools.push('Edit', 'Write', 'Bash');
+    if (research) tools.push('WebSearch', 'WebFetch');
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
     const cliExecutable = cli?.command.replace(/^'|'$/g, '');
     if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
-    if (this.bypassPermissions && !chief) {
-      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(this.model ? ['--model', this.model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
+    if (this.bypassPermissions && request.allowPermissionBypass) {
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', research ? 'Read,Glob,Grep,Edit,Write,Bash,WebSearch,WebFetch' : 'Read,Glob,Grep,Edit,Write,Bash', ...systemArgs, ...(this.model ? ['--model', this.model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
       return this.runProcess(request, args);
     }
     const settings = {
@@ -91,23 +99,27 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         ...(chief ? {
           allow: [`Bash(${cliExecutable} *)`],
           deny: ['Edit', 'Write', `Read(${join(request.cwd, '.muon').replace(/^\//, '//')}/**)`, 'Read(./.env)', 'Read(./.env.*)'],
-        } : {}),
+        } : readonly ? {
+          ...(research ? { allow: ['WebSearch', 'WebFetch'] } : {}),
+          deny: ['Edit', 'Write', 'Bash'],
+        } : research ? { allow: ['WebSearch', 'WebFetch'] } : {}),
       },
       sandbox: {
-        enabled: !readonly,
+        enabled: chief || !readonly,
         failIfUnavailable: true,
         autoAllowBashIfSandboxed: !readonly && !chief,
         allowUnsandboxedCommands: false,
         excludedCommands: [],
         network: { allowedDomains: chief ? [api!.host] : readonly ? [] : this.allowedNetworkDomains, allowLocalBinding: !readonly && !chief && this.allowLocalBinding, ...(chief ? { strictAllowlist: true } : {}) },
-        filesystem: chief ? { allowWrite: [], denyWrite: [request.cwd, dirname(cliExecutable!)], denyRead: [join(request.cwd, '.muon'), join(request.cwd, '.env')] } : { allowWrite: [request.cwd] },
+        filesystem: chief ? { allowWrite: [], denyWrite: [request.cwd, dirname(cliExecutable!)], denyRead: [join(request.cwd, '.muon'), join(request.cwd, '.env')] } : readonly ? { allowWrite: [], denyWrite: [request.cwd] } : { allowWrite: [request.cwd] },
       },
     };
     const args = [
       '-p', '--output-format', 'stream-json', '--verbose', '--restricted', '--strict-mcp-config',
-      '--permission-mode', readonly ? 'plan' : chief ? 'default' : 'acceptEdits',
+      '--permission-mode', chief ? 'default' : readonly ? 'plan' : 'acceptEdits',
       '--permission-prompts', 'none',
-      '--tools', readonly ? 'Read,Glob,Grep' : chief ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
+      '--tools', tools.join(','),
+      ...systemArgs,
       ...(this.model ? ['--model', this.model] : []),
       ...(this.effort ? ['--effort', this.effort] : []),
       '--disallowedTools', 'mcp__*',
@@ -146,7 +158,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     }
   }
 
-  private async runProcess(request: AgentRequest, args: string[]): Promise<AgentResult> {
+  private async runProcess(request: NormalizedAgentRequest, args: string[]): Promise<AgentResult> {
     let process: JsonProcess | undefined;
     let sessionId = request.sessionId;
     try {

@@ -4,14 +4,26 @@ import { z } from 'zod';
 export const prioritySchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 export const taskReferenceSchema = z.string().trim().min(1).max(240);
 export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled']);
+export const workflowKindSchema = z.enum(['brainstorm', 'research', 'develop']);
+export const workflowInputSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('brainstorm') }),
+  z.strictObject({ kind: z.literal('research') }),
+  z.strictObject({
+    kind: z.literal('develop'),
+    params: z.strictObject({
+      approvedPlan: z.strictObject({ taskId: taskReferenceSchema, planId: z.string().trim().min(1).max(240) }).optional(),
+    }).optional(),
+  }),
+]);
 export const createTaskSchema = z.strictObject({
   title: z.string().trim().min(1).max(240), description: z.string().max(30_000).optional(),
   provider: z.enum(['claude', 'codex']).optional(), priority: prioritySchema.optional(),
   status: z.enum(['backlog', 'todo']).optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   parentId: taskReferenceSchema.nullable().optional(), blockedByIds: z.array(taskReferenceSchema).max(100).optional(),
   kind: z.enum(['coding', 'group']).optional(),
+  workflow: workflowInputSchema.optional(),
 });
-export const editTaskSchema = createTaskSchema.omit({ kind: true }).partial().extend({ status: z.enum(['backlog', 'todo', 'canceled']).optional() });
+export const editTaskSchema = createTaskSchema.omit({ kind: true, workflow: true }).partial().extend({ status: z.enum(['backlog', 'todo', 'canceled']).optional() });
 export const settingsSchema = z.strictObject({
   maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
   defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
@@ -29,6 +41,7 @@ export const listTasksQuerySchema = z.strictObject({
   blockedById: taskReferenceSchema.optional(),
   provider: z.enum(['claude', 'codex']).optional(),
   kind: z.enum(['coding', 'group']).optional(),
+  workflow: workflowKindSchema.optional(),
   search: z.string().trim().max(1000).optional(),
 });
 export const listAttentionQuerySchema = z.strictObject({

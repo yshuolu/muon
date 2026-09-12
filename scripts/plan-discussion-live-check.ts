@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { serve } from '@hono/node-server';
-import { ClaudeCodeAdapter, LocalWorktreeProvider, type AgentAdapter, type AgentRequest } from '../src/runtime';
+import { ClaudeCodeAdapter, LocalWorktreeProvider, normalizeAgentRequest, type AgentAdapter } from '../src/runtime';
 import { TaskService } from '../src/server/task-service';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
@@ -33,9 +33,10 @@ const real = new ClaudeCodeAdapter();
 const calls: { phase: string; sessionId?: string; resultSessionId?: string; elapsedMs?: number }[] = [];
 const adapter: AgentAdapter = {
   provider: 'claude', available: () => real.available(),
-  async run(request: AgentRequest) {
-    assert.equal(request.phase, 'planning', 'Discussion must never launch implementation.');
-    const call = { phase: request.phase, sessionId: request.sessionId } as typeof calls[number];
+  async run(request) {
+    const session = normalizeAgentRequest(request);
+    assert.equal(session.session, 'plan', 'Discussion must never launch implementation.');
+    const call = { phase: 'planning', sessionId: request.sessionId } as typeof calls[number];
     calls.push(call);
     console.log(`Starting real planning turn ${calls.length}.`);
     const started = Date.now();

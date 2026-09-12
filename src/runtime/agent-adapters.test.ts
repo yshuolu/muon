@@ -4,8 +4,15 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ClaudeCodeAdapter } from './claude-code-adapter.js';
 import { CodexAdapter } from './codex-adapter.js';
+import type { AgentSessionKind, SessionInput } from './contracts.js';
 
 let directory: string;
+const SESSION_INPUT: SessionInput = {
+  systemPrompt: 'Shared Muon coordination and safety instructions.',
+  instructions: 'Perform the current named session.',
+  context: 'Task goal, project instructions, and prior session artifacts.',
+};
+const TASK_SESSIONS: AgentSessionKind[] = ['brainstorm', 'research', 'plan', 'build', 'verify'];
 beforeEach(async () => { directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-runtime-'))); });
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
@@ -53,7 +60,8 @@ lines.on('line', line => {
   if (frame.method === 'thread/start' || frame.method === 'thread/resume') send({id:frame.id,result:{thread:{id:frame.params.threadId ?? 'codex-thread'}}});
   if (frame.method === 'turn/start') {
     const threadId = frame.params.threadId;
-    const prompt = frame.params.input[0].text;
+    const input = frame.params.input[0].text;
+    const prompt = input.startsWith('Session instructions\\n') ? input.split('\\n')[1] : input;
     send({id:frame.id,result:prompt === 'deferred-id' ? {} : {turn:{id:'turn-1',status:'inProgress'}}});
     setTimeout(() => {
       if (prompt === 'permission') send({id:900,method:'item/commandExecution/requestApproval',params:{threadId,turnId:'turn-1'}});
@@ -74,6 +82,27 @@ lines.on('close', () => process.exit(0));
 }
 
 describe('ClaudeCodeAdapter', () => {
+  it.each(TASK_SESSIONS)('delivers the shared session input and explicit read-only policy for %s', async session => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'claude', session, input: SESSION_INPUT, access: 'read-only', cwd: directory });
+    const { args, prompt } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(SESSION_INPUT.systemPrompt);
+    expect(prompt).toContain(SESSION_INPUT.instructions);
+    expect(prompt).toContain(SESSION_INPUT.context);
+    expect(args).toContain('--restricted');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+    const tools = args[args.indexOf('--tools') + 1].split(',');
+    for (const tool of ['Write', 'Edit', 'Bash']) expect(tools).not.toContain(tool);
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash']));
+    expect(settings.sandbox.filesystem).toEqual({ allowWrite: [], denyWrite: [directory] });
+    if (session === 'research') {
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,WebSearch,WebFetch');
+      expect(settings.permissions.allow).toEqual(['WebSearch', 'WebFetch']);
+    }
+  });
+
   it('lets the chief invoke only its scoped CLI with a read-only repository and no credential in arguments', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     const command = `'${join(directory, 'muon')}'`;
@@ -173,6 +202,38 @@ describe('ClaudeCodeAdapter', () => {
 });
 
 describe('CodexAdapter', () => {
+  it.each(TASK_SESSIONS)('delivers the shared session input and explicit read-only policy for %s', async session => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'codex', session, input: SESSION_INPUT, access: 'read-only', cwd: directory });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const opened = requests.find(request => request.method === 'thread/start');
+    const started = requests.find(request => request.method === 'turn/start');
+    expect(opened.params.developerInstructions).toBe(SESSION_INPUT.systemPrompt);
+    expect(opened.params.sandbox).toBe('read-only');
+    expect(started.params.sandboxPolicy).toEqual({ type: 'readOnly' });
+    expect(started.params.input[0].text).toContain(SESSION_INPUT.instructions);
+    expect(started.params.input[0].text).toContain(SESSION_INPUT.context);
+    if (session === 'research') expect(opened.params.config.web_search).toBe('live');
+  });
+
+  it('rejects escalation from a read-only session even when owner bypass is configured', async () => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await expect(adapter.run({
+      provider: 'codex', session: 'research', access: 'read-only', cwd: directory,
+      input: { ...SESSION_INPUT, instructions: 'permission' },
+    })).rejects.toThrow('requires owner attention');
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.find(request => request.id === 900)?.result).toEqual({ decision: 'decline' });
+  });
+
+  it('keeps chief sessions read-only when owner bypass is configured', async () => {
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await adapter.run({ provider: 'codex', session: 'chief', access: 'read-only', input: SESSION_INPUT, cwd: directory });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.find(request => request.method === 'thread/start').params.sandbox).toBe('read-only');
+    expect(requests.find(request => request.method === 'turn/start').params.sandboxPolicy).toEqual({ type: 'readOnly' });
+  });
+
   it('performs the app-server handshake, resumes sessions, and hides intermediate output', async () => {
     const adapter = new CodexAdapter(await codexFixture());
     expect(await adapter.available()).toBe(true);

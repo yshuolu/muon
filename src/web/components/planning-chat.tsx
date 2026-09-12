@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUp, CheckCircle2, FileText, Loader2, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, FileText, Loader2, Plus } from 'lucide-react';
 import type { AppSnapshot, PlanningChat, Task } from '../../shared/types';
 import { api } from '../lib/api';
 import { Markdown, MuonMark } from './common';
@@ -34,12 +34,11 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified }: { c
   const firstQuestion = chat?.messages.find(message => message.role === 'user')?.content ?? '';
   const initialTitle = firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 80) || 'New task';
   return <div className="planning-chat-view">
-    <div className="planning-chat-toolbar"><Button variant="ghost" onClick={onClose}><ArrowLeft size={15} />Back to tasks</Button><span>Disposable planning thread</span><Button variant="ghost" size="icon" aria-label="Discard planning thread" onClick={onClose}><X size={16} /></Button></div>
-    <div className="planning-chat-heading"><div><span className="eyebrow">PLAN BEFORE YOU TASKIFY</span><h1>Shape the work together</h1><p>Brainstorm, ask questions, and settle the scope. This thread stays out of your task list until you make it a task.</p></div><Button onClick={() => setTaskify(true)} disabled={!chat || chat.messages.length === 0 || chat.busy}><CheckCircle2 size={15} />Taskify conversation</Button></div>
+    <header className="planning-chat-toolbar"><Button variant="ghost" size="icon" aria-label="Back to tasks" onClick={onClose}><ArrowLeft size={15} /></Button><h1>Planning</h1><Button variant="secondary" size="sm" onClick={() => setTaskify(true)} disabled={!chat || chat.busy}><Plus size={14} />Create task</Button></header>
     <div ref={conversation} className="planning-chat-conversation">
       {!chat && !error && <div className="planning-chat-empty"><Loader2 size={18} className="spin" />Opening planning thread…</div>}
       {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{error}</strong><Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
-      {chat && !chat.messages.length && <div className="planning-chat-empty"><div className="chief-orb"><MuonMark /></div><h2>What are you thinking about?</h2><p>Explore the problem first. I’ll help turn the conversation into a clear task when you’re ready.</p></div>}
+      {chat && !chat.messages.length && <div className="planning-chat-empty"><p>What would you like to work on?</p></div>}
       {chat?.messages.map(message => <article key={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>Claude Code · Read-only</span>}</div><Markdown>{message.content}</Markdown></div></article>)}
       {chat?.error && <p className="form-error" role="alert">{chat.error}</p>}
       {chat?.busy && <div className="chief-working"><span className="working-dots"><i /><i /><i /></span>{chat.activity ?? 'Planning partner is thinking…'}</div>}

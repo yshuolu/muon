@@ -5,24 +5,26 @@ import { resolve, join } from 'node:path';
 import { promisify } from 'node:util';
 import { chromium, expect, type BrowserContext, type Page } from '@playwright/test';
 import { serve } from '@hono/node-server';
-import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
+import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult, type AgentSessionRequest } from '../src/runtime';
 import { TaskService } from '../src/server/task-service';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
 import type { Task } from '../src/shared/types';
+import { observeAgentRequest, type ObservedAgentRequest } from '../src/server/test-agent-request';
 
 // Dedicated headless browser, isolated SQLite, and real HTTP/Git/artifact storage.
 // Provider outcomes are controlled: this validates product behavior, not live model execution.
 class ControlledAdapter implements AgentAdapter {
-  calls: { request: AgentRequest; finish: (text: string) => void; fail: (error: Error) => void }[] = [];
+  calls: { request: ObservedAgentRequest; finish: (text: string) => void; fail: (error: Error) => void }[] = [];
   constructor(readonly provider: 'claude' | 'codex') {}
   async available() { return true; }
-  run(request: AgentRequest): Promise<AgentResult> {
+  run(input: AgentRequest | AgentSessionRequest): Promise<AgentResult> {
+    const request = observeAgentRequest(input);
     return new Promise((resolveRun, reject) => {
       request.signal?.addEventListener('abort', () => reject(new Error('Acceptance fixture stopped')), { once: true });
-      this.calls.push({ request, finish: text => resolveRun({ text, sessionId: `browser-fixture-${this.calls.length}` }), fail: reject });
+      this.calls.push({ request, finish: text => resolveRun({ text, sessionId: request.sessionId ?? `browser-fixture-${this.calls.length}` }), fail: reject });
     });
   }
 }
@@ -93,13 +95,13 @@ try {
   await page.goto(url);
   await expect(page.getByRole('heading', { name: 'All tasks', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New task', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Shape the work together', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Planning', exact: true })).toBeVisible();
   await page.getByLabel('Message your planning partner', { exact: true }).fill('I want a task group for browser acceptance work.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const planningChat = await call(0, 'chat');
   planningChat.finish('A task group with browser acceptance coverage is a good shape.');
   await expect(page.getByText('A task group with browser acceptance coverage is a good shape.', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Taskify conversation', exact: true }).click();
+  await page.locator('.planning-chat-toolbar').getByRole('button', { name: 'Create task', exact: true }).click();
   await page.getByLabel('Task title', { exact: true }).fill('Browser acceptance group');
   await page.getByRole('combobox', { name: 'Task type', exact: true }).selectOption('group');
   await page.getByRole('combobox', { name: 'Priority', exact: true }).selectOption('2');

@@ -83,6 +83,35 @@ describe('Muon CLI', () => {
     expect(calls).toBe(1);
   });
 
+  it('reads logical sessions and saved results through the task plane', async () => {
+    const urls: string[] = [];
+    const io = harness(async url => { urls.push(String(url)); return Response.json([]); });
+    expect(await io.run(['tasks', 'sessions', 'MUO-12'])).toBe(0);
+    expect(await io.run(['tasks', 'MUO-12', 'outputs'])).toBe(0);
+    expect(urls).toEqual(['http://127.0.0.1:4310/api/tasks/MUO-12/sessions', 'http://127.0.0.1:4310/api/tasks/MUO-12/outputs']);
+  });
+
+  it('creates and filters workflows while preserving approved-plan configuration in JSON', async () => {
+    const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
+    const io = harness(async (url, options) => {
+      calls.push({ url: String(url), method: options?.method, body: options?.body ? JSON.parse(String(options.body)) : undefined });
+      return Response.json({ ok: true });
+    });
+    expect(await io.run(['tasks', 'create', '--json', '{"title":"Explore options"}', '--workflow', 'brainstorm'])).toBe(0);
+    expect(calls[0]).toMatchObject({ method: 'POST', body: { title: 'Explore options', workflow: { kind: 'brainstorm' } } });
+    const input = { title: 'Implement approved scope', workflow: { kind: 'develop', params: { approvedPlan: { taskId: 'MUO-2', planId: 'approved-v1' } } } };
+    expect(await io.run(['tasks', 'create', '--json', JSON.stringify(input)])).toBe(0);
+    expect(calls[1].body).toEqual(input);
+    expect(await io.run(['tasks', 'list', '--workflow', 'research', '--status', 'done'])).toBe(0);
+    expect(calls[2].url).toBe('http://127.0.0.1:4310/api/tasks?status=done&workflow=research');
+    for (const args of [
+      ['tasks', 'create', '--json', '{"title":"Explore"}', '--workflow', 'unknown'],
+      ['tasks', 'create', '--json', '{"title":"Explore","workflow":{"kind":"research"}}', '--workflow', 'brainstorm'],
+      ['tasks', 'update', 'MUO-1', '--json', '{"title":"Explore"}', '--workflow', 'research'],
+    ]) expect(await io.run(args)).toBe(1);
+    expect(calls).toHaveLength(3);
+  });
+
   it('reads plan conversations and posts exact-plan comments from options, JSON, or stdin', async () => {
     const calls: Array<{ path: string; method?: string; body?: unknown }> = [];
     const io = harness(async (url, options) => {

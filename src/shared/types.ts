@@ -1,8 +1,10 @@
 import type { WorkspaceChanges } from '../runtime/contracts';
+import type { SessionInput } from '../runtime/contracts';
+import type { ApprovedPlanRef, SessionName, WorkflowDefinition, WorkflowInput } from './workflows';
 
 export type Provider = 'claude' | 'codex';
 export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'canceled';
-export type TaskPhase = 'idle' | 'planning' | 'plan_review' | 'building' | 'verification' | 'complete';
+export type TaskPhase = 'idle' | 'planning' | 'plan_review' | 'building' | 'verification' | 'brainstorming' | 'researching' | 'complete';
 export type Priority = 0 | 1 | 2 | 3 | 4;
 export interface Scope { workspaceId: string; projectId: string; userId: string }
 export interface DependencyInput {
@@ -14,6 +16,9 @@ export interface Plan {
   status: 'pending' | 'approved' | 'changes_requested'; createdAt: string;
   reviewedAt?: string; reviewedBy?: string; feedback?: string;
   dependencyInputs?: DependencyInput[];
+  resultInputs?: ResultInput[];
+  source?: ApprovedPlanRef;
+  baseCommit?: string;
 }
 export interface PlanDiscussionMessage {
   id: string; role: 'user' | 'assistant'; content: string; createdAt: string;
@@ -29,10 +34,29 @@ export interface Evidence {
 }
 export interface ChangedFile { path: string; status: string; additions: number; deletions: number }
 export interface Activity { id: string; text: string; createdAt: string }
-export interface AgentRun {
-  id: string; phase: 'planning' | 'building' | 'verification'; provider: Provider;
+export interface SessionAttempt {
+  id: string; phase: 'planning' | 'building' | 'verification' | 'brainstorming' | 'researching'; provider: Provider;
   status: 'running' | 'succeeded' | 'failed' | 'canceled'; startedAt: string;
   finishedAt?: string; sessionId?: string; error?: string; planId?: string;
+  agentSessionId?: string; sessionName?: SessionName; providerSessionId?: string;
+  input?: SessionInput; inputDigest?: string;
+}
+/** Compatibility name for the existing REST runs resource. */
+export type AgentRun = SessionAttempt;
+export interface AgentSession {
+  id: string; name: SessionName;
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
+  providerSessionId?: string;
+  input?: SessionInput;
+  inputDigest?: string;
+}
+export interface SessionOutput {
+  id: string; sessionId: string; runId: string; kind: 'ideas' | 'report';
+  content: string; format: 'markdown'; createdAt: string;
+}
+export interface ResultInput {
+  taskId: string; identifier: string; summary: string; outputs: SessionOutput[];
+  sha256: string; capturedAt: string;
 }
 export interface Task {
   id: string; identifier: string; workspaceId: string; projectId: string; ownerUserId: string;
@@ -44,6 +68,12 @@ export interface Task {
   worktree?: { path: string; branch: string; baseCommit: string };
   error?: string;
   runs?: AgentRun[];
+  workflow?: WorkflowDefinition;
+  sessions?: AgentSession[];
+  activeSessionId?: string;
+  currentSessionId?: string;
+  sessionSystemPrompt?: string;
+  outputs?: SessionOutput[];
   planDiscussion?: PlanDiscussionMessage[];
   kind?: 'coding' | 'group';
   recovery?: { mode: 'retry' | 'resume' | 'fix' | 'replan'; feedback: string; requestedAt: string };
@@ -70,6 +100,7 @@ export interface CreateTaskInput {
   title: string; description?: string; provider?: Provider; priority?: Priority;
   status?: 'backlog' | 'todo'; labels?: string[]; parentId?: string | null; blockedByIds?: string[];
   kind?: 'coding' | 'group';
+  workflow?: WorkflowInput;
 }
 export interface RetryTaskInput { mode?: 'retry' | 'resume' | 'fix' | 'replan'; feedback?: string }
 export const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -78,6 +109,6 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
 };
 export const PHASE_LABELS: Record<TaskPhase, string> = {
   idle: 'Queued', planning: 'Planning', plan_review: 'Plan review', building: 'Building',
-  verification: 'Verification', complete: 'Complete',
+  verification: 'Verification', brainstorming: 'Brainstorming', researching: 'Researching', complete: 'Complete',
 };
 export const PRIORITY_LABELS: Record<Priority, string> = { 0: 'No priority', 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };

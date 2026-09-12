@@ -1,15 +1,34 @@
 export type AgentProvider = 'claude' | 'codex';
+export type AgentSessionKind = 'brainstorm' | 'research' | 'plan' | 'build' | 'verify' | 'chief' | 'chat';
+export type SessionAccess = 'read-only' | 'workspace-write';
 export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief' | 'chat';
 
-export interface AgentRequest {
+export interface SessionInput {
+  systemPrompt: string;
+  instructions: string;
+  context: string;
+}
+
+interface AgentExecutionOptions {
   provider: AgentProvider;
-  phase: AgentPhase;
-  prompt: string;
   cwd: string;
+  /** Resume only the provider conversation belonging to this workflow session. */
   sessionId?: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
   chiefCli?: { command: string; apiUrl: string; token: string };
+}
+
+export interface AgentSessionRequest extends AgentExecutionOptions {
+  session: AgentSessionKind;
+  input: SessionInput;
+  access: SessionAccess;
+}
+
+/** Compatibility input for callers that have not migrated to named sessions. */
+export interface AgentRequest extends AgentExecutionOptions {
+  phase: AgentPhase;
+  prompt: string;
 }
 
 export interface AgentResult {
@@ -19,7 +38,7 @@ export interface AgentResult {
 
 export interface AgentAdapter {
   provider: AgentProvider;
-  run(request: AgentRequest): Promise<AgentResult>;
+  run(request: AgentRequest | AgentSessionRequest): Promise<AgentResult>;
   available(): Promise<boolean>;
 }
 
@@ -47,6 +66,7 @@ export interface WorkspaceChanges {
 }
 
 export interface WorkspaceProvider {
+  ensureScratch?(input: { taskId: string }): Promise<{ path: string }>;
   validateRepository?(repositoryPath: string): Promise<void>;
   ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;
   changedFiles(input: { path: string; baseCommit: string }): Promise<ChangedFile[]>;

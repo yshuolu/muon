@@ -45,6 +45,19 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     if (!isAbsolute(root)) throw new Error('Worktree storage root must be an absolute path.');
   }
 
+  async ensureScratch(input: { taskId: string }): Promise<{ path: string }> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(input.taskId)) throw new Error('Invalid task ID for scratch workspace.');
+    await mkdir(this.root, { recursive: true });
+    const root = await realpath(this.root);
+    const scratch = join(root, 'scratch');
+    await mkdir(scratch, { recursive: true });
+    if (await realpath(scratch) !== scratch) throw new Error('Scratch workspace contains an unexpected symbolic link.');
+    const path = join(scratch, input.taskId);
+    await mkdir(path, { recursive: true });
+    if (await realpath(path) !== path) throw new Error('Scratch workspace contains an unexpected symbolic link.');
+    return { path };
+  }
+
   async validateRepository(repositoryPath: string): Promise<void> {
     if (!isAbsolute(repositoryPath)) throw new Error('Repository path must be absolute.');
     const path = await realpath(repositoryPath);

@@ -1,15 +1,16 @@
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, AgentSessionRequest, WorkspaceProvider } from '../runtime';
 import type { Scope, Settings, Task } from '../shared/types';
 import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService, type ServiceOptions } from './task-service';
 import { createHttpApp } from './http-app';
 import { LocalChiefCommands } from './local-chief-commands';
+import { observeAgentRequest, type ObservedAgentRequest } from './test-agent-request';
 
 interface ControlledCall {
-  request: AgentRequest;
+  request: ObservedAgentRequest;
   finish: (text: string) => void;
   fail: (error: Error) => void;
 }
@@ -18,13 +19,14 @@ class ControlledAdapter implements AgentAdapter {
   ignoreAbort = false;
   constructor(readonly provider: AgentProvider) {}
   async available() { return true; }
-  run(request: AgentRequest): Promise<AgentResult> {
+  run(input: AgentRequest | AgentSessionRequest): Promise<AgentResult> {
+    const request = observeAgentRequest(input);
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (text: string) => {
         if (settled) return;
         settled = true;
-        resolve({ text, sessionId: `${this.provider}-session-${this.calls.length}` });
+        resolve({ text, sessionId: request.sessionId ?? `${this.provider}-session-${this.calls.length}` });
       };
       const fail = (error: Error) => {
         if (settled) return;
@@ -60,6 +62,7 @@ async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
   const claude = new ControlledAdapter('claude');
   const codex = new ControlledAdapter('codex');
   const workspaces: WorkspaceProvider = {
+    ensureScratch: vi.fn(async ({ taskId }) => ({ path: `/test/scratch/${taskId}` })),
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => [{ path: 'src/app.ts', status: 'M', additions: 4, deletions: 1 }]),
     exportChanges: vi.fn(async (workspace) => ({ format: 'git-patch' as const, baseCommit: workspace.baseCommit, headCommit: workspace.baseCommit, sha256: 'f'.repeat(64), patchEncoding: 'utf8' as const, patch: 'diff --git a/src/dependency.ts b/src/dependency.ts\n+export const dependency = 42;\n', files: [{ path: 'src/dependency.ts', status: 'M', additions: 1, deletions: 0 }] })),
@@ -100,7 +103,7 @@ async function dispatch(fixture: Fixture) {
   await fixture.repo.saveSettings(scope, { ...settings, dispatcherEnabled: true });
   await fixture.service.tick();
 }
-async function waitForCall(fixture: Fixture, index: number, phase: AgentRequest['phase'], provider: AgentProvider = 'claude') {
+async function waitForCall(fixture: Fixture, index: number, phase: ObservedAgentRequest['phase'], provider: AgentProvider = 'claude') {
   const adapter = fixture[provider];
   await eventually(() => adapter.calls.length > index, `${provider} call ${index}`);
   const call = adapter.calls[index];
@@ -141,6 +144,176 @@ async function prepareVerification(fixture: Fixture) {
 }
 
 describe('TaskService workflow', () => {
+  it.each(['brainstorm', 'research'] as const)('completes %s without a repository, approval, or verification session', async kind => {
+    const f = await fixture();
+    await f.repo.saveProject(scope, { ...await f.repo.project(scope), repositoryPath: '' });
+    const task = await f.service.createTask({ title: 'Explore the problem', workflow: { kind } });
+    await dispatch(f);
+    const call = await waitForCall(f, 0, kind === 'brainstorm' ? 'brainstorming' : 'researching');
+    expect(call.request.original).toMatchObject({ session: kind, access: 'read-only' });
+    expect(call.request.input).toEqual({ systemPrompt: expect.any(String), instructions: expect.any(String), context: expect.any(String) });
+    expect(call.request.input!.systemPrompt).toContain('task plane');
+    expect(JSON.parse(call.request.input!.context).task.title).toBe(task.title);
+    expect(call.request.sessionId).toBeUndefined();
+    expect(call.request.cwd).toBe(`/test/scratch/${task.id}`);
+    call.finish('# Findings\nA complete result with explicit limitations.');
+    const completed = await waitForState(f, task.id, 'done', 'complete');
+    expect(completed.workflow).toMatchObject({ kind, sessions: [{ name: kind }] });
+    expect(completed.sessions).toMatchObject([{ name: kind, status: 'succeeded', providerSessionId: 'claude-session-1' }]);
+    expect(completed.outputs).toMatchObject([{ kind: kind === 'brainstorm' ? 'ideas' : 'report', content: '# Findings\nA complete result with explicit limitations.' }]);
+    expect(completed.plans).toEqual([]);
+    expect(completed.evidence).toEqual([]);
+    expect(completed.changedFiles).toEqual([]);
+    expect(completed.worktree).toBeUndefined();
+    expect(f.workspaces.ensure).not.toHaveBeenCalled();
+    expect(f.workspaces.exportChanges).not.toHaveBeenCalled();
+    expect(f.claude.calls).toHaveLength(1);
+  });
+
+  it('shares one system prompt and explicit input envelope across all five named task sessions', async () => {
+    const f = await fixture();
+    const { task, call } = await prepareVerification(f);
+    call.finish(verification('passed'));
+    const developed = await waitForState(f, task.id, 'done');
+    expect(f.claude.calls.map(item => item.request.session)).toEqual(['plan', 'build', 'verify']);
+    expect(f.claude.calls.every(item => item.request.sessionId === undefined)).toBe(true);
+    expect(new Set(developed.sessions!.map(session => session.providerSessionId)).size).toBe(3);
+    expect(developed.sessions!.every(session => session.providerSessionId)).toBe(true);
+    for (const kind of ['brainstorm', 'research'] as const) {
+      const index = f.claude.calls.length;
+      const knowledge = await f.service.createTask({ title: `Run ${kind}`, workflow: { kind } });
+      const next = await waitForCall(f, index, kind === 'brainstorm' ? 'brainstorming' : 'researching');
+      next.finish(`Completed ${kind} with limitations.`);
+      await waitForState(f, knowledge.id, 'done');
+    }
+    expect(new Set(f.claude.calls.map(item => item.request.input?.systemPrompt)).size).toBe(1);
+    for (const { request } of f.claude.calls) {
+      expect(request.original).toHaveProperty('session');
+      expect(request.original).not.toHaveProperty('phase');
+      expect(request.input).toEqual({ systemPrompt: expect.any(String), instructions: expect.any(String), context: expect.any(String) });
+      expect(request.input!.systemPrompt.trim()).not.toBe('');
+    }
+    const stored = await f.repo.task(scope, task.id);
+    expect(stored?.runs?.map(run => run.input)).toEqual(f.claude.calls.slice(0, 3).map(item => item.request.input));
+  });
+
+  it.each(['brainstorm', 'research'] as const)('retries a failed %s within the same logical session', async kind => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Explore the problem', workflow: { kind } });
+    const phase = kind === 'brainstorm' ? 'brainstorming' : 'researching';
+    await dispatch(f);
+    (await waitForCall(f, 0, phase)).fail(new Error('Source unavailable'));
+    const blocked = await waitForState(f, task.id, 'blocked');
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'failed session releasing capacity');
+    await expect(f.service.retry(task.id, { mode: 'fix' })).rejects.toThrow();
+    await expect(f.service.retry(task.id, { mode: 'replan' })).rejects.toThrow();
+    await f.service.retry(task.id, { feedback: 'Use the available local evidence.' });
+    const retried = await waitForCall(f, 1, phase);
+    expect(retried.request.session).toBe(kind);
+    expect(retried.request.prompt).toContain('Use the available local evidence.');
+    expect(retried.request.sessionId).toBeUndefined();
+    retried.finish('A result based on the available local evidence.');
+    const completed = await waitForState(f, task.id, 'done');
+    expect(completed.sessions).toHaveLength(1);
+    expect(completed.sessions![0].id).toBe(blocked.sessions![0].id);
+    expect(completed.runs?.map(run => [run.sessionName, run.status])).toEqual([[kind, 'failed'], [kind, 'succeeded']]);
+    expect(completed.plans).toEqual([]);
+  });
+
+  it('starts Develop at Build when given the current owner-approved plan for the same scope', async () => {
+    const f = await fixture();
+    const source = await f.service.createTask({ title: 'Implement the approved scope', description: 'Change only src/app.ts.', status: 'backlog' });
+    const plan = {
+      id: 'approved-plan', version: 1, format: 'markdown' as const, content: '# Approved scope\nChange only src/app.ts.',
+      status: 'approved' as const, createdAt: source.createdAt, reviewedAt: source.createdAt,
+      reviewedBy: scope.userId, baseCommit: 'a'.repeat(40), dependencyInputs: [], resultInputs: [],
+    };
+    await f.repo.saveTask(scope, { ...source, status: 'done', phase: 'complete', plans: [plan] }, source.version);
+    const input = {
+      title: source.title, description: source.description,
+      workflow: { kind: 'develop' as const, params: { approvedPlan: { taskId: source.id, planId: plan.id } } },
+    };
+    await expect(f.service.createTask({ ...input, title: 'Expand the approved scope' })).rejects.toThrow('scope');
+    await expect(f.service.createTask({ ...input, workflow: { kind: 'develop', params: { approvedPlan: { taskId: source.id, planId: 'stale-plan' } } } })).rejects.toThrow('current approved RFC');
+    const task = await f.service.createTask(input);
+    expect(task.workflow).toMatchObject({ kind: 'develop', params: input.workflow.params, sessions: [{ name: 'build' }, { name: 'verify' }] });
+    expect(task.plans[0].source).toEqual(input.workflow.params.approvedPlan);
+    await dispatch(f);
+    const build = await waitForCall(f, 0, 'building');
+    expect(build.request.prompt).toContain(plan.content);
+    expect(build.request.sessionId).toBeUndefined();
+    build.finish('Implemented the supplied approved scope.');
+    (await waitForCall(f, 1, 'verification')).finish(verification('passed'));
+    const completed = await waitForState(f, task.id, 'done');
+    expect(completed.runs?.map(run => run.sessionName)).toEqual(['build', 'verify']);
+    expect(completed.plans).toHaveLength(1);
+  });
+
+  it('adds Plan back to the same Develop workflow when an imported plan must be revised', async () => {
+    const f = await fixture();
+    const source = await f.service.createTask({ title: 'Approved task', status: 'backlog' });
+    const plan = { id: 'approved-import', version: 1, format: 'markdown' as const, content: '# Approved RFC', status: 'approved' as const, reviewedBy: scope.userId, reviewedAt: source.createdAt, createdAt: source.createdAt, baseCommit: 'a'.repeat(40) };
+    await f.repo.saveTask(scope, { ...source, status: 'done', phase: 'complete', plans: [plan] }, source.version);
+    const task = await f.service.createTask({ title: source.title, workflow: { kind: 'develop', params: { approvedPlan: { taskId: source.id, planId: plan.id } } } });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'building')).fail(new Error('The plan needs revision.'));
+    await waitForState(f, task.id, 'blocked');
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'failed build releasing capacity');
+    await f.service.retry(task.id, { mode: 'replan', feedback: 'Revise the implementation approach.' });
+    const replanning = await waitForCall(f, 1, 'planning');
+    expect(replanning.request.sessionId).toBeUndefined();
+    replanning.finish('# Revised RFC');
+    const review = await waitForState(f, task.id, 'in_review');
+    expect(review.workflow).toMatchObject({ kind: 'develop', sessions: [{ name: 'plan' }, { name: 'build' }, { name: 'verify' }] });
+    expect(review.workflow?.params?.approvedPlan).toBeUndefined();
+    expect(review.plans.map(item => item.status)).toEqual(['changes_requested', 'pending']);
+    await expect(f.service.approve(task.id, task.plans[0].id)).rejects.toMatchObject({ status: 409 });
+    await f.service.approve(task.id, review.plans[1].id);
+    (await waitForCall(f, 2, 'building')).finish('Implemented the revised plan.');
+    (await waitForCall(f, 3, 'verification')).finish(verification('passed'));
+    const completed = await waitForState(f, task.id, 'done');
+    expect(completed.runs?.map(run => [run.sessionName, run.status])).toEqual([
+      ['build', 'failed'], ['plan', 'succeeded'], ['build', 'succeeded'], ['verify', 'succeeded'],
+    ]);
+  });
+
+  it('rejects a forged Verify dispatch before earlier workflow sessions have completed', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Do not skip Build' });
+    await f.repo.saveTask(scope, {
+      ...task, phase: 'verification', currentSessionId: task.sessions?.find(session => session.name === 'verify')?.id,
+      plans: [{ id: 'plan', version: 1, format: 'markdown', content: '# Plan', status: 'approved', reviewedBy: scope.userId, reviewedAt: task.createdAt, createdAt: task.createdAt }],
+    }, task.version);
+    await dispatch(f);
+    expect((await f.service.getTask(task.id)).status).toBe('blocked');
+    expect(f.claude.calls).toEqual([]);
+  });
+
+  it('passes Research results alongside coding dependencies without exporting Research as Git changes', async () => {
+    const f = await fixture();
+    const research = await f.service.createTask({ title: 'Investigate the approach', workflow: { kind: 'research' } });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'researching')).finish('# Research report\nUse the supported native control. Source: https://example.com/spec');
+    const researched = await waitForState(f, research.id, 'done');
+    const prerequisite = await f.service.createTask({ title: 'Coding prerequisite', status: 'backlog' });
+    const worktree = { path: '/test/worktrees/dependency', branch: 'muon/dependency', baseCommit: 'c'.repeat(40) };
+    await f.repo.saveTask(scope, { ...prerequisite, status: 'done', phase: 'complete', summary: 'Implemented prerequisite.', worktree }, prerequisite.version);
+    const integration = await f.service.createTask({ title: 'Integrate the findings', blockedByIds: [research.id, prerequisite.id] });
+    const planning = await waitForCall(f, 1, 'planning');
+    expect(planning.request.prompt).toContain('Use the supported native control.');
+    expect(planning.request.prompt).toContain('export const dependency = 42');
+    expect(f.workspaces.exportChanges).toHaveBeenCalledTimes(1);
+    expect(f.workspaces.exportChanges).toHaveBeenCalledWith(worktree);
+    planning.finish('# RFC\nIntegrate the research finding and reviewed code snapshot.');
+    const review = await waitForState(f, integration.id, 'in_review');
+    expect(review.plans[0].resultInputs?.[0].outputs).toEqual(researched.outputs);
+    await f.repo.saveTask(scope, { ...researched, summary: 'Changed research summary', outputs: [] }, researched.version);
+    await f.service.approve(integration.id, review.plans[0].id);
+    const build = await waitForCall(f, 2, 'building');
+    expect(build.request.prompt).toContain('Use the supported native control.');
+    expect(f.workspaces.exportChanges).toHaveBeenCalledTimes(1);
+  });
+
   it('requires the owner to approve the exact current RFC before a single build can launch', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Add results view' });
@@ -171,7 +344,7 @@ describe('TaskService workflow', () => {
   it('blocks an unapproved build even when it is inserted directly into the dispatch queue', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Unapproved build' });
-    await f.repo.saveTask(scope, { ...task, phase: 'building' }, task.version);
+    await f.repo.saveTask(scope, { ...task, phase: 'building', currentSessionId: task.sessions?.find(session => session.name === 'build')?.id }, task.version);
     await dispatch(f);
     const blocked = await waitForState(f, task.id, 'blocked');
     expect(blocked.error).toContain('approval');
@@ -366,7 +539,7 @@ describe('TaskService workflow', () => {
     await f.service.approve(task.id, third.plans[2].id);
     const build = await waitForCall(f, 3, 'building');
     expect(build.request.prompt).toContain('polite live region announcing the reset value');
-    expect(build.request.sessionId).toBe(third.sessionId);
+    expect(build.request.sessionId).toBeUndefined();
     expect((await f.service.getTask(task.id)).planDiscussion).toEqual(third.planDiscussion);
   });
 
@@ -547,11 +720,12 @@ describe('TaskService workflow', () => {
   it('resumes a blocked run with its saved provider session', async () => {
     const f = await fixture();
     const { task, call } = await prepareVerification(f);
-    const sessionId = call.request.sessionId;
+    expect(call.request.sessionId).toBeUndefined();
+    call.finish(verification('failed'));
+    const blocked = await waitForState(f, task.id, 'blocked');
+    const sessionId = blocked.sessionId;
     expect(sessionId).toBeTruthy();
-    call.fail(new Error('Agent run cancelled.'));
-    await waitForState(f, task.id, 'blocked');
-    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'canceled attempt releasing capacity');
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'blocked attempt releasing capacity');
     await f.service.retry(task.id, { mode: 'resume', feedback: 'Continue from the interrupted verification.' });
     const resumed = await waitForCall(f, 3, 'verification');
     expect(resumed.request.sessionId).toBe(sessionId);
@@ -708,7 +882,7 @@ describe('TaskService workflow', () => {
     chief.finish(`Canceled the task. The attempted edit was rejected: ${rejected.error}`);
     await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief cancellation');
     expect(await f.service.getTask(task.id)).toMatchObject({ status: 'canceled', description: '' });
-    expect((await f.repo.messages(scope)).at(-1)?.content).toContain('Only unstarted coding tasks');
+    expect((await f.repo.messages(scope)).at(-1)?.content).toContain('Only unstarted tasks');
     expect(await f.repo.attention(scope)).toEqual([]);
     expect(f.claude.calls.some(call => call.request.phase === 'building')).toBe(false);
   });
@@ -754,7 +928,7 @@ describe('TaskService workflow', () => {
     await f.service.editTask(canceled.id, { parentId: null });
     expect(await f.service.getTask(canceled.id)).toMatchObject({ status: 'canceled', parentId: null });
     expect((await f.service.getTask(group.id)).summary).toBe('0 of 0 subtasks complete.');
-    await expect(f.service.editTask(canceled.id, { status: 'todo' })).rejects.toThrow('Only unstarted coding tasks');
+    await expect(f.service.editTask(canceled.id, { status: 'todo' })).rejects.toThrow('Only unstarted tasks');
   });
 
   it('reopens a completed group when another child is attached and preserves verified child outcomes', async () => {
@@ -841,7 +1015,7 @@ describe('TaskService workflow', () => {
     await expect(f.service.retry(task.id, { mode: 'fix' })).rejects.toThrow('Replan instead');
     expect(f.claude.calls).toHaveLength(1);
     const blocked = await f.service.getTask(task.id);
-    await f.repo.saveTask(scope, { ...blocked, phase: 'verification' }, blocked.version);
+    await f.repo.saveTask(scope, { ...blocked, phase: 'verification', currentSessionId: blocked.sessions?.find(session => session.name === 'verify')?.id }, blocked.version);
     await expect(f.service.retry(task.id, { mode: 'fix' })).rejects.toThrow('approved RFC');
     expect(f.claude.calls).toHaveLength(1);
   });

@@ -9,17 +9,18 @@ Usage: muon <resource> <command> [arguments] [options]
   health | state | project | runtime
   settings [get] | settings update --json <object>
   tasks list [--status todo] [--provider claude] [--kind group]
+             [--workflow brainstorm|research|develop]
              [--parent <id>] [--blocked-by <id>] [--search <text>]
   tasks get <id>
-  tasks create --json <object>
+  tasks create --json <object> [--workflow brainstorm|research|develop]
   tasks update <id> --json <object>
   tasks cancel <id>
-  tasks retry <id> [--mode retry|fix|replan] [--feedback <text>]
+  tasks retry <id> [--mode retry|resume|fix|replan] [--feedback <text>]
   tasks approve <id> --plan-id <exact-plan-id>
   tasks discussion <id>
   tasks comment <id> --plan-id <id> --content <text>
   tasks request-changes <id> --plan-id <id> --feedback <text>
-  tasks plans|evidence|files|activity|runs|subtasks|dependencies <id>
+  tasks plans|evidence|files|activity|runs|sessions|outputs|subtasks|dependencies <id>
   tasks plan <id> <plan-id> [--output <path|->]
   tasks dependency-patch <id> <plan-id> <dependency-id> --output <path|->
   attention [list] [--unread] | attention read <id>
@@ -96,11 +97,21 @@ export async function runCli(args: string[], io: CliIO): Promise<number> {
     } else if (resource === 'tasks') {
       if (!command || command === 'list') {
         expect(command ? 2 : 1); const query = new URLSearchParams();
-        for (const [flag, key] of Object.entries({ status: 'status', provider: 'provider', kind: 'kind', parent: 'parentId', 'blocked-by': 'blockedById', search: 'search' })) {
+        for (const [flag, key] of Object.entries({ status: 'status', provider: 'provider', kind: 'kind', workflow: 'workflow', parent: 'parentId', 'blocked-by': 'blockedById', search: 'search' })) {
           const value = option(flag); if (value !== undefined) query.set(key, value);
         }
         path = '/api/tasks' + (query.size ? `?${query}` : '');
-      } else if (command === 'create') { expect(2); path = '/api/tasks'; method = 'POST'; body = await readBody(); }
+      } else if (command === 'create') {
+        expect(2); path = '/api/tasks'; method = 'POST';
+        const input = await readBody() ?? {};
+        const workflow = option('workflow');
+        if (workflow !== undefined) {
+          if (!['brainstorm', 'research', 'develop'].includes(workflow)) fail('--workflow must be brainstorm, research, or develop.');
+          if ('workflow' in input) fail('Specify workflow in the body or as an option, not both.');
+          input.workflow = { kind: workflow };
+        }
+        body = input;
+      }
       else if (command === 'get') { expect(3); path = `/api/tasks/${id(recordId)}`; }
       else if (command === 'update') { expect(3); path = `/api/tasks/${id(recordId)}`; method = 'PATCH'; body = await readBody(); }
       else if (['cancel', 'retry', 'approve', 'request-changes', 'comment'].includes(command)) {
@@ -116,7 +127,7 @@ export async function runCli(args: string[], io: CliIO): Promise<number> {
       } else if (command === 'plan') { expect(4); path = `/api/tasks/${id(recordId)}/plans/${id(words[3])}`; output = option('output'); planExport = output !== undefined; }
       else if (command === 'dependency-patch') { expect(5); path = `/api/tasks/${id(recordId)}/plans/${id(words[3])}/dependencies/${id(words[4])}/patch`; output = required('output'); }
       else {
-        const resources = ['plans', 'evidence', 'files', 'activity', 'runs', 'subtasks', 'dependencies', 'discussion'];
+        const resources = ['plans', 'evidence', 'files', 'activity', 'runs', 'sessions', 'outputs', 'subtasks', 'dependencies', 'discussion'];
         expect(3);
         if (resources.includes(command)) path = `/api/tasks/${id(recordId)}/${command === 'discussion' ? 'plan-discussion' : command}`;
         else if (resources.includes(recordId)) path = `/api/tasks/${id(command)}/${recordId === 'discussion' ? 'plan-discussion' : recordId}`;

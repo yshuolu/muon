@@ -1,3 +1,4 @@
+import type { CreateTaskInput } from '../shared/types';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -73,6 +74,12 @@ export class LocalChiefCommands implements ChiefCommandGateway {
       || method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|retry)$/.test(path);
     if (!read && !taskWrite) throw new DomainError('This action requires the workspace owner. The chief cannot approve RFCs, submit owner reviews, change settings, or clear attention.', 403);
     this.admitted.set(request, grant);
+  }
+
+  authorizeTaskCreation(request: Request, input: CreateTaskInput) {
+    if (this.grant(request) && input.workflow?.kind === 'develop' && input.workflow.params?.approvedPlan) {
+      throw new DomainError('Only the workspace owner may reuse an approved plan for a new task.', 403);
+    }
   }
 
   async observe(request: Request, response: Response) {
