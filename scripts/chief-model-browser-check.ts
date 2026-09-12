@@ -74,6 +74,7 @@ try {
   const toolbar = page.locator('.chief-composer .composer-bottom');
   const modelButton = toolbar.getByRole('button', { name: 'Change Chief of staff model', exact: true });
   const dialog = page.getByRole('dialog', { name: 'Chief of staff model', exact: true });
+  const modelSelect = dialog.getByRole('combobox', { name: 'Model', exact: true });
   const configuredModel = (await service.snapshot()).runtime.config!.claude.model;
   await expect(modelButton).toContainText(configuredModel);
   await expect(toolbar.locator('.chief-runtime-meta')).toContainText('Claude Code');
@@ -83,14 +84,19 @@ try {
   check('Model controls and runtime information appear in the prompt’s bottom toolbar.');
 
   await modelButton.click();
-  await dialog.getByLabel('Model', { exact: true }).fill('sonnet');
+  await expect(modelSelect).toHaveValue(configuredModel);
+  assert.equal(await modelSelect.evaluate(element => element.tagName), 'SELECT');
+  const initialOptions = await modelSelect.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value));
+  for (const model of [configuredModel, 'opus', 'sonnet', 'haiku']) assert.ok(initialOptions.includes(model), `Model list must include ${model} before editing the current model.`);
+  check('The model dropdown includes the configured default, Opus, Sonnet, and Haiku immediately when opened.');
+  await modelSelect.selectOption('sonnet');
   await page.route('**/api/settings', async route => {
     if (route.request().method() === 'PATCH') await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Model settings could not be saved.' }) });
     else await route.continue();
   }, { times: 1 });
   await dialog.getByRole('button', { name: 'Save model', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('Model settings could not be saved.');
-  await expect(dialog.getByLabel('Model', { exact: true })).toHaveValue('sonnet');
+  await expect(modelSelect).toHaveValue('sonnet');
   await expect(page.locator('#chief-current-model')).toHaveText(configuredModel);
   assert.equal((await repository.settings(scope)).chiefModel ?? null, null);
   await dialog.getByRole('button', { name: 'Save model', exact: true }).click();
@@ -111,7 +117,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await capture(page, '02-chief-model-toolbar-mobile');
   await modelButton.click();
-  await expect(dialog.getByLabel('Model', { exact: true })).toHaveValue('sonnet');
+  await expect(modelSelect).toHaveValue('sonnet');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await capture(page, '03-chief-model-dialog-mobile');
   await page.keyboard.press('Escape');
@@ -133,6 +139,26 @@ try {
   check('The selected model reaches the Chief provider request, and the model control is disabled until the request completes.');
 
   await modelButton.click();
+  await dialog.getByRole('button', { name: 'Enter model ID', exact: true }).click();
+  const modelInput = dialog.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(modelInput).toHaveValue('sonnet');
+  await dialog.getByRole('button', { name: 'Choose from list', exact: true }).click();
+  await expect(modelSelect).toHaveValue('sonnet');
+  await dialog.getByRole('button', { name: 'Enter model ID', exact: true }).click();
+  const customModel = 'claude-fixture[1m]';
+  await modelInput.fill(customModel);
+  await dialog.getByRole('button', { name: 'Save model', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(modelButton).toContainText(customModel);
+  assert.equal((await repository.settings(scope)).chiefModel, customModel);
+  await page.reload();
+  await expect(modelButton).toContainText(customModel);
+  await modelButton.click();
+  await expect(modelSelect).toHaveValue(customModel);
+  const savedOptions = await modelSelect.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value));
+  assert.ok(savedOptions.includes(customModel));
+  for (const model of [configuredModel, 'opus', 'sonnet', 'haiku']) assert.ok(savedOptions.includes(model));
+  check('Custom model entry remains available; a saved model ID survives reload and appears beside the standard choices when reopened.');
   await dialog.getByRole('button', { name: 'Use default', exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(modelButton).toContainText(configuredModel);
