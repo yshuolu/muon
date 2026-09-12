@@ -95,7 +95,7 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 ## Configuration
 
-Choose the chief of staff's model from the toolbar inside its message composer. The dropdown always shows the configured model and the `opus`, `sonnet`, and `haiku` aliases; **Enter model ID** lets you use another model available to your Claude Code account. The selection is saved for this project and applies only to chief requests. Choose **Use default** to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
+Choose the chief of staff's model directly from the dropdown in its message toolbar; selections save immediately. The menu includes the configured default, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model available to your Claude Code account; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

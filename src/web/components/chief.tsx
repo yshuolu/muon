@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, ArrowUp, CheckCircle2, ChevronDown, ListTodo, Sparkles } from 'lucide-react';
+import { ArrowRight, ArrowUp, Check, CheckCircle2, ListTodo, Sparkles, X } from 'lucide-react';
 import type { AppSnapshot, Task } from '../../shared/types';
 import { api } from '../lib/api';
 import { Markdown, MuonMark } from './common';
 import { Button } from './ui/button';
-import { Dialog } from './ui/dialog';
 
 export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnapshot; onRefresh: () => void; onSelect: (task: Task) => void }) {
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(snapshot.settings.chiefModel ?? null);
-  const [modelOpen, setModelOpen] = useState(false);
   const [modelDraft, setModelDraft] = useState('');
   const [customModel, setCustomModel] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
@@ -21,22 +19,25 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
   const model = selectedModel ?? chiefConfig.model;
   const modelOptions = [...new Set([chiefConfig.model, model, 'opus', 'sonnet', 'haiku'])];
   const modelDisabled = busy || savingModel || snapshot.runtime.chiefRunning;
-  const modelButton = useRef<HTMLButtonElement>(null);
+  const modelSelect = useRef<HTMLSelectElement>(null);
   const conversation = useRef<HTMLDivElement>(null);
   useEffect(() => { conversation.current?.scrollTo({ top: 0, behavior: 'smooth' }); }, [snapshot.messages.length]);
   useEffect(() => { setSelectedModel(snapshot.settings.chiefModel ?? null); }, [snapshot.settings.chiefModel]);
-  function closeModel() {
-    setModelOpen(false);
-    requestAnimationFrame(() => modelButton.current?.focus());
+  function closeModelEdit() {
+    setCustomModel(false);
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) modelSelect.current?.focus();
+    });
   }
   async function saveModel(nextModel: string | null) {
     if (modelDisabled) return;
     setSavingModel(true);
     setModelError(null);
     try {
-      await api('/settings', 'PATCH', { chiefModel: nextModel });
-      setSelectedModel(nextModel);
-      closeModel();
+      const savedModel = nextModel === chiefConfig.model ? null : nextModel;
+      await api('/settings', 'PATCH', { chiefModel: savedModel });
+      setSelectedModel(savedModel);
+      closeModelEdit();
       onRefresh();
     } catch (cause) {
       setModelError(cause instanceof Error ? cause.message : 'Could not save the Chief of staff model.');
@@ -45,7 +46,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
     }
   }
   async function send(event: React.FormEvent) {
-    event.preventDefault(); if (!content.trim() || modelDisabled) return;
+    event.preventDefault(); if (!content.trim() || modelDisabled || customModel) return;
     setBusy(true); setError(null);
     try { await api('/chief/messages', 'POST', { content: content.trim() }); setContent(''); onRefresh(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not reach your chief of staff.'); }
@@ -67,26 +68,23 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
         <div className="composer-bottom chief-composer-bottom">
           <div className="chief-runtime-meta">
             <span><span className="provider-symbol" aria-hidden="true">✳</span>Claude Code</span>
-            <button ref={modelButton} type="button" className="chief-model-control" aria-label="Change Chief of staff model" aria-describedby="chief-current-model" aria-haspopup="dialog" title={model} disabled={modelDisabled} onClick={() => { setModelDraft(model); setCustomModel(false); setModelError(null); setModelOpen(true); }}><code id="chief-current-model">{model}</code><ChevronDown size={12} /></button>
+            {customModel ? <div className="chief-model-editor">
+              <input aria-label="Custom Chief of staff model" aria-describedby={modelError ? 'chief-model-error' : undefined} value={modelDraft} onChange={event => setModelDraft(event.target.value)} maxLength={200} autoComplete="off" autoFocus spellCheck={false} disabled={modelDisabled} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); if (modelDraft.trim()) void saveModel(modelDraft.trim()); } else if (event.key === 'Escape' && !savingModel) { event.preventDefault(); setModelError(null); closeModelEdit(); } }} />
+              <button type="button" aria-label="Save model" title="Save model" disabled={modelDisabled || !modelDraft.trim()} onClick={() => void saveModel(modelDraft.trim())}><Check size={14} /></button>
+              <button type="button" aria-label="Cancel model edit" title="Cancel" disabled={savingModel} onClick={() => { setModelError(null); closeModelEdit(); }}><X size={14} /></button>
+            </div> : <select ref={modelSelect} className="chief-model-control" aria-label="Chief of staff model" aria-describedby={modelError ? 'chief-model-error' : undefined} title={model} value={model} disabled={modelDisabled} style={{ width: `${Math.min(model.length + 5, 38)}ch` }} onChange={event => { const nextModel = event.target.value; if (!nextModel) { setModelDraft(model); setModelError(null); setCustomModel(true); } else { void saveModel(nextModel); } }}>
+              {modelOptions.map(option => <option key={option} value={option}>{option}{option === chiefConfig.model ? ' (default)' : ''}</option>)}
+              <option value="">Enter model ID…</option>
+            </select>}
             <span>Thinking: {chiefConfig.thinking}</span>
             <span>Scoped controls</span>
           </div>
-          <Button size="icon" aria-label="Send message" type="submit" disabled={!content.trim() || modelDisabled}><ArrowUp size={17} /></Button>
+          <Button size="icon" aria-label="Send message" type="submit" disabled={!content.trim() || modelDisabled || customModel}><ArrowUp size={17} /></Button>
         </div>
+        {modelError && <p id="chief-model-error" className="form-error chief-model-error" role="alert">{modelError}</p>}
+        {savingModel && <span className="sr-only" role="status">Saving model…</span>}
       </form>
       <p className="composer-hint">Plans and results, without the noise.<span>Enter to send · Shift + Enter for a new line</span></p>
     </div>
-    <Dialog open={modelOpen} onOpenChange={open => { if (!open && !savingModel) closeModel(); }} title="Chief of staff model" description="Choose a Claude model for this workspace’s Chief of staff.">
-      <form className="settings-form" onSubmit={event => { event.preventDefault(); void saveModel(modelDraft.trim()); }}>
-        <label>
-          <span id="chief-model-label">Model</span>
-          {customModel ? <input aria-labelledby="chief-model-label" aria-describedby="chief-model-hint" value={modelDraft} onChange={event => setModelDraft(event.target.value)} required maxLength={200} autoComplete="off" autoFocus spellCheck={false} disabled={modelDisabled} /> : <select aria-labelledby="chief-model-label" aria-describedby="chief-model-hint" value={modelDraft} onChange={event => setModelDraft(event.target.value)} autoFocus disabled={modelDisabled}>{modelOptions.map(option => <option key={option} value={option}>{option}</option>)}</select>}
-          <span id="chief-model-hint" className="field-hint">{customModel ? 'Enter a model ID available to your Claude Code account.' : 'Choose the configured model or a Claude model alias.'}</span>
-        </label>
-        <Button type="button" variant="ghost" size="sm" disabled={modelDisabled} onClick={() => { setCustomModel(!customModel); setModelDraft(model); setModelError(null); }}>{customModel ? 'Choose from list' : 'Enter model ID'}</Button>
-        {modelError && <p className="form-error" role="alert">{modelError}</p>}
-        <div className="dialog-footer"><Button type="button" variant="ghost" disabled={modelDisabled} onClick={() => void saveModel(null)}>Use default</Button><Button type="submit" disabled={modelDisabled || !modelDraft.trim()}>{savingModel ? 'Saving…' : 'Save model'}</Button></div>
-      </form>
-    </Dialog>
   </div>;
 }

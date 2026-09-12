@@ -417,9 +417,14 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .chief-composer-wrap { width: min(780px, calc(100% - 72px)); margin: 0 auto; padding-bottom: 22px; }
 .chief-runtime-meta { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; color: var(--muted-foreground); font-size: 11px; }
 .chief-runtime-meta > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.chief-model-control { display: inline-flex; align-items: center; gap: 5px; max-width: min(270px, 100%); min-height: 27px; padding: 4px 6px; border-radius: var(--radius-sm); color: var(--foreground); }
+.chief-model-control { max-width: min(270px, 100%); min-height: 27px; padding: 4px 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; text-overflow: ellipsis; }
 .chief-model-control:hover:not(:disabled) { background: var(--accent); }
-.chief-model-control code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.chief-model-control:disabled { opacity: .45; cursor: not-allowed; }
+.chief-model-editor { display: flex; align-items: center; gap: 4px; max-width: 100%; }
+.chief-model-editor input { min-width: 0; width: 220px; padding: 4px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.chief-model-editor button { display: grid; place-items: center; flex-shrink: 0; width: 27px; height: 27px; border-radius: var(--radius-sm); }
+.chief-model-editor button:hover:not(:disabled) { background: var(--accent); }
+.chief-model-error { margin-top: 8px; }
 .chief-composer { border: 1px solid var(--input); border-radius: var(--radius-lg); padding: 14px 15px 10px; background: var(--card); box-shadow: 0 4px 20px rgb(0 0 0 / 5%); }
 .chief-composer:focus-within { border-color: var(--ring); }
 .chief-composer textarea { border: 0; background: none; padding: 0; resize: none; font-size: 14px; max-height: 160px; outline: none; }
