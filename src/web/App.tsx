@@ -13,14 +13,32 @@ import { TaskList } from './components/task-list';
 import { Button } from './components/ui/button';
 
 type View = 'tasks' | 'attention' | 'chief';
+function locationState(): { view: View; taskId: string | null } {
+  const segments = window.location.pathname.split('/').filter(Boolean);
+  if (segments[0] === 'attention') return { view: 'attention', taskId: null };
+  if (segments[0] === 'chief') return { view: 'chief', taskId: null };
+  if (segments[0] === 'tasks') return { view: 'tasks', taskId: segments[1] ? decodeURIComponent(segments[1]) : null };
+  return { view: 'tasks', taskId: null };
+}
+function pathFor(view: View, taskId?: string | null): string {
+  if (view === 'attention') return '/attention';
+  if (view === 'chief') return '/chief';
+  return taskId ? `/tasks/${encodeURIComponent(taskId)}` : '/tasks';
+}
 export function App() {
   const { snapshot, error: connectionError, refresh } = useWorkspace();
-  const [view, setView] = useState<View>('tasks');
+  const initialLocation = useRef(locationState());
+  const [view, setView] = useState<View>(initialLocation.current.view);
   const [layout, setLayout] = useState<'list' | 'board'>('list');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialLocation.current.taskId);
   const returnFocus = useRef<HTMLElement | null>(null);
-  const selectTask = (task: Task) => { if (!selectedId) returnFocus.current = document.activeElement as HTMLElement; setSelectedId(task.id); };
-  const closeTask = useCallback(() => { setSelectedId(null); requestAnimationFrame(() => returnFocus.current?.isConnected && returnFocus.current.focus()); }, []);
+  const navigate = useCallback((nextView: View, taskId: string | null = null) => {
+    const path = pathFor(nextView, taskId);
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    setView(nextView); setSelectedId(taskId);
+  }, []);
+  const selectTask = (task: Task) => { if (!selectedId) returnFocus.current = document.activeElement as HTMLElement; navigate('tasks', task.id); };
+  const closeTask = useCallback(() => { navigate(view); requestAnimationFrame(() => returnFocus.current?.isConnected && returnFocus.current.focus()); }, [navigate, view]);
   const [newTask, setNewTask] = useState(false);
   const [parent, setParent] = useState<Task | undefined>();
   const [settings, setSettings] = useState(false);
@@ -31,6 +49,10 @@ export function App() {
   const unread = snapshot ? visibleAttention(snapshot).length : 0;
   const openCreate = () => { setParent(undefined); setNewTask(true); };
   useEffect(() => {
+    const handlePopState = () => { const next = locationState(); setView(next.view); setSelectedId(next.taskId); setSidebarOpen(false); };
+    window.addEventListener('popstate', handlePopState); return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+  useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]') || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === 'c') { event.preventDefault(); setParent(undefined); setNewTask(true); }
@@ -39,7 +61,7 @@ export function App() {
     };
     window.addEventListener('keydown', handleKey); return () => window.removeEventListener('keydown', handleKey);
   }, [closeTask]);
-  const go = (next: View) => { setView(next); setSelectedId(null); setSidebarOpen(false); };
+  const go = (next: View) => { navigate(next); setSidebarOpen(false); };
   async function readAttention(id: string) {
     try { await api(`/attention/${id}/read`, 'POST', {}); await refresh(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not dismiss notification.'); }
