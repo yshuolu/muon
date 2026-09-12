@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Plan, Task } from '../../shared/domain';
+import type { Plan, Task } from '../../shared/types';
 import { displayedPlan, planReviewState } from './plan-review';
 
 const first: Plan = { id: 'rfc-1', version: 1, format: 'markdown', content: '# Initial RFC', status: 'changes_requested', createdAt: '2026-09-08T10:00:00Z' };

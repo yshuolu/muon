@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowDownToLine, ArrowUpRight, Bell, Check, ChevronDown, ChevronRight, CircleDot, Command, Folder, LayoutGrid, List, Loader2, PanelLeft, Pause, Play, Plus, Settings2, Sparkles, X } from 'lucide-react';
-import type { Task } from '../shared/domain';
+import type { Task } from '../shared/types';
 import { api, useWorkspace } from './lib/api';
 import { visibleAttention } from './lib/utils';
 import { AttentionView } from './components/attention';

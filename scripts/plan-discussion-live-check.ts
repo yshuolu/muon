@@ -9,7 +9,7 @@ import { TaskService } from '../src/server/task-service';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
-import type { Task } from '../src/shared/domain';
+import type { Task } from '../src/shared/types';
 
 // Opt-in authenticated Claude check: real CLI -> REST -> SQLite -> planning agent.
 // No approval is issued, and no implementation is allowed in this fixture.

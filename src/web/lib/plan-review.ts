@@ -1,4 +1,4 @@
-import type { Plan, Task } from '../../shared/domain';
+import type { Plan, Task } from '../../shared/types';
 
 export function displayedPlan(plans: Plan[], selectedId: string | null) {
   return plans.find(plan => plan.id === selectedId) ?? plans.at(-1);

@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/domain';
+import type { Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
 import { ConflictError, type Repository } from './ports';
 
 type Row = Record<string, unknown>;

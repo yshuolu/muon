@@ -1,4 +1,4 @@
-import type { Task } from '../../shared/domain';
+import type { Task } from '../../shared/types';
 import { relationCandidates } from '../lib/task-state';
 import { StatusIcon } from './common';
 

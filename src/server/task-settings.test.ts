@@ -1,7 +1,7 @@
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
-import type { Scope } from '../shared/domain';
+import type { Scope } from '../shared/types';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
 

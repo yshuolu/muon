@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Check, CheckCheck, ChevronRight, Code2, File, FileCheck2, FileText, GitBranch, Layers3, Pencil, Plus, ShieldCheck, X } from 'lucide-react';
-import type { AppSnapshot, Priority, Provider, Task } from '../../shared/domain';
-import { PHASE_LABELS, PRIORITY_LABELS, STATUS_LABELS } from '../../shared/domain';
+import type { AppSnapshot, Priority, Provider, Task } from '../../shared/types';
+import { PHASE_LABELS, PRIORITY_LABELS, STATUS_LABELS } from '../../shared/types';
 import { api } from '../lib/api';
 import { relativeTime } from '../lib/utils';
 import { EmptyState, FileChanges, Markdown, PriorityIcon, ProviderBadge, StatusIcon } from './common';

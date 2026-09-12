@@ -358,6 +358,9 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .provider-statuses { display: flex; gap: 12px; margin: 0 0 21px; }
 .provider-statuses > div { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px; font-size: 13px; color: var(--foreground); }
 .provider-statuses small { font-size: 12px; color: var(--muted-foreground); margin-left: auto; }
+.provider-statuses .provider-name { font-weight: 500; }
+.provider-config { flex-basis: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted-foreground); font-size: 11px; padding-left: 21px; }
+.provider-config code { color: var(--foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-form > label.switch-row { flex-direction: row; align-items: center; justify-content: space-between; margin-top: 23px; }
 .switch-row strong { color: var(--foreground); font-size: 13px; font-weight: 500; }
 .switch-row small { display: block; color: var(--muted-foreground); margin-top: 6px; font-size: 12px; }
@@ -397,6 +400,10 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .chief-suggestions > button > svg:first-child { color: var(--muted-foreground); }
 .chief-suggestions > button > svg:last-child { margin-left: auto; color: var(--muted-foreground); }
 .chief-composer-wrap { width: min(780px, calc(100% - 72px)); margin: 0 auto; padding-bottom: 22px; }
+.chief-runtime-meta { display: flex; align-items: center; gap: 9px; min-height: 25px; padding: 0 3px 7px; color: var(--muted-foreground); font-size: 11px; }
+.chief-runtime-meta > span:first-child { display: inline-flex; align-items: center; gap: 5px; color: var(--foreground); font-weight: 500; }
+.chief-runtime-meta code { max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.chief-runtime-meta > span:last-child { margin-left: auto; }
 .chief-composer { border: 1px solid var(--input); border-radius: var(--radius-lg); padding: 14px 15px 10px; background: var(--card); box-shadow: 0 4px 20px rgb(0 0 0 / 5%); }
 .chief-composer:focus-within { border-color: var(--ring); }
 .chief-composer textarea { border: 0; background: none; padding: 0; resize: none; font-size: 14px; max-height: 160px; outline: none; }
@@ -412,7 +419,7 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .chief-message.user .message-avatar { background: var(--muted); color: var(--foreground); border-color: var(--border); border-radius: 50%; }
 .message-content { flex: 1; min-width: 0; }
 .message-author { font-size: 13px; font-weight: 500; color: var(--foreground); margin: 5px 0 11px; }
-.message-author > span { color: var(--muted-foreground); font-size: 12px; font-weight: 400; margin-left: 9px; }
+.message-author > span { color: var(--muted-foreground); font-size: 12px; font-weight: 400; margin-left: 9px; overflow-wrap: anywhere; }
 .message-content .markdown { color: var(--foreground); }
 .message-task-links { display: grid; gap: 7px; margin-top: 13px; }
 .message-task-links > button { display: flex; align-items: center; gap: 9px; padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; text-align: left; }

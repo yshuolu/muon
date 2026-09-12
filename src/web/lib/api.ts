@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppSnapshot } from '../../shared/domain';
+import type { AppSnapshot } from '../../shared/types';
 import { ApiClient } from '../../shared/api-client';
 
 const client = new ApiClient();

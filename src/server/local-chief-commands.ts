@@ -3,7 +3,7 @@ import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Scope } from '../shared/domain';
+import type { Scope } from '../shared/types';
 import { DomainError, type ChiefCommandGateway, type ChiefCommandSession } from './ports';
 
 interface Grant { scope: Scope; expiresAt: number; taskIds: Set<string> }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AppSnapshot, Evidence, Task } from '../../shared/domain';
+import type { AppSnapshot, Evidence, Task } from '../../shared/types';
 import { evidenceAttempts } from '../components/verification-evidence';
 import { queueReasons, relationCandidates } from './task-state';
 

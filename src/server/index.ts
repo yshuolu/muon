@@ -21,10 +21,15 @@ const artifacts = new LocalArtifactStore(resolve(dataRoot, 'artifacts'));
 const service = new TaskService({ scope, repository, artifacts, demo, chiefCommands,
   adapters: demo ? { claude: new DemoAdapter('claude'), codex: new DemoAdapter('codex') } : {
     claude: new ClaudeCodeAdapter(process.env.MUON_CLAUDE_EXECUTABLE, {
+      model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]',
+      effort: process.env.MUON_CLAUDE_EFFORT ?? 'max',
       allowedNetworkDomains: process.env.MUON_CLAUDE_ALLOWED_DOMAINS?.split(',').map(domain => domain.trim()).filter(Boolean),
       allowLocalBinding: process.env.MUON_CLAUDE_ALLOW_LOCAL_SERVERS === '1',
     }),
-    codex: new CodexAdapter(process.env.MUON_CODEX_EXECUTABLE),
+    codex: new CodexAdapter(process.env.MUON_CODEX_EXECUTABLE, {
+      model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra',
+      reasoningEffort: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra',
+    }),
   },
   workspaces: demo ? demoWorkspaces : new LocalWorktreeProvider(resolve(dataRoot, 'worktrees')),
 });

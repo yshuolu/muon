@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ChiefMessage, DependencyInput, Project, Task } from '../shared/domain';
+import type { ChiefMessage, DependencyInput, Project, Task } from '../shared/types';
 
 /** An unanswered owner turn survives provider failure and explicit recovery. */
 export function hasPendingPlanDiscussion(task: Task): boolean {

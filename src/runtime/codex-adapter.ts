@@ -12,11 +12,15 @@ export class CodexAdapter implements AgentAdapter {
 
   private readonly executable: string;
   private readonly prefixArgs: string[];
+  private readonly model?: string;
+  private readonly reasoningEffort?: string;
 
-  constructor(executable?: string) {
+  constructor(executable?: string, options: { model?: string; reasoningEffort?: string } = {}) {
     // Use the project's tested CLI version, while retaining an explicit host override.
     this.executable = executable ?? process.execPath;
     this.prefixArgs = executable ? [] : [createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js')];
+    this.model = options.model;
+    this.reasoningEffort = options.reasoningEffort;
   }
 
   available(): Promise<boolean> { return executableAvailable(this.executable, this.prefixArgs); }
@@ -137,10 +141,14 @@ export class CodexAdapter implements AgentAdapter {
       const configuration = record(record(await rpc('config/read', { cwd: request.cwd, includeLayers: false }))?.config);
       if (!configuration) throw new Error('Codex could not resolve isolated task configuration. Use the app-managed CLI.');
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
+      const config = { mcp_servers: mcpServers, features: isolatedFeatures,
+        ...(this.model ? { model: this.model } : {}),
+        ...(this.reasoningEffort ? { model_reasoning_effort: this.reasoningEffort } : {}),
+      };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
         cwd: request.cwd, approvalPolicy: 'never', sandbox: readonly ? 'read-only' : 'workspace-write',
-        config: { mcp_servers: mcpServers, features: isolatedFeatures },
+        config,
       }));
       sessionId = text(record(opened?.thread)?.id);
       if (!sessionId || (request.sessionId && request.sessionId !== sessionId)) {

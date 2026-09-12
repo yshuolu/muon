@@ -89,9 +89,13 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 | `MUON_DATA_DIR` | `.muon` | Parent directory for local/demo state |
 | `MUON_REPOSITORY_PATH` | empty | Initial repository path; existing settings take precedence |
 | `MUON_CLAUDE_EXECUTABLE` | `claude` | Claude Code executable |
+| `MUON_CLAUDE_MODEL` | `claude-fable-5-1[1m]` | Claude Code model |
+| `MUON_CLAUDE_EFFORT` | `max` | Claude Code thinking effort |
 | `MUON_CLAUDE_ALLOWED_DOMAINS` | `registry.npmjs.org` | Comma-separated dependency/test hosts allowed during approved Claude builds and verification |
 | `MUON_CLAUDE_ALLOW_LOCAL_SERVERS` | unset | Set to `1` when approved Claude tasks need to start a local preview/test server |
 | `MUON_CODEX_EXECUTABLE` | project-managed Codex CLI | Optional override for a specific Codex executable |
+| `MUON_CODEX_MODEL` | `gpt-6-astra` | Codex model |
+| `MUON_CODEX_REASONING_EFFORT` | `ultra` | Codex reasoning effort |
 | `MUON_DEMO` | unset | Set to `1` for the isolated demo |
 | `PORT` | `4310` | Hono port; update the Vite proxy if changing it during development |
 

@@ -1,4 +1,4 @@
-import type { AppSnapshot, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/domain';
+import type { AppSnapshot, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
 
 export interface Repository {
   initialize(scope: Scope, project: Project, settings: Settings): Promise<void>;

@@ -1,7 +1,7 @@
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
-import type { Scope, Settings, Task } from '../shared/domain';
+import type { Scope, Settings, Task } from '../shared/types';
 import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService, type ServiceOptions } from './task-service';

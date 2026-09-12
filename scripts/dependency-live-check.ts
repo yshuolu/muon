@@ -10,7 +10,7 @@ import { createHttpApp } from '../src/server/http-app.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { TaskService } from '../src/server/task-service.js';
-import type { AppSnapshot, Task } from '../src/shared/domain.js';
+import type { AppSnapshot, Task } from '../src/shared/types.js';
 
 const exec = promisify(execFile);
 const directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-dependency-live-')));

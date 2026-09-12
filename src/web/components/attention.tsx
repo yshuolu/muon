@@ -1,5 +1,5 @@
 import { ArrowUpRight, Bell, CheckCheck, CheckCircle2, FileCheck2, ShieldAlert } from 'lucide-react';
-import type { AppSnapshot, Task } from '../../shared/domain';
+import type { AppSnapshot, Task } from '../../shared/types';
 import { attentionNeedsAction, relativeTime, visibleAttention } from '../lib/utils';
 import { EmptyState } from './common';
 import { Button } from './ui/button';

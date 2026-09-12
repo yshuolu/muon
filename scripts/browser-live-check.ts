@@ -11,7 +11,7 @@ import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
-import type { Task } from '../src/shared/domain';
+import type { Task } from '../src/shared/types';
 
 // Dedicated headless browser, isolated SQLite, and real HTTP/Git/artifact storage.
 // Provider outcomes are controlled: this validates product behavior, not live model execution.

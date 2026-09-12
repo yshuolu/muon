@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, FileCheck2, Loader2, MessageSquare, RotateCw } from 'lucide-react';
-import type { Plan, Task } from '../../shared/domain';
+import type { Plan, Task } from '../../shared/types';
 import { relativeTime } from '../lib/utils';
 import { planReviewState } from '../lib/plan-review';
 import { Markdown } from './common';

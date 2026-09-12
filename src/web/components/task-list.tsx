@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, GitBranch, Layers3, Plus, Search, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
-import type { AppSnapshot, Task, TaskStatus } from '../../shared/domain';
-import { STATUS_LABELS, PHASE_LABELS } from '../../shared/domain';
+import type { AppSnapshot, Task, TaskStatus } from '../../shared/types';
+import { STATUS_LABELS, PHASE_LABELS } from '../../shared/types';
 import { relativeTime } from '../lib/utils';
 import { EmptyState, PriorityIcon, ProviderBadge, StatusIcon } from './common';
 import { Button } from './ui/button';

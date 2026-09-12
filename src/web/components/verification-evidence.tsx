@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowUpRight, CheckCheck, ClipboardCheck, Download, FileImage, FileText, Film, Maximize2, ShieldCheck } from 'lucide-react';
-import type { Evidence, Task } from '../../shared/domain';
+import type { Evidence, Task } from '../../shared/types';
 import { relativeTime } from '../lib/utils';
 import { EmptyState, Markdown, ResultIcon } from './common';
 import { Dialog } from './ui/dialog';

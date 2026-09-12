@@ -10,7 +10,7 @@ import { createHttpApp } from '../src/server/http-app.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { TaskService } from '../src/server/task-service.js';
-import type { AppSnapshot, Task } from '../src/shared/domain.js';
+import type { AppSnapshot, Task } from '../src/shared/types.js';
 
 assert.ok(process.argv[2], 'Pass the temporary directory printed by dependency-live-check.ts.');
 const directory = await realpath(process.argv[2]);

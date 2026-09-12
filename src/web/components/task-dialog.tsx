@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, FolderGit2, Plus } from 'lucide-react';
-import type { AppSnapshot, CreateTaskInput, Priority, Provider, Task } from '../../shared/domain';
-import { PRIORITY_LABELS } from '../../shared/domain';
+import type { AppSnapshot, CreateTaskInput, Priority, Provider, Task } from '../../shared/types';
+import { PRIORITY_LABELS } from '../../shared/types';
 import { api } from '../lib/api';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';

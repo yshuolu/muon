@@ -24,7 +24,7 @@ flowchart LR
   Artifacts --> Files[Managed local evidence files]
 ```
 
-The domain records live in `src/shared/domain.ts`, request schemas in `src/shared/api-contract.ts`, and the browser/CLI HTTP client in `src/shared/api-client.ts`. The server is the system of record; clients have no SQLite or TaskService dependency. The resource contract and command surface are documented in [REST API](rest-api.md) and [CLI](cli.md). HTTP clients see the same task records in list, board, detail, attention, and chief task links. No provider protocol frame is sent to React.
+The core records live in `src/shared/types.ts`, request schemas in `src/shared/api-contract.ts`, and the browser/CLI HTTP client in `src/shared/api-client.ts`. The server is the system of record; clients have no SQLite or TaskService dependency. The resource contract and command surface are documented in [REST API](rest-api.md) and [CLI](cli.md). HTTP clients see the same task records in list, board, detail, attention, and chief task links. No provider protocol frame is sent to React.
 
 ## Task and approval model
 
@@ -54,7 +54,7 @@ This is a single-coordinator implementation. Distributed lease heartbeats and a 
 
 ## Chief of staff
 
-The chief uses `ClaudeCodeAdapter.run` with phase `chief`, a read-only project, recent final conversation, and a per-run CLI capability. It reads current records and performs task operations through `muon` commands. Each command calls the REST API; normal domain validation and persistence happen before the command returns. The final Markdown is display-only and cannot execute an action, even if it contains JSON.
+The chief uses `ClaudeCodeAdapter.run` with phase `chief`, a read-only project, recent final conversation, and a per-run CLI capability. It reads current records and performs task operations through `muon` commands. Each command calls the REST API; normal application validation and persistence happen before the command returns. The final Markdown is display-only and cannot execute an action, even if it contains JSON.
 
 `LocalChiefCommands` implements `ChiefCommandGateway` and the HTTP authorization/observation hook. It issues a short-lived scoped bearer credential and a read-only temporary executable that pins the API origin and credential. Caller environment overrides cannot turn that executable into an owner client. The Claude Bash allowlist permits the supplied executable, keeps source writes denied, and allows only the loopback API host/port through the required sandbox. The CLI honors the sandbox HTTP proxy. Other commands, unsandboxed retries, hooks, and MCP tools are unavailable.
 
@@ -77,7 +77,7 @@ Submission atomically persists the user message and claims one pending chief req
 | `HttpRequestAccess` | Local chief capability policy with trusted loopback owner | Authenticated request authorization and mutation observation |
 | `Dispatcher` | In-process task service scheduler | Durable queue and distributed coordinator |
 
-Composition is confined to `src/server/index.ts`. The default fixed scope is supplied there rather than accepted from HTTP request bodies. A future authenticated HTTP layer must resolve scope per request, authorize project membership, and route to the appropriate coordinator. The domain already separates owner and delegated provider and validates RFC owner authority.
+Composition is confined to `src/server/index.ts`. The default fixed scope is supplied there rather than accepted from HTTP request bodies. A future authenticated HTTP layer must resolve scope per request, authorize project membership, and route to the appropriate coordinator. The application already separates owner and delegated provider and validates RFC owner authority.
 
 The repository stores task aggregates in JSON payloads with relational scope, identity, status, priority, and version columns for keys and indexes. Replacing SQLite with PostgreSQL can preserve the port and use JSONB; it still requires migrations, transactional equivalence, and operational work. This version uses schema version 1, not a complete multi-version migration framework.
 

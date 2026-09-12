@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, RetryTaskInput, Scope, Settings, Task } from '../shared/domain';
+import type { AppSnapshot, Attention, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, RetryTaskInput, Scope, Settings, Task } from '../shared/types';
 import { AgentProcessUnreapedError, type AgentAdapter, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
 import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planRevisionSchema, verificationSchema } from './agent-prompts';
@@ -58,7 +58,11 @@ export class TaskService implements Dispatcher {
   }
   async snapshot(): Promise<AppSnapshot> {
     const [project, settings, tasks, attention, messages, pending] = await Promise.all([this.repo.project(this.scope), this.repo.settings(this.scope), this.repo.tasks(this.scope), this.repo.attention(this.scope), this.repo.messages(this.scope), this.repo.pendingChief(this.scope)]);
-    return { scope: this.scope, project, settings, tasks, attention, messages, runtime: { activeRuns: this.active.size, chiefRunning: this.chiefActive || !!pending, providers: this.availability, demo: !!this.options.demo } };
+    const config = {
+      claude: { model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]', thinking: process.env.MUON_CLAUDE_EFFORT ?? 'max' },
+      codex: { model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra', thinking: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra' },
+    } as const;
+    return { scope: this.scope, project, settings, tasks, attention, messages, runtime: { activeRuns: this.active.size, chiefRunning: this.chiefActive || !!pending, providers: this.availability, config, demo: !!this.options.demo } };
   }
   async getTask(id: string) {
     const task = await this.repo.task(this.scope, id);

@@ -4,7 +4,7 @@ Muon’s HTTP service owns the project’s task records, workflow transitions, p
 
 The local base URL is `http://127.0.0.1:4310/api`. The development web server proxies `/api` to it. Requests and responses use JSON, except artifact and dependency-patch downloads. Mutations require `Content-Type: application/json`, including an empty `{}` body where specified. Request bodies are limited to 1 MiB. Successful reads receive `Cache-Control: no-store`.
 
-Shared request validation and TypeScript input types live in [`src/shared/api-contract.ts`](../src/shared/api-contract.ts). Response records are the public domain interfaces in [`src/shared/domain.ts`](../src/shared/domain.ts). Collections are JSON arrays; individual resources are JSON objects. There is no `data` wrapper. Existing `/api/state` and mutation routes remain compatible with the browser client.
+Shared request validation and TypeScript input types live in [`src/shared/api-contract.ts`](../src/shared/api-contract.ts). Response records are the public application interfaces in [`src/shared/types.ts`](../src/shared/types.ts). Collections are JSON arrays; individual resources are JSON objects. There is no `data` wrapper. Existing `/api/state` and mutation routes remain compatible with the browser client.
 
 ## Identity and access
 

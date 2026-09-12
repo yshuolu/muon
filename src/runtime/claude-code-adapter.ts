@@ -6,18 +6,24 @@ import { dirname, join, isAbsolute } from 'node:path';
 export interface ClaudeCodeOptions {
   allowedNetworkDomains?: string[];
   allowLocalBinding?: boolean;
+  model?: string;
+  effort?: string;
 }
 
 export class ClaudeCodeAdapter implements AgentAdapter {
   readonly provider = 'claude' as const;
   private readonly allowedNetworkDomains: string[];
   private readonly allowLocalBinding: boolean;
+  private readonly model?: string;
+  private readonly effort?: string;
 
   constructor(private readonly executable = 'claude', options: ClaudeCodeOptions = {}) {
     const domains = options.allowedNetworkDomains ?? ['registry.npmjs.org'];
     if (domains.length > 100 || domains.some(domain => !/^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(domain))) throw new Error('Claude network allowances must be host names or *.domain patterns, with at most 100 entries.');
     this.allowedNetworkDomains = [...new Set(domains)];
     this.allowLocalBinding = options.allowLocalBinding ?? false;
+    this.model = options.model;
+    this.effort = options.effort;
   }
 
   available(): Promise<boolean> { return executableAvailable(this.executable); }
@@ -56,6 +62,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--permission-mode', readonly ? 'plan' : chief ? 'default' : 'acceptEdits',
       '--permission-prompts', 'none',
       '--tools', readonly ? 'Read,Glob,Grep' : chief ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
+      ...(this.model ? ['--model', this.model] : []),
+      ...(this.effort ? ['--effort', this.effort] : []),
       '--disallowedTools', 'mcp__*',
       '--settings', JSON.stringify(settings),
       ...(request.sessionId ? ['--resume', request.sessionId] : []),

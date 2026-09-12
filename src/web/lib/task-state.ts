@@ -1,4 +1,4 @@
-import type { AppSnapshot, Task } from '../../shared/domain';
+import type { AppSnapshot, Task } from '../../shared/types';
 
 export function queueReasons(task: Task, snapshot: AppSnapshot): string[] {
   if (task.kind === 'group' && !['done', 'canceled'].includes(task.status)) {

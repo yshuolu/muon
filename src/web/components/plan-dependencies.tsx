@@ -1,5 +1,5 @@
 import { ArrowUpRight, ChevronRight, Download, GitBranch } from 'lucide-react';
-import type { Plan, Task } from '../../shared/domain';
+import type { Plan, Task } from '../../shared/types';
 import { FileChanges } from './common';
 
 export function PlanDependencies({ plan, tasks, onSelect }: { plan: Plan; tasks: Task[]; onSelect: (task: Task) => void }) {

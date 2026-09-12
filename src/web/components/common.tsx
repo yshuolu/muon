@@ -1,6 +1,6 @@
 import { AlertCircle, ArrowDown, ArrowUp, Check, CheckCircle2, Circle, CircleDashed, CircleDot, CirclePause, Minus, SignalHigh, SignalLow, SignalMedium, Sparkles, XCircle } from 'lucide-react';
-import type { Priority, Provider, TaskStatus } from '../../shared/domain';
-import { PRIORITY_LABELS, STATUS_LABELS } from '../../shared/domain';
+import type { Priority, Provider, TaskStatus } from '../../shared/types';
+import { PRIORITY_LABELS, STATUS_LABELS } from '../../shared/types';
 import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';

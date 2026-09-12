@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { resolve } from 'node:path';
 import { DomainError, ConflictError, type ArtifactStore } from './ports';
 import type { TaskService } from './task-service';
-import type { Task } from '../shared/domain';
+import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema,
   listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema,

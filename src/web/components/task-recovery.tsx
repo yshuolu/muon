@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, RotateCcw } from 'lucide-react';
-import type { RetryTaskInput, Task } from '../../shared/domain';
+import type { RetryTaskInput, Task } from '../../shared/types';
 import { Button } from './ui/button';
 
 export function TaskRecovery({ task, busy, onRetry }: { task: Task; busy: boolean; onRetry: (input: RetryTaskInput) => Promise<boolean> }) {
