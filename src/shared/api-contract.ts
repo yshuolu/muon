@@ -16,7 +16,7 @@ export const settingsSchema = z.strictObject({
   maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
   defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
 });
-export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
+export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });
 export const planCommentSchema = reviewSchema.extend({ content: z.string().trim().min(1).max(20_000) });

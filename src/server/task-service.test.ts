@@ -544,6 +544,23 @@ describe('TaskService workflow', () => {
     expect((await f.repo.task(scope, task.id))?.runs).toEqual(completed.runs);
   });
 
+  it('resumes a blocked run with its saved provider session', async () => {
+    const f = await fixture();
+    const { task, call } = await prepareVerification(f);
+    const sessionId = call.request.sessionId;
+    expect(sessionId).toBeTruthy();
+    call.fail(new Error('Agent run cancelled.'));
+    await waitForState(f, task.id, 'blocked');
+    await eventually(async () => (await f.service.snapshot()).runtime.activeRuns === 0, 'canceled attempt releasing capacity');
+    await f.service.retry(task.id, { mode: 'resume', feedback: 'Continue from the interrupted verification.' });
+    const resumed = await waitForCall(f, 3, 'verification');
+    expect(resumed.request.sessionId).toBe(sessionId);
+    expect(resumed.request.prompt).toContain('Continue from the interrupted verification.');
+    resumed.finish(verification('passed'));
+    await waitForState(f, task.id, 'done');
+    expect((await f.service.getTask(task.id)).recovery).toMatchObject({ mode: 'resume' });
+  });
+
   it('acknowledges project completion until new backlog work makes the project incomplete', async () => {
     const f = await fixture();
     const canceled = await f.service.createTask({ title: 'Removed from scope', status: 'backlog' });

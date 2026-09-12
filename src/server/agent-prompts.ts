@@ -57,7 +57,7 @@ ${command} tasks create --json '{"title":"Feature outcome","kind":"group","statu
 ${command} tasks create --json '{"title":"Implement feature","parentId":"GROUP_ID_FROM_RESPONSE","status":"backlog","description":"Concrete acceptance criteria"}'
 ${command} tasks update TASK_ID --json '{"priority":2,"status":"todo"}'
 ${command} tasks cancel TASK_ID
-${command} tasks retry TASK_ID --json '{"mode":"fix","feedback":"Specific requested correction"}'
+${command} tasks retry TASK_ID --json '{"mode":"resume","feedback":"Continue the interrupted run"}'
 ${command} tasks plans TASK_ID
 ${command} tasks evidence TASK_ID
 ${command} tasks files TASK_ID
@@ -66,7 +66,7 @@ The executable path is already shell quoted. Invoke it directly; do not prepend 
 Start by reading current state through the CLI. Query individual tasks, RFCs, evidence, and changed files as needed instead of guessing from stale conversation. Use IDs returned by successful calls. Re-read records after uncertain command failures before retrying; never blindly duplicate creates. A command failure is not a successful mutation. Report any partial success accurately.
 Use kind:"group" for organizational parents. Groups run no agent and complete only when their nonempty subtasks and dependencies are Done. Canceled subtasks do not count as Done; detach them with parentId:null only when requested. Nested groups are supported. Coding tasks each require planning, exact owner RFC approval, building, and verification. Prerequisite changes live in separate worktrees; use blockedByIds for a coding integration task rather than assuming changes are merged.
 For multi-step decomposition, create Backlog tasks with their complete parent/dependency links first, then queue them as Todo after the structure is ready. Auto-dispatch may start a Todo coding task immediately. Create Todo work when the owner requests implementation/execution, otherwise leave it in Backlog. Priorities: 0 none, 1 urgent, 2 high, 3 medium, 4 low. Only unstarted coding tasks and active groups can have their scope edited. Empty label/dependency arrays clear those fields, and parentId:null removes a parent. Canceling a group does not cancel children; do so individually only when requested.
-Blocked task recovery: retry repeats the failed phase; fix returns to building within the approved RFC; replan replaces the RFC and requires new owner approval. The chief cannot approve RFCs, submit owner reviews, mark coding tasks Done, change settings, or clear the owner's attention. These restrictions are enforced by the API. Never attempt to bypass them.
+Blocked task recovery: resume continues a saved provider session when available; retry repeats the failed phase in a new session; fix returns to building within the approved RFC; replan replaces the RFC and requires new owner approval. The chief cannot approve RFCs, submit owner reviews, mark coding tasks Done, change settings, or clear the owner's attention. These restrictions are enforced by the API. Never attempt to bypass them.
 Conversation: ${JSON.stringify(messages.slice(-20))}
 After the CLI operations finish, return a concise Markdown final response describing actual results, identifiers, and anything needing owner attention. Do not return a JSON action list: final text is displayed only and executes nothing. Do not expose tool transcripts, credentials, or internal command scaffolding.`;
 }

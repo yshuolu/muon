@@ -46,7 +46,7 @@ export interface Task {
   runs?: AgentRun[];
   planDiscussion?: PlanDiscussionMessage[];
   kind?: 'coding' | 'group';
-  recovery?: { mode: 'retry' | 'fix' | 'replan'; feedback: string; requestedAt: string };
+  recovery?: { mode: 'retry' | 'resume' | 'fix' | 'replan'; feedback: string; requestedAt: string };
 }
 export interface Attention {
   id: string; taskId: string; kind: 'plan_approval' | 'completed' | 'project_completed' | 'blocked';
@@ -69,7 +69,7 @@ export interface CreateTaskInput {
   status?: 'backlog' | 'todo'; labels?: string[]; parentId?: string | null; blockedByIds?: string[];
   kind?: 'coding' | 'group';
 }
-export interface RetryTaskInput { mode?: 'retry' | 'fix' | 'replan'; feedback?: string }
+export interface RetryTaskInput { mode?: 'retry' | 'resume' | 'fix' | 'replan'; feedback?: string }
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review',
   done: 'Done', blocked: 'Blocked', canceled: 'Canceled',
