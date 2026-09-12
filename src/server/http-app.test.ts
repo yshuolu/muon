@@ -80,6 +80,15 @@ describe('HTTP validation and local boundary', () => {
     expect((await repository.settings(scope)).chiefModel).toBeNull();
   });
 
+  it('persists and validates the owner-configured Chief SOUL', async () => {
+    const soul = 'Be concise.\n\nAsk before expanding scope.';
+    expect((await request('/api/settings', 'PATCH', { chiefSoul: `  ${soul}  ` })).status).toBe(200);
+    expect(await (await request('/api/settings')).json()).toMatchObject({ chiefSoul: soul });
+    expect((await request('/api/settings', 'PATCH', { chiefSoul: null })).status).toBe(200);
+    expect((await repository.settings(scope)).chiefSoul).toBeNull();
+    expect((await request('/api/settings', 'PATCH', { chiefSoul: 'x'.repeat(20_001) })).status).toBe(400);
+  });
+
   it.each(['', '   ', '-p', 'model --tools Bash', 'model\nname', 'model;command', 'x'.repeat(201), 42, {}])('rejects invalid chief model settings: %j', async chiefModel => {
     expect((await request('/api/settings', 'PATCH', { chiefModel })).status).toBe(400);
     expect((await repository.settings(scope)).chiefModel).toBeUndefined();

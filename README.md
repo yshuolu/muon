@@ -99,6 +99,8 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 Choose the chief of staff's model directly from the dropdown in its message toolbar; selections save immediately. The menu includes the configured default, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model available to your Claude Code account; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
 
+Choose **Configure SOUL** in the Chief composer to edit the Chief's per-project persona and working style. The editor supports Markdown, shows a live preview, and saves the SOUL for future Chief requests. Keep permissions, RFC approvals, and other safety rules out of the SOUL; those system rules always remain in force. Changes are blocked while a Chief request is queued or running.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MUON_DATA_DIR` | `.muon` | Parent directory for local/demo state |

@@ -4,6 +4,7 @@ import type { AppSnapshot, Task } from '../../shared/types';
 import { api } from '../lib/api';
 import { Markdown, MuonMark } from './common';
 import { Button } from './ui/button';
+import { ChiefSoulDialog } from './chief-soul-dialog';
 
 export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnapshot; onRefresh: () => void; onSelect: (task: Task) => void }) {
   const [content, setContent] = useState('');
@@ -14,6 +15,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
   const [customModel, setCustomModel] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [soulOpen, setSoulOpen] = useState(false);
   const chiefQueued = snapshot.runtime.chiefRunning && snapshot.runtime.activeRuns >= snapshot.settings.maxConcurrentAgents && snapshot.tasks.filter(task => task.runId && task.status === 'in_progress').length >= snapshot.runtime.activeRuns;
   const chiefConfig = snapshot.runtime.config?.claude ?? { model: 'claude-fable-5-1[1m]', thinking: 'max', bypassPermissions: true };
   const model = selectedModel ?? chiefConfig.model;
@@ -77,7 +79,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
               <option value="">Enter model ID…</option>
             </select>}
             <span>Thinking: {chiefConfig.thinking}</span>
-            <span>Scoped controls</span>
+            <button type="button" className="chief-soul-trigger" onClick={() => setSoulOpen(true)} disabled={modelDisabled}><Sparkles size={12} />{snapshot.settings.chiefSoul?.trim() ? 'SOUL configured' : 'Configure SOUL'}</button>
           </div>
           <Button size="icon" aria-label="Send message" type="submit" disabled={!content.trim() || modelDisabled || customModel}><ArrowUp size={17} /></Button>
         </div>
@@ -85,6 +87,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
         {savingModel && <span className="sr-only" role="status">Saving model…</span>}
       </form>
       <p className="composer-hint">Plans and results, without the noise.<span>Enter to send · Shift + Enter for a new line</span></p>
+      <ChiefSoulDialog snapshot={snapshot} open={soulOpen} onOpenChange={setSoulOpen} onSaved={onRefresh} />
     </div>
   </div>;
 }

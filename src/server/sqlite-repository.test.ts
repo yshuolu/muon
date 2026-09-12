@@ -197,7 +197,7 @@ describe('SqliteRepository', () => {
       changedFiles: [{ path: 'src/app.ts', status: 'M', additions: 3, deletions: 1 }],
       worktree: { path: '/tmp/worktree', branch: 'muon/task-first', baseCommit: 'a'.repeat(40) },
     }, inserted.version);
-    await repo.saveSettings(scope, { ...settings, dispatcherEnabled: false, chiefModel: 'sonnet[1m]' });
+    await repo.saveSettings(scope, { ...settings, dispatcherEnabled: false, chiefModel: 'sonnet[1m]', chiefSoul: 'Be concise.' });
     await repo.saveProject(scope, { ...project(), name: 'Renamed project' });
     await repo.putAttention(scope, attention('review-first', 'first'));
     await repo.appendMessage(scope, message('message-first'));
@@ -208,7 +208,7 @@ describe('SqliteRepository', () => {
     repo = await repository(filename);
     expect(await repo.task(scope, 'first')).toEqual(stored);
     expect((await repo.project(scope)).name).toBe('Renamed project');
-    expect(await repo.settings(scope)).toMatchObject({ dispatcherEnabled: false, chiefModel: 'sonnet[1m]' });
+    expect(await repo.settings(scope)).toMatchObject({ dispatcherEnabled: false, chiefModel: 'sonnet[1m]', chiefSoul: 'Be concise.' });
     expect(await repo.attention(scope)).toEqual([attention('review-first', 'first')]);
     expect((await repo.messages(scope)).map(item => item.id)).toEqual(['message-first', 'message-second']);
     expect(await repo.pendingChief(scope)).toBe('message-second');

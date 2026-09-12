@@ -425,6 +425,24 @@ kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); color: v
 .chief-model-editor button { display: grid; place-items: center; flex-shrink: 0; width: 27px; height: 27px; border-radius: var(--radius-sm); }
 .chief-model-editor button:hover:not(:disabled) { background: var(--accent); }
 .chief-model-error { margin-top: 8px; }
+.chief-soul-trigger { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: var(--radius-sm); color: var(--muted-foreground); font-size: 11px; }
+.chief-soul-trigger:hover:not(:disabled) { background: var(--accent); color: var(--foreground); }
+.chief-soul-trigger:disabled { opacity: .45; cursor: not-allowed; }
+.chief-soul-dialog { width: min(820px, calc(100vw - 32px)); }
+.chief-soul-editor-shell { border: 1px solid var(--input); border-radius: var(--radius-md); overflow: hidden; background: var(--background); }
+.chief-soul-toolbar { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--muted); }
+.chief-soul-toolbar button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); color: var(--muted-foreground); }
+.chief-soul-toolbar button:hover { background: var(--accent); color: var(--foreground); }
+.chief-soul-toolbar-spacer { flex: 1; }
+.chief-soul-editor-shell textarea { min-height: 240px; border: 0; border-radius: 0; resize: vertical; background: transparent; font-size: 14px; line-height: 1.75; }
+.chief-soul-editor-shell textarea:focus { box-shadow: none; }
+.chief-soul-editor-meta { display: flex; justify-content: space-between; padding: 7px 10px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 11px; }
+.chief-soul-preview { min-height: 70px; margin-top: 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--muted); }
+.chief-soul-preview .settings-section-label { margin-bottom: 8px; }
+.chief-soul-preview .markdown { font-size: 13px; }
+.chief-soul-empty { margin: 0; color: var(--muted-foreground); font-size: 13px; }
+.chief-soul-dialog .dialog-footer { margin-top: 18px; }
+.chief-soul-dialog .dialog-footer button { display: inline-flex; align-items: center; gap: 6px; }
 .chief-composer { border: 1px solid var(--input); border-radius: var(--radius-lg); padding: 14px 15px 10px; background: var(--card); box-shadow: 0 4px 20px rgb(0 0 0 / 5%); }
 .chief-composer:focus-within { border-color: var(--ring); }
 .chief-composer textarea { border: 0; background: none; padding: 0; resize: none; font-size: 14px; max-height: 160px; outline: none; }

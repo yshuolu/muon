@@ -367,7 +367,8 @@ export class TaskService implements Dispatcher {
       const { repositoryPath, projectName, ...settings } = input;
       const currentSettings = await this.repo.settings(this.scope);
       const changingChiefModel = settings.chiefModel !== undefined && settings.chiefModel !== (currentSettings.chiefModel ?? null);
-      if (changingChiefModel && (this.chiefActive || await this.repo.pendingChief(this.scope))) throw new DomainError('Wait for the chief of staff to finish before changing its model.', 409);
+      const changingChiefSoul = settings.chiefSoul !== undefined && settings.chiefSoul !== (currentSettings.chiefSoul ?? null);
+      if ((changingChiefModel || changingChiefSoul) && (this.chiefActive || await this.repo.pendingChief(this.scope))) throw new DomainError('Wait for the chief of staff to finish before changing its model or SOUL.', 409);
       const project = await this.repo.project(this.scope);
       const changingRepository = repositoryPath !== undefined && repositoryPath !== project.repositoryPath;
       if (changingRepository) {
@@ -697,7 +698,7 @@ export class TaskService implements Dispatcher {
       commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
       if (this.stopped || abort.signal.aborted) return;
       this.chiefActivity = 'Running Claude Code…';
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command), cwd: project.repositoryPath, model: settings.chiefModel ?? undefined, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
+      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command, settings.chiefSoul), cwd: project.repositoryPath, model: settings.chiefModel ?? undefined, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');

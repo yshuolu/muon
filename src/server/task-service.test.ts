@@ -268,6 +268,17 @@ describe('TaskService workflow', () => {
     expect((await waitForCall(f, 2, 'chief')).request.model).toBeUndefined();
   });
 
+  it('includes the saved Chief SOUL in the chief prompt and keeps it owner-only', async () => {
+    const f = await fixture(2);
+    await f.service.updateSettings({ chiefSoul: 'Be concise and ask before expanding scope.' });
+    await f.service.sendChief('Organize the project');
+    const chief = await waitForCall(f, 0, 'chief');
+    expect(chief.request.prompt).toContain('Owner-configured SOUL');
+    expect(chief.request.prompt).toContain('Be concise and ask before expanding scope.');
+    await expect(f.service.updateSettings({ chiefSoul: 'Change while busy' })).rejects.toMatchObject({ status: 409 });
+    chief.finish('The project is organized.');
+  });
+
   it('keeps a queued chief model unchanged until capacity becomes available', async () => {
     const f = await fixture();
     await f.service.updateSettings({ chiefModel: 'sonnet' });
