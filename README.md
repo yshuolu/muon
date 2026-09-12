@@ -51,6 +51,8 @@ Coding subtasks have independent RFCs, worktrees, and verification. They run ind
 
 The chief creates groups and coding tasks, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
 
+Chief task descriptions capture the goal in 1-3 short sentences for simple requests, preserving explicit requirements and references. Detailed design and verification plans belong in the task's RFC. Simple task changes receive a brief confirmation; ask for more detail when needed.
+
 Blocked tasks offer **Retry**, **Fix implementation**, and **Request new RFC**. Retry repeats the failed phase. Fix returns an approved build or verification failure to building, then verifies again. A new RFC revokes the old approval and pauses for your new decision. Each attempt retains its evidence, and the Evidence tab distinguishes the latest attempt from earlier failures.
 
 ## Assets
