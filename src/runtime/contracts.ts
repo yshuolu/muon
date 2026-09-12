@@ -1,5 +1,5 @@
 export type AgentProvider = 'claude' | 'codex';
-export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief';
+export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief' | 'chat';
 
 export interface AgentRequest {
   provider: AgentProvider;

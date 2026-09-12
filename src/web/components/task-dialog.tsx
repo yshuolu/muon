@@ -7,12 +7,12 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { TaskRelations } from './task-relations';
 
-export function TaskDialog({ open, onOpenChange, snapshot, parent, onCreated }: {
-  open: boolean; onOpenChange: (open: boolean) => void; snapshot: AppSnapshot; parent?: Task; onCreated: (task: Task) => void;
+export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle, initialDescription, planningChatId, onCreated }: {
+  open: boolean; onOpenChange: (open: boolean) => void; snapshot: AppSnapshot; parent?: Task; initialTitle?: string; initialDescription?: string; planningChatId?: string; onCreated: (task: Task) => void;
 }) {
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(initialTitle ?? '');
   const [kind, setKind] = useState<'coding' | 'group'>('coding');
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(initialDescription ?? '');
   const [provider, setProvider] = useState<Provider>(parent?.provider ?? snapshot.settings.defaultProvider);
   const [priority, setPriority] = useState<Priority>(parent?.priority ?? 0);
   const [status, setStatus] = useState<'backlog' | 'todo'>('todo');
@@ -25,11 +25,11 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, onCreated }: 
     event.preventDefault(); if (!title.trim()) return;
     setBusy(true); setError(null);
     const input: CreateTaskInput = { title: title.trim(), kind, description, provider, priority, status, labels: [...new Set(labels.split(',').map(v => v.trim()).filter(Boolean))], parentId, blockedByIds };
-    try { const task = await api<Task>('/tasks', 'POST', input); onCreated(task); onOpenChange(false); }
+    try { const task = await api<Task>(planningChatId ? `/planning-chats/${planningChatId}/taskify` : '/tasks', 'POST', input); onCreated(task); onOpenChange(false); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create task.'); }
     finally { setBusy(false); }
   }
-  return <Dialog open={open} onOpenChange={onOpenChange} title={parent ? 'Create subtask' : 'Create task'} description={kind === 'group' ? 'Organize related tasks. The group completes when all its subtasks finish successfully.' : 'Your agent plans first. Building begins after you approve the RFC.'} className="new-task-dialog">
+  return <Dialog open={open} onOpenChange={onOpenChange} title={parent ? 'Create subtask' : planningChatId ? 'Taskify conversation' : 'Create task'} description={kind === 'group' ? 'Organize related tasks. The group completes when all its subtasks finish successfully.' : planningChatId ? 'Carry this planning conversation into a task. Your agent will prepare an RFC for approval.' : 'Your agent plans first. Building begins after you approve the RFC.'} className="new-task-dialog">
     <form onSubmit={submit}>
       <div className="dialog-project"><FolderGit2 size={14} />{snapshot.project.name}{parent && <><span>/</span>{parent.identifier}</>}</div>
       <label className="sr-only" htmlFor="task-title">Task title</label>

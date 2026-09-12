@@ -28,7 +28,7 @@ export class CodexAdapter implements AgentAdapter {
   async run(request: AgentRequest): Promise<AgentResult> {
     if (request.provider !== this.provider) throw new Error('Codex adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const readonly = request.phase === 'planning' || request.phase === 'chief';
+    const readonly = request.phase === 'planning' || request.phase === 'chief' || request.phase === 'chat';
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;

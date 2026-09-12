@@ -73,6 +73,11 @@ Artifact downloads support a single HTTP byte range, including open-ended and su
 | `POST /tasks/:task/retry` | `{ "mode"?: "retry" \| "fix" \| "replan", "feedback"?: "…" }` | 200 `Task` |
 | `POST /attention/:attentionId/read` | `{}` | 200 `{ "ok": true }` |
 | `POST /chief/messages` | `{ "content": "…" }` | 202 persisted user `ChiefMessage` |
+| `POST /planning-chats` | `{}` | 201 disposable read-only planning chat |
+| `GET /planning-chats/:id` |  | Current planning chat messages and activity |
+| `POST /planning-chats/:id/messages` | `{ "content": "…" }` | 202 queued read-only planning reply |
+| `POST /planning-chats/:id/taskify` | `CreateTaskRequest` | 201 creates a normal task with the chat transcript in its description |
+| `DELETE /planning-chats/:id` | `{}` | 200 discards the chat and aborts an active reply |
 | `PATCH /settings` | `UpdateSettingsRequest` | 200 `{ "ok": true }`; read `/settings` and `/project` for updated records |
 
 Task creation requires a nonempty title (maximum 240 characters). Optional fields are description (30,000 characters), provider, priority (0–4), status (`backlog` or `todo`), labels (up to 20 strings, 40 characters each), parentId (nullable), blockedByIds (up to 100 references), and kind (`coding` or `group`). The server supplies scope, owner, stable ID, sequence identifier, timestamps, and initial workflow fields. Both relation fields accept UUIDs or identifiers and are resolved inside the current project. Labels are normalized by the service.
@@ -88,6 +93,8 @@ Recovery preserves prior attempts and artifacts: `retry` resumes the failed phas
 Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnabled` (boolean), `defaultProvider`, `repositoryPath`, and `projectName`. Repository changes require a valid committed Git root and are rejected while they would disrupt current work. Changing project display name does not change its stable project ID or task identifier prefix.
 
 Chief messages accept 1–30,000 nonblank characters. A simultaneous or already-pending chief request returns 409. A 202 response means the request was recorded for dispatch; poll `/chief/messages` and `/runtime` for the final result. Creating a Todo task similarly records it immediately; the dispatcher selects eligible work within the shared concurrency limit.
+
+Planning chats are separate, disposable read-only threads. They are held in memory, excluded from `/state`, the Chief history, and task navigation, and can be addressed through their `/planning-chats/:id` URL while the local server is running. Their provider may inspect the configured repository but cannot edit files or mutate tasks. Taskification is explicit; it copies the conversation into the new task description within the normal 30,000-character description limit, after which the normal RFC approval workflow applies.
 
 ## Errors
 

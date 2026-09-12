@@ -70,7 +70,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
     const chief = request.phase === 'chief';
-    const readonly = request.phase === 'planning';
+    const readonly = request.phase === 'planning' || request.phase === 'chat';
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
     const cliExecutable = cli?.command.replace(/^'|'$/g, '');

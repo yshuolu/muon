@@ -164,6 +164,27 @@ describe('HTTP validation and local boundary', () => {
 });
 
 describe('REST record resources', () => {
+  it('keeps planning chats disposable and taskifies only on explicit request', async () => {
+    const created = await request('/api/planning-chats', 'POST', {});
+    expect(created.status).toBe(201);
+    const chat = await created.json();
+    const sent = await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Explore a small API improvement.' });
+    expect(sent.status).toBe(202);
+    expect(claude.calls[0].request.phase).toBe('chat');
+    claude.calls[0].resolve({ text: 'A focused API task with acceptance criteria would be a good next step.' });
+    await eventually(async () => (await service.getPlanningChat(chat.id)).messages.length === 2);
+    const current = await (await request(`/api/planning-chats/${chat.id}`)).json();
+    expect(current.messages).toHaveLength(2);
+    expect((await repository.tasks(scope))).toEqual([]);
+    expect(await repository.messages(scope)).toEqual([]);
+    const taskified = await request(`/api/planning-chats/${chat.id}/taskify`, 'POST', { title: 'API improvement', status: 'backlog' });
+    expect(taskified.status).toBe(201);
+    const task = await taskified.json();
+    expect(task.description).toContain('Explore a small API improvement.');
+    expect(task.description).toContain('A focused API task');
+    expect((await request(`/api/planning-chats/${chat.id}`)).status).toBe(404);
+  });
+
   it('reads the scoped records as objects and collections, accepting identifiers in task routes', async () => {
     const task = await service.createTask({ title: 'Public task', status: 'backlog' });
     const timestamp = new Date().toISOString();

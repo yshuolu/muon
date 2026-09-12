@@ -21,6 +21,7 @@ export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });
 export const planCommentSchema = reviewSchema.extend({ content: z.string().trim().min(1).max(20_000) });
 export const chiefMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
+export const planningChatMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const emptyMutationSchema = z.strictObject({});
 export const listTasksQuerySchema = z.strictObject({
   status: taskStatusSchema.optional(),

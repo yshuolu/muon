@@ -7,7 +7,7 @@ import { DomainError, ConflictError, type ArtifactStore } from './ports';
 import type { TaskService } from './task-service';
 import type { Task } from '../shared/types';
 import {
-  chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema,
+  chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
   listTasksQuerySchema, planCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema,
 } from '../shared/api-contract';
 
@@ -156,6 +156,22 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
   app.post('/api/chief/messages', async c => {
     const { content } = chiefMessageSchema.parse(await c.req.json());
     return c.json(await service.sendChief(content), 202);
+  });
+  app.post('/api/planning-chats', async c => {
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(service.createPlanningChat(), 201);
+  });
+  app.get('/api/planning-chats/:id', async c => c.json(service.getPlanningChat(c.req.param('id'))));
+  app.post('/api/planning-chats/:id/messages', async c => {
+    const { content } = planningChatMessageSchema.parse(await c.req.json());
+    return c.json(await service.sendPlanningChat(c.req.param('id'), content), 202);
+  });
+  app.post('/api/planning-chats/:id/taskify', async c => {
+    const input = createTaskSchema.parse(await c.req.json());
+    return c.json(await service.taskifyPlanningChat(c.req.param('id'), await resolveRelations(input)), 201);
+  });
+  app.delete('/api/planning-chats/:id', async c => {
+    service.discardPlanningChat(c.req.param('id')); return c.json({ ok: true });
   });
   app.patch('/api/settings', async c => {
     const input = settingsSchema.parse(await c.req.json());
