@@ -47,6 +47,7 @@ const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const checks: string[] = [];
 const screenshots: string[] = [];
+const layouts: { viewport: { width: number; height: number }; headerHeight: number; conversationTop: number; conversationHeight: number }[] = [];
 const errors: string[] = [];
 const log: string[] = [`Planning chat model browser fixture: ${outputRoot}`];
 let browser: Browser | undefined;
@@ -65,6 +66,22 @@ async function capture(page: Page, name: string) {
   screenshots.push(path);
 }
 
+async function checkCompactLayout(page: Page) {
+  const header = page.locator('header.planning-chat-toolbar');
+  await expect(header.getByRole('heading', { name: 'Planning thread', exact: true })).toBeVisible();
+  await expect(header.getByRole('button', { name: 'Back to tasks', exact: true })).toBeVisible();
+  await expect(header.getByRole('button', { name: 'Taskify conversation', exact: true })).toBeVisible();
+  const headerBounds = await header.boundingBox();
+  const conversationBounds = await page.locator('.planning-chat-conversation').boundingBox();
+  const viewport = page.viewportSize();
+  assert.ok(headerBounds && conversationBounds && viewport);
+  assert.ok(headerBounds.height <= 52, `Planning header uses ${headerBounds.height}px.`);
+  assert.ok(conversationBounds.y <= 60, `Conversation starts at ${conversationBounds.y}px.`);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  layouts.push({ viewport, headerHeight: headerBounds.height, conversationTop: conversationBounds.y, conversationHeight: conversationBounds.height });
+  check(`At ${viewport.width}px wide, the planning header is ${headerBounds.height}px and the conversation starts at ${conversationBounds.y}px without horizontal overflow.`);
+}
+
 try {
   browser = await chromium.launch({ headless: true });
   context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -73,7 +90,8 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.getByRole('button', { name: 'New task', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Shape the work together', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Planning thread', exact: true })).toBeVisible();
+  await checkCompactLayout(page);
   const chatUrl = page.url();
   const chatId = decodeURIComponent(new URL(chatUrl).pathname.split('/').at(-1)!);
   const chatEndpoint = `**/api/planning-chats/${chatId}`;
@@ -219,12 +237,30 @@ try {
   await capture(page, '02-planning-chat-switched-desktop');
   check('After the limit failure, sonnet reaches the chat phase with the original conversation; model changes stay disabled until the reply completes.');
 
+  await page.getByRole('button', { name: 'Taskify conversation', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Taskify conversation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  assert.equal((await repository.tasks(scope)).length, 0);
+  await expect(page).toHaveURL(chatUrl);
+  check('The compact Taskify action opens its accessible dialog after a reply; closing it keeps the conversation without creating a task.');
+
   const messagesAfterReply = service.getPlanningChat(chatId).messages.map(message => ({ ...message }));
   await page.setViewportSize({ width: 390, height: 844 });
+  await checkCompactLayout(page);
   await expect(modelSelect).toBeVisible();
   await expect(sendButton).toBeVisible();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await capture(page, '03-planning-chat-model-mobile');
+  await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+  await expect(page.locator('.sidebar')).toHaveClass(/is-open/);
+  const closeNavigation = page.getByRole('button', { name: 'Close navigation', exact: true });
+  await expect(closeNavigation).toBeVisible();
+  await closeNavigation.click({ position: { x: 380, y: 100 } });
+  await expect(page.locator('.sidebar')).not.toHaveClass(/is-open/);
+  await expect(closeNavigation).toHaveCount(0);
+  await expect(page).toHaveURL(chatUrl);
+  check('The compact mobile header opens navigation, and closing the panel returns to the same planning conversation.');
   const editDraft = 'Keep this draft during custom model editing.';
   await messageInput.fill(editDraft);
   await modelSelect.selectOption('');
@@ -286,7 +322,7 @@ try {
   await messageInput.fill('Do not carry this draft into the next planning thread.');
   await modelSelect.selectOption('');
   await modelInput.fill('unsaved-previous-chat-model');
-  await page.getByRole('heading', { name: 'Shape the work together', exact: true }).click();
+  await page.getByRole('heading', { name: 'Planning thread', exact: true }).click();
   await page.keyboard.press('c');
   await expect(page).not.toHaveURL(chatUrl);
   const nextChatId = decodeURIComponent(new URL(page.url()).pathname.split('/').at(-1)!);
@@ -422,7 +458,7 @@ try {
   await service.stop();
   await new Promise<void>(resolveClose => server.close(() => resolveClose()));
   repository.close();
-  await writeFile(join(outputRoot, 'report.json'), JSON.stringify({ succeeded, checks, errors, screenshots, outputRoot }, null, 2));
+  await writeFile(join(outputRoot, 'report.json'), JSON.stringify({ succeeded, checks, errors, screenshots, layouts, outputRoot }, null, 2));
   await writeFile(join(outputRoot, 'run.log'), `${log.join('\n')}\n`);
   console.log(JSON.stringify({ succeeded, outputRoot, checks: checks.length, errors }));
 }

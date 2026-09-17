@@ -37,3 +37,13 @@ The browser suite now passes 15 checks, including replacement of discarded chats
 - [Automated tests](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-tests.log)
 - [Type checking](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-typecheck.log)
 - [Production build](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-build.log)
+
+## Compact planning header
+
+The planning view uses one 48-pixel toolbar. Browser measurements confirm that the conversation begins at y=48 on both 1440×1000 desktop and 390×844 mobile viewports, with no horizontal overflow. All 19 focused browser checks passed, including Taskify dialog access, mobile navigation, model selection, and expired-chat recovery. Type checking, all 303 automated tests, and the production build passed; the existing bundle-size warning remains.
+
+- [Browser report and layout measurements](/Users/yshuolu/Develop/muon-compact-planning-header/.muon/validation/planning-chat-model-BqySeq/report.json)
+- [Desktop layout](/Users/yshuolu/Develop/muon-compact-planning-header/.muon/validation/planning-chat-model-BqySeq/02-planning-chat-switched-desktop.png)
+- [Mobile layout](/Users/yshuolu/Develop/muon-compact-planning-header/.muon/validation/planning-chat-model-BqySeq/03-planning-chat-model-mobile.png)
+- [Automated tests](/Users/yshuolu/Develop/muon-compact-planning-header/.muon/validation/compact-header-tests.log)
+- [Production build](/Users/yshuolu/Develop/muon-compact-planning-header/.muon/validation/compact-header-build.log)

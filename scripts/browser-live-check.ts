@@ -93,7 +93,7 @@ try {
   await page.goto(url);
   await expect(page.getByRole('heading', { name: 'All tasks', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New task', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Shape the work together', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Planning thread', exact: true })).toBeVisible();
   await page.getByLabel('Message your planning partner', { exact: true }).fill('I want a task group for browser acceptance work.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const planningChat = await call(0, 'chat');

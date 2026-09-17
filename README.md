@@ -101,7 +101,7 @@ Worktrees start from the repository's committed `HEAD`; uncommitted main-checkou
 
 Choose the quick planning chat's model from the dropdown in its message toolbar. It offers the configured default, `opus`, `sonnet`, `haiku`, and **Enter model ID…** for another Claude model. Selections save immediately for that disposable chat and survive page reloads while the server is running. After a usage-limit error, choose another available model and send a follow-up to continue with the same conversation. Wait for an active reply to finish before switching. The **(default)** option restores `MUON_CLAUDE_MODEL`.
 
-Planning chats are temporary and disappear when discarded or when the server restarts. If an old chat is no longer available, choose **Start new chat** on that screen or **Create task** in the sidebar to open a fresh conversation.
+Planning chats use a compact toolbar for navigation and **Taskify**, leaving the rest of the view for the conversation. Chats are temporary and disappear when discarded or when the server restarts. If an old chat is no longer available, choose **Start new chat** on that screen or **Create task** in the sidebar to open a fresh conversation.
 
 Choose the chief of staff's model directly from the dropdown in its message toolbar; selections save immediately. The menu includes the configured default, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model available to your Claude Code account; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
 
