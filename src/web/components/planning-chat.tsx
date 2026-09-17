@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUp, Check, CheckCircle2, FileText, Loader2, X } from 'lucide-react';
 import type { AppSnapshot, PlanningChat, Task } from '../../shared/types';
+import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
 import { Markdown, MuonMark } from './common';
 import { Button } from './ui/button';
 import { TaskDialog } from './task-dialog';
 
-export function PlanningChatView({ chatId, snapshot, onClose, onTaskified }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void }) {
+export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNewChat, creatingChat }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void; onNewChat: () => Promise<void>; creatingChat: boolean }) {
   const [chat, setChat] = useState<PlanningChat | null>(null);
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [taskify, setTaskify] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [missingChat, setMissingChat] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [modelDraft, setModelDraft] = useState('');
   const [customModel, setCustomModel] = useState(false);
@@ -33,10 +35,13 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified }: { c
       const loaded = await api<PlanningChat>(`/planning-chats/${chatId}`);
       if (mutationVersion !== chatMutationVersion.current || loadVersion < appliedChatLoadVersion.current) return;
       appliedChatLoadVersion.current = loadVersion;
-      setChat(loaded); setError(null);
+      setChat(loaded); setError(null); setMissingChat(false);
     } catch (cause) {
       if (mutationVersion !== chatMutationVersion.current || loadVersion < appliedChatLoadVersion.current) return;
       appliedChatLoadVersion.current = loadVersion;
+      const missing = cause instanceof ApiError && cause.status === 404;
+      setMissingChat(missing);
+      if (missing) setChat(null);
       setError(cause instanceof Error ? cause.message : 'This planning chat is no longer available.');
     }
   };
@@ -85,7 +90,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified }: { c
     <div className="planning-chat-heading"><div><span className="eyebrow">PLAN BEFORE YOU TASKIFY</span><h1>Shape the work together</h1><p>Brainstorm, ask questions, and settle the scope. This thread stays out of your task list until you make it a task.</p></div><Button onClick={() => setTaskify(true)} disabled={modelDisabled || !chat?.messages.length}><CheckCircle2 size={15} />Taskify conversation</Button></div>
     <div ref={conversation} className="planning-chat-conversation">
       {!chat && !error && <div className="planning-chat-empty"><Loader2 size={18} className="spin" />Opening planning thread…</div>}
-      {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{error}</strong><Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
+      {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{missingChat ? 'This planning chat is no longer available.' : error}</strong>{missingChat && <><p>It may have been discarded or lost when the server restarted.</p><Button disabled={creatingChat} onClick={() => void onNewChat()}>{creatingChat ? 'Opening chat…' : 'Start new chat'}</Button></>}<Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
       {chat && !chat.messages.length && <div className="planning-chat-empty"><div className="chief-orb"><MuonMark /></div><h2>What are you thinking about?</h2><p>Explore the problem first. I’ll help turn the conversation into a clear task when you’re ready.</p></div>}
       {chat?.messages.map(message => <article key={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>Claude Code · Read-only</span>}</div><Markdown>{message.content}</Markdown></div></article>)}
       {chat?.error && <p className="form-error" role="alert">{chat.error}</p>}

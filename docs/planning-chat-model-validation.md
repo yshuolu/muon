@@ -25,3 +25,15 @@ Type checking, all 303 automated tests, and the production build passed. The bui
 - [Production build](/Users/yshuolu/Develop/muon-quick-chat-model/.muon/validation/quick-chat-build.log)
 
 Rerun with `pnpm run build && pnpm exec tsx scripts/planning-chat-model-browser-check.ts`. Install Chromium with `pnpm exec playwright install chromium` if needed.
+
+## Missing chat recovery
+
+The browser suite now passes 15 checks, including replacement of discarded chats from both the error screen and the sidebar. It verifies that recovery starts exactly one new chat in the configured repository, clears earlier errors, and still blocks replacement when discarding the old chat fails for a reason other than 404. Type checking, all 303 automated tests, and the production build passed; the existing bundle-size warning remains.
+
+- [Recovery browser report](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/planning-chat-model-cfQJbe/report.json)
+- [Recovery browser log](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/planning-chat-model-cfQJbe/run.log)
+- [Missing chat recovery screen](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/planning-chat-model-cfQJbe/07-missing-planning-chat-desktop.png)
+- [Recovered chat](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/planning-chat-model-cfQJbe/08-recovered-planning-chat-desktop.png)
+- [Automated tests](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-tests.log)
+- [Type checking](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-typecheck.log)
+- [Production build](/Users/yshuolu/Develop/muon-planning-chat-recovery/.muon/validation/recovery-build.log)

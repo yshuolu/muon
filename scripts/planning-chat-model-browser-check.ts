@@ -303,6 +303,107 @@ try {
   assert.equal(claude.calls.length, 2);
   await capture(page, '06-new-planning-chat-reset-desktop');
   check('Opening a new planning thread resets the custom model editor, unsent message draft, model selection, and conversation without reloading the page.');
+
+  const expiredChatUrl = page.url();
+  service.discardPlanningChat(nextChatId);
+  await page.reload();
+  const missingChatMessage = 'This planning chat is no longer available.';
+  await expect(page.getByText(missingChatMessage, { exact: true })).toBeVisible();
+  await expect(page.getByText('It may have been discarded or lost when the server restarted.', { exact: true })).toBeVisible();
+  await expect(messageInput).toHaveCount(0);
+  const startNewChat = page.getByRole('button', { name: 'Start new chat', exact: true });
+  const createTask = page.locator('.sidebar-create').getByRole('button');
+  await expect(startNewChat).toBeEnabled();
+  await capture(page, '07-missing-planning-chat-desktop');
+
+  let createRequests = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/planning-chats') ++createRequests;
+  });
+  let releaseCreation: (() => void) | undefined;
+  const pendingCreation = new Promise<void>(resolveCreation => { releaseCreation = resolveCreation; });
+  await page.route('**/api/planning-chats', async route => {
+    if (route.request().method() === 'POST') await pendingCreation;
+    await route.continue();
+  });
+  try {
+    await startNewChat.click();
+    await expect.poll(() => createRequests).toBe(1);
+    await expect(page.getByRole('button', { name: 'Opening chat…', exact: true })).toBeDisabled();
+    await expect(createTask).toBeDisabled();
+  } finally {
+    releaseCreation?.();
+  }
+  await expect(page).not.toHaveURL(expiredChatUrl);
+  await expect(messageInput).toHaveValue('');
+  await expect(modelSelect).toBeEnabled();
+  await expect(page.locator('.global-error')).toHaveCount(0);
+  const recoveredChatId = decodeURIComponent(new URL(page.url()).pathname.split('/').at(-1)!);
+  assert.deepEqual(service.getPlanningChat(recoveredChatId).messages, []);
+  assert.equal((await service.snapshot()).project.repositoryPath, repositoryPath);
+  await messageInput.fill('Confirm this recovered chat uses the selected workspace repository.');
+  await sendButton.click();
+  await expect.poll(() => claude.calls.length).toBe(3);
+  assert.equal(claude.calls[2].request.cwd, repositoryPath);
+  const recoveredReply = 'This recovered chat is using the selected workspace repository.';
+  claude.calls[2].finish(recoveredReply);
+  await expect(page.getByText(recoveredReply, { exact: true })).toBeVisible();
+  await expect(modelSelect).toBeEnabled();
+  await capture(page, '08-recovered-planning-chat-desktop');
+  check('A discarded chat explains its expiry and offers Start new chat; recovery prevents duplicate creation and sends messages from the selected repository.');
+
+  const nonexistentChatUrl = `${url}/planning-chats/nonexistent-browser-fixture`;
+  await page.goto(nonexistentChatUrl);
+  await expect(page.getByText(missingChatMessage, { exact: true })).toBeVisible();
+  await createTask.click();
+  await expect(page).not.toHaveURL(nonexistentChatUrl);
+  await expect(messageInput).toHaveValue('');
+  await expect(modelSelect).toBeEnabled();
+  await expect(page.locator('.global-error')).toHaveCount(0);
+  check('Sidebar Create task opens a fresh planning chat from an unavailable chat URL without leaving a stale global error.');
+
+  const retryChatUrl = page.url();
+  const retryChatId = decodeURIComponent(new URL(retryChatUrl).pathname.split('/').at(-1)!);
+  const deleteError = 'The planning chat could not be discarded. Please retry.';
+  let failDiscard = true;
+  let discardHeld = false;
+  let releaseDiscard: (() => void) | undefined;
+  const pendingDiscard = new Promise<void>(resolveDiscard => { releaseDiscard = resolveDiscard; });
+  await page.route(`**/api/planning-chats/${retryChatId}`, async route => {
+    if (route.request().method() === 'DELETE') {
+      if (failDiscard) {
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: deleteError }) });
+        return;
+      }
+      discardHeld = true;
+      await pendingDiscard;
+    }
+    await route.continue();
+  });
+  const requestsBeforeFailure = createRequests;
+  await createTask.click();
+  await expect(page.locator('.global-error')).toContainText(deleteError);
+  await expect(createTask).toBeEnabled();
+  await expect(page).toHaveURL(retryChatUrl);
+  assert.equal(createRequests, requestsBeforeFailure);
+  assert.equal(service.getPlanningChat(retryChatId).id, retryChatId);
+  failDiscard = false;
+  try {
+    await createTask.click();
+    await expect.poll(() => discardHeld).toBe(true);
+    await expect(createTask).toBeDisabled();
+    await expect(page.locator('.global-error')).toHaveCount(0);
+  } finally {
+    releaseDiscard?.();
+  }
+  await expect(page).not.toHaveURL(retryChatUrl);
+  await expect(messageInput).toHaveValue('');
+  await expect(modelSelect).toBeEnabled();
+  await expect(page.locator('.global-error')).toHaveCount(0);
+  assert.equal(createRequests, requestsBeforeFailure + 1);
+  assert.throws(() => service.getPlanningChat(retryChatId), /Planning chat not found or already discarded/);
+  await capture(page, '09-planning-chat-retry-desktop');
+  check('A non-404 discard failure preserves the current chat and blocks replacement; retry clears the error immediately and creates exactly one fresh chat.');
   assert.deepEqual(errors, []);
   check('No browser page errors were observed.');
   succeeded = true;

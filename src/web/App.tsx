@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowDownToLine, ArrowUpRight, Bell, Check, ChevronDown, ChevronRight, CircleDot, Command, Folder, LayoutGrid, List, Loader2, PanelLeft, Pause, Play, Plus, Settings2, Sparkles, X } from 'lucide-react';
 import type { Task } from '../shared/types';
+import { ApiError } from '../shared/api-client';
 import { api, useWorkspace } from './lib/api';
 import { visibleAttention } from './lib/utils';
 import { AttentionView } from './components/attention';
@@ -56,7 +57,18 @@ export function App() {
   const openCreate = async () => {
     if (creatingChat) return;
     setCreatingChat(true);
-    try { if (view === 'planning-chat' && chatId) await api(`/planning-chats/${chatId}`, 'DELETE', {}); const chat = await api<{ id: string }>('/planning-chats', 'POST', {}); navigate('planning-chat', chat.id); }
+    setError(null);
+    try {
+      if (view === 'planning-chat' && chatId) {
+        try { await api(`/planning-chats/${chatId}`, 'DELETE', {}); }
+        catch (cause) {
+          // Disposable chats disappear on restart or after being discarded in another tab.
+          if (!(cause instanceof ApiError) || cause.status !== 404) throw cause;
+        }
+      }
+      const chat = await api<{ id: string }>('/planning-chats', 'POST', {});
+      navigate('planning-chat', chat.id);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open a planning thread.'); }
     finally { setCreatingChat(false); }
   };
@@ -106,7 +118,7 @@ export function App() {
       <div inert={!!selected} className="page-heading"><div><div className="page-heading-eyebrow"><span className="project-icon">{snapshot.project.name.slice(0, 1).toUpperCase()}</span>{snapshot.project.name}<span className="eyebrow-divider">/</span>Workspace</div><h1>{title}{view === 'attention' && unread > 0 && <span className="title-count">{unread}</span>}</h1><p>{view === 'tasks' ? 'A clear path from idea to verified work.' : view === 'attention' ? 'The decisions that keep your work moving.' : view === 'planning-chat' ? 'Explore the idea before you commit it to your task list.' : 'A thoughtful partner for everything you’re building.'}</p></div><div className="page-actions">{view === 'tasks' && <div className="layout-toggle" aria-label="Task layout"><button aria-label="List view" aria-pressed={layout === 'list'} className={layout === 'list' ? 'active' : ''} onClick={() => setLayout('list')}><List size={15} /></button><button aria-label="Board view" aria-pressed={layout === 'board'} className={layout === 'board' ? 'active' : ''} onClick={() => setLayout('board')}><LayoutGrid size={14} /></button></div>}{view !== 'planning-chat' && <Button onClick={() => void openCreate()} disabled={creatingChat}><Plus size={15} />New task</Button>}</div></div>
       {!snapshot.project.repositoryPath && <div inert={!!selected} className="setup-banner"><span className="setup-banner-icon"><Folder size={18} /></span><div><strong>Connect your repository</strong><p>Choose a local Git repository so your agents know where to work.</p></div><Button variant="secondary" size="sm" onClick={() => setSettings(true)}>Choose repository<ArrowUpRight size={13} /></Button></div>}
       {view === 'tasks' && <div inert={!!selected} className="workspace-stats"><div><span className="stat-icon active"><CircleDot size={15} /></span><span>In progress</span><strong>{running}</strong></div><button onClick={() => go('attention')}><span className="stat-icon review"><FileReviewIcon /></span><span>Awaiting review</span><strong>{reviews}</strong>{reviews > 0 && <ArrowUpRight size={13} />}</button><div><span className="stat-icon queued"><ArrowDownToLine size={15} /></span><span>In queue</span><strong>{todo}</strong></div><div><span className="stat-icon done"><Check size={15} /></span><span>Completed</span><strong>{done}</strong></div></div>}
-      <div inert={!!selected} className={`page-content page-${view}`}>{view === 'tasks' ? <TaskList snapshot={snapshot} layout={layout} onSelect={selectTask} selectedId={selectedId || undefined} onCreate={() => void openCreate()} /> : view === 'attention' ? <AttentionView snapshot={snapshot} onSelect={selectTask} onRead={readAttention} /> : view === 'chief' ? <ChiefView snapshot={snapshot} onRefresh={() => void refresh()} onSelect={selectTask} /> : chatId ? <PlanningChatView key={chatId} chatId={chatId} snapshot={snapshot} onClose={closePlanningChat} onTaskified={task => navigate('tasks', task.id)} /> : null}</div>
+      <div inert={!!selected} className={`page-content page-${view}`}>{view === 'tasks' ? <TaskList snapshot={snapshot} layout={layout} onSelect={selectTask} selectedId={selectedId || undefined} onCreate={() => void openCreate()} /> : view === 'attention' ? <AttentionView snapshot={snapshot} onSelect={selectTask} onRead={readAttention} /> : view === 'chief' ? <ChiefView snapshot={snapshot} onRefresh={() => void refresh()} onSelect={selectTask} /> : chatId ? <PlanningChatView key={chatId} chatId={chatId} snapshot={snapshot} onNewChat={openCreate} creatingChat={creatingChat} onClose={closePlanningChat} onTaskified={task => navigate('tasks', task.id)} /> : null}</div>
       {selected && <TaskDetail key={selected.id} task={selected} snapshot={snapshot} onClose={closeTask} backLabel={title} onRefresh={() => void refresh()} onSelect={selectTask} onSubtask={task => { setParent(task); setNewTask(true); }} />}
     </main>
     {newTask && <TaskDialog key={parent?.id || 'new'} open={newTask} onOpenChange={setNewTask} snapshot={snapshot} parent={parent} onCreated={task => { void refresh(); navigate('tasks', task.id); }} />}
