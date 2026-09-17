@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:browser": "pnpm run build && node --import tsx scripts/browser-live-check.ts",
+    "test:browser:scroll": "pnpm run build && node --import tsx scripts/conversation-scroll-browser-check.ts",
     "test:live:codex": "node --import tsx scripts/codex-live-check.ts",
     "test:live:claude": "node --import tsx scripts/claude-live-check.ts",
     "test:live:chief": "node --import tsx scripts/chief-live-check.ts",

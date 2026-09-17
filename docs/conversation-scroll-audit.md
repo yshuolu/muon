@@ -1,7 +1,7 @@
 # Conversation scrolling: gaps and proposed behavior
 
-Audited 2026-09-17 against `3abde77`. This is the gap definition and implementation
-proposal; it does not change product behavior.
+Audited 2026-09-17 against `3abde77`. This records the gaps before implementation.
+The owner approved this proposal; see the [implemented behavior and validation](conversation-scroll-validation.md).
 
 Scope: Chief of Staff, Quick Chat / Planning thread, task Comments, and RFC Plan
 discussion. These are the four send/receive conversation surfaces in the current
@@ -102,7 +102,7 @@ four surfaces**, at 1440×1000 and 390×844, with overflowing history:
 - Test keyboard-only scrolling/catch-up, send focus, and reduced motion. Check
   mobile touch/overscroll and a real software keyboard in addition to emulation.
 
-This is a cross-view implementation proposal for owner review before code changes,
+The owner approved this cross-view implementation proposal before code changes,
 as required by the repository's larger-change plan gate.
 
 ## Validation evidence

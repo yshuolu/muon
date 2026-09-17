@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, Loader2, MessageSquare, RotateCcw } from 'lucide-react';
 import type { CommentOnTaskInput, Task } from '../../shared/types';
 import { taskCommentState } from '../lib/task-comments';
 import { relativeTime } from '../lib/utils';
+import { useConversationScroll } from '../lib/conversation-scroll';
 import { Markdown } from './common';
+import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
 
 export function TaskComments({ task, userId, dispatcherEnabled, active, busy, error, onComment, onRetry }: {
@@ -13,7 +15,7 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
   active: boolean;
   busy: boolean;
   error: string | null;
-  onComment: (input: CommentOnTaskInput) => Promise<boolean>;
+  onComment: (input: CommentOnTaskInput) => Promise<string | false>;
   onRetry: () => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState('');
@@ -21,9 +23,8 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
   const [sending, setSending] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const pendingRequest = useRef<CommentOnTaskInput | null>(null);
-  const conversation = useRef<HTMLDivElement>(null);
-  const wasNearBottom = useRef(true);
   const comments = task.comments ?? [];
+  const scroll = useConversationScroll({ conversationKey: JSON.stringify([task.workspaceId, task.projectId, 'comments', task.id]), messages: comments, active });
   const state = taskCommentState(task, userId, dispatcherEnabled, busy || sending || retrying);
   const provider = task.provider === 'claude' ? 'Claude Code' : 'Codex';
   const followUp = task.followUp;
@@ -34,10 +35,6 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
     : mode === 'replan' ? 'The agent will prepare a new RFC. You must approve it before further implementation.'
     : task.runId ? 'The agent will pause, reply, and continue the approved work.'
     : 'Ask about the task or its result. Choose Revise RFC to request more work.';
-  useEffect(() => {
-    if (active && wasNearBottom.current && conversation.current) conversation.current.scrollTop = conversation.current.scrollHeight;
-  }, [active, comments.length, followUp?.status]);
-
   async function send(event: React.FormEvent) {
     event.preventDefault();
     const content = draft.trim();
@@ -46,12 +43,14 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
     // Reuse the key when a response was lost, so resending cannot duplicate the comment.
     const request = previous?.content === content && previous.mode === mode ? previous : { content, mode, requestId: crypto.randomUUID() };
     pendingRequest.current = request;
+    const intent = scroll.beginSend();
     setSending(true);
     try {
-      if (await onComment(request)) {
+      const messageId = await onComment(request);
+      if (messageId) {
         setDraft('');
         pendingRequest.current = null;
-        wasNearBottom.current = true;
+        scroll.acceptSend(intent, messageId);
       }
     } finally { setSending(false); }
   }
@@ -68,11 +67,9 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
       <MessageSquare size={19} aria-hidden="true" />
       <div><h3>Task conversation</h3><p>{provider} · Comments and replies stay with this task</p></div>
     </div>
-    <div className="task-comments-messages" ref={conversation} role="log" aria-label="Task conversation" aria-live="polite" tabIndex={0} onScroll={() => {
-      const element = conversation.current;
-      if (element) wasNearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-    }}>
-      {comments.length === 0 ? <div className="task-comments-empty"><h4>Keep the conversation with the work</h4><p>Ask a question, add context, or request a revised RFC. The agent’s replies appear here.</p></div> : comments.map(comment => <article key={comment.id} className={`task-comment ${comment.role}`}>
+    <ConversationViewport scroll={scroll} className="task-comments-messages" label="Task conversation">
+      {comments.length === 0 ? <div className="task-comments-empty"><h4>Keep the conversation with the work</h4><p>Ask a question, add context, or request a revised RFC. The agent’s replies appear here.</p></div> : comments.map(comment => <article key={comment.id} data-message-id={comment.id} className={`task-comment ${comment.role}`}>
+        <ConversationUnreadBoundary scroll={scroll} messageId={comment.id} />
         <div className="task-comment-meta">
           <span className="task-comment-avatar" aria-hidden="true">{comment.role === 'user' ? 'Y' : task.provider === 'claude' ? '✳' : '⌘'}</span>
           <strong>{comment.role === 'user' ? comment.userId === userId ? 'You' : 'Owner' : provider}</strong>
@@ -80,12 +77,12 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
         </div>
         {comment.role === 'assistant' && comment.content.length > 3000 ? <details className="task-comment-long"><summary>Read agent’s reply</summary><Markdown>{comment.content}</Markdown></details> : <Markdown>{comment.content}</Markdown>}
       </article>)}
-    </div>
     {state.statusLabel && <div className={`task-comments-status${failed ? ' failed' : ''}`} role={failed ? 'alert' : 'status'}>
       {failed ? <AlertTriangle size={16} aria-hidden="true" /> : followUp?.status === 'queued' ? <RotateCcw size={16} aria-hidden="true" /> : <Loader2 size={16} className="spin" aria-hidden="true" />}
       <div><strong>{state.statusLabel}</strong><p>{state.statusDescription}</p></div>
       {failed && state.isOwner && task.status !== 'canceled' && <Button variant="secondary" size="sm" disabled={!state.canRetry} onClick={() => void retry()}><RotateCcw size={13} aria-hidden="true" />{retrying ? 'Queuing…' : followUp?.mode === 'replan' ? 'Retry revision' : 'Retry reply'}</Button>}
     </div>}
+    </ConversationViewport>
     <div className="task-comments-controls">
       {error && <p className="form-error" role="alert">{error}</p>}
       <form className="task-comments-composer" onSubmit={send}>

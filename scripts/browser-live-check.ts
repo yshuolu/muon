@@ -120,13 +120,13 @@ try {
   assert.equal(child.parentId, group.id);
   await expect(page.locator('.queue-explanation').getByText('Automatic dispatch is paused', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Resume dispatcher', exact: true }).click();
-  const planning = await call(0, 'planning');
+  const planning = await call(1, 'planning');
   planning.finish('# RFC: task media and recovery\n\n## Approach\nWrite a fixture result in result.txt inside this task worktree.\n\n## Acceptance\n- Owner approval is mandatory.\n- Capture an actual browser screenshot and recording.\n- Failed verification is repaired, then verified again.\n\n## Verification\nCheck the real browser UI, download the media, and seek the recording.');
   await waitTask(child.id, 'in_review');
   await expect(page.getByRole('tab', { name: /Plan/ })).toBeVisible();
   await page.getByRole('tab', { name: /Plan/ }).click();
   await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeVisible();
-  assert.equal(claude.calls.length, 1);
+  assert.equal(claude.calls.length, 2);
   const gate = await fetch(`${url}/api/tasks/${child.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'done' }) });
   assert.equal(gate.status, 400);
   await capture(page, '01-rfc-review');
@@ -142,7 +142,7 @@ try {
   await expect(page.getByLabel('Comment on the plan', { exact: true })).toHaveValue('Please explain how the screenshot proves the result and include keyboard navigation in verification.');
   assert.equal((await service.getTask(child.id)).planDiscussion?.length ?? 0, 0);
   await page.getByRole('button', { name: 'Send comment', exact: true }).click();
-  const revisionOne = await call(1, 'planning');
+  const revisionOne = await call(2, 'planning');
   assert.match(revisionOne.request.prompt, /include keyboard navigation/);
   await expect(page.getByLabel('Comment on the plan', { exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeDisabled();
@@ -158,7 +158,7 @@ try {
   await page.getByRole('combobox', { name: 'Plan version', exact: true }).selectOption(firstRevision.plans.at(-1)!.id);
   await page.getByLabel('Comment on the plan', { exact: true }).fill('Keep those checks, and explicitly verify focus returns after the screenshot dialog closes.');
   await page.getByRole('button', { name: 'Send comment', exact: true }).click();
-  const revisionTwo = await call(2, 'planning');
+  const revisionTwo = await call(3, 'planning');
   assert.match(revisionTwo.request.prompt, /include keyboard navigation/);
   assert.match(revisionTwo.request.prompt, /screenshot records the visible workflow state/);
   assert.match(revisionTwo.request.prompt, /focus returns/);
@@ -168,7 +168,7 @@ try {
   assert.equal(revisedReview.planDiscussion?.length, 4);
   assert.deepEqual(revisedReview.runs!.map(run => run.phase), ['planning', 'planning', 'planning']);
   await page.reload();
-  await page.getByRole('button').filter({ hasText: child.title }).click();
+  await expect(page.getByRole('heading', { name: child.title, exact: true })).toBeVisible();
   await expect(page.getByText('Kept keyboard navigation and added a focus-restoration check after closing the screenshot dialog.', { exact: true })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Plan version', exact: true })).toHaveValue(revisedReview.plans.at(-1)!.id);
   await capture(page, '01b-plan-conversation');
@@ -183,13 +183,13 @@ try {
   await page.getByRole('button', { name: 'Close task', exact: true }).click();
   await page.getByRole('button', { name: /^Attention \d/ }).click();
   await page.getByRole('button', { name: 'Review plan', exact: true }).click();
-  await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'Attention', exact: true })).toBeVisible();
+  await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'All tasks', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Approve plan', exact: true }).click();
-  const building = await call(3, 'building');
+  const building = await call(4, 'building');
   assert.match(building.request.prompt, /focus restoration/);
   await writeFile(join(building.request.cwd, 'result.txt'), 'Acceptance fixture result, first implementation.\n');
   building.finish('Created result.txt in the isolated worktree.');
-  const firstVerification = await call(4, 'verification');
+  const firstVerification = await call(5, 'verification');
   firstVerification.finish(JSON.stringify({ summary: 'Controlled first verification requires repair.', evidence: [{ kind: 'test', title: 'Initial fixture check', description: 'Controlled failure exercises the repair interface.', result: 'failed', steps: ['Inspect first implementation', 'Report the controlled failing check'] }] }));
   await waitTask(child.id, 'blocked');
   await expect(page.getByRole('combobox', { name: 'Next step', exact: true })).toBeVisible();
@@ -197,11 +197,11 @@ try {
   await page.getByLabel('What should the agent address?', { exact: true }).fill('Correct the fixture output without changing the approved scope.');
   await capture(page, '02-recovery-controls');
   await page.getByRole('button', { name: 'Fix and verify', exact: true }).click();
-  const repairing = await call(5, 'building');
+  const repairing = await call(6, 'building');
   assert.match(repairing.request.prompt, /Correct the fixture output/);
   await writeFile(join(repairing.request.cwd, 'result.txt'), 'Acceptance fixture result, corrected implementation.\n');
   repairing.finish('Corrected result.txt within the approved RFC.');
-  const finalVerification = await call(6, 'verification');
+  const finalVerification = await call(7, 'verification');
   const evidenceDir = join(finalVerification.request.cwd, '.muon-evidence');
   await mkdir(evidenceDir);
   const actualScreenshot = join(evidenceDir, 'workflow.png');
@@ -265,7 +265,7 @@ try {
   await capture(page, '04-recording-playback');
   check('Original screenshot renders and expands; actual video loads, plays, seeks, serves HTTP byte ranges, and downloads unchanged.');
 
-  await page.getByRole('tab', { name: /^Files/ }).click();
+  await page.getByRole('tab', { name: /^Changes/ }).click();
   await expect(page.getByText('result.txt', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Close task', exact: true }).click();
   await page.getByRole('button').filter({ hasText: group.title }).click();
@@ -286,7 +286,7 @@ try {
 
   const integration = await service.createTask({ title: 'Review frozen dependency input', status: 'todo', blockedByIds: [child.id] });
   await service.updateSettings({ dispatcherEnabled: true });
-  const integrationPlan = await call(7, 'planning');
+  const integrationPlan = await call(8, 'planning');
   integrationPlan.finish('# Integration RFC\n\nUse the frozen result.txt patch from the completed dependency.\n\nThe owner reviews these exact inputs before implementation.');
   const integrationReview = await waitTask(integration.id, 'in_review');
   assert.equal(integrationReview.plans[0].dependencyInputs?.length, 1);
@@ -308,15 +308,15 @@ try {
   await page.getByRole('button', { name: 'Chief of staff', exact: true }).click();
   await page.getByLabel('Message your chief of staff', { exact: true }).fill('Capture a backlog follow-up for this fixture.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
-  const chief = await call(8, 'chief');
+  const chief = await call(9, 'chief');
   await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token } });
   chief.finish('Captured the follow-up in the backlog.');
   await expect(page.getByRole('button').filter({ hasText: 'Fixture follow-up' })).toBeVisible();
   await page.getByRole('button').filter({ hasText: 'Fixture follow-up' }).click();
-  await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'Chief of staff', exact: true })).toBeVisible();
-  await page.locator('.detail-breadcrumb').getByRole('button', { name: 'Chief of staff', exact: true }).click();
+  await expect(page.locator('.detail-breadcrumb').getByRole('button', { name: 'All tasks', exact: true })).toBeVisible();
+  await page.goBack();
   await expect(page.getByLabel('Message your chief of staff', { exact: true })).toBeVisible();
-  check('Chief CLI operations create persisted task links and task back-navigation returns to the Chief view.');
+  check('Chief CLI operations create persisted task links and browser Back returns to the Chief conversation.');
   assert.deepEqual(errors, []);
   check('No browser page errors were observed.');
   succeeded = true;

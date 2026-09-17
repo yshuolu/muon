@@ -4,6 +4,7 @@ import type { Task } from '../shared/types';
 import { ApiError } from '../shared/api-client';
 import { api, useWorkspace } from './lib/api';
 import { visibleAttention } from './lib/utils';
+import { useVisualViewport } from './lib/use-visual-viewport';
 import { AttentionView } from './components/attention';
 import { ChiefView } from './components/chief';
 import { MuonMark } from './components/common';
@@ -36,6 +37,7 @@ export function App() {
   const [layout, setLayout] = useState<'list' | 'board'>('list');
   const [selectedId, setSelectedId] = useState<string | null>(initialLocation.current.taskId);
   const [chatId, setChatId] = useState<string | null>(initialLocation.current.chatId);
+  const { style: viewportStyle, compact: compactViewport } = useVisualViewport(view === 'chief' || view === 'planning-chat' || selectedId !== null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const navigate = useCallback((nextView: View, taskId: string | null = null) => {
     const path = pathFor(nextView, taskId);
@@ -103,7 +105,7 @@ export function App() {
   const todo = snapshot.tasks.filter(task => task.status === 'todo' && task.kind !== 'group').length;
   const title = view === 'tasks' ? 'All tasks' : view === 'attention' ? 'Attention' : view === 'chief' ? 'Chief of staff' : 'Planning thread';
   const compactPlanningChat = view === 'planning-chat' && chatId !== null;
-  return <div className="app-shell">
+  return <div className={`app-shell${compactViewport ? ' viewport-compact' : ''}`} style={viewportStyle}>
     {sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
       <button className="workspace-selector" onClick={() => setSettings(true)}><MuonMark /><span>Muon<span>Personal workspace</span></span><ChevronDown size={14} /></button>

@@ -103,6 +103,8 @@ Choose the quick planning chat's model from the dropdown in its message toolbar.
 
 Planning chats use a compact toolbar for navigation and **Taskify**, leaving the rest of the view for the conversation. Chats are temporary and disappear when discarded or when the server restarts. If an old chat is no longer available, choose **Start new chat** on that screen or **Create task** in the sidebar to open a fresh conversation.
 
+Chief, planning chats, task Comments, and RFC discussions share the same scrolling behavior. Sending reveals your message; incoming replies follow only while you are at the latest messages. Reading older messages keeps your place and shows a compact new-message control and **Jump to latest**. Switching conversations or task tabs restores your place while the app page remains open. On narrow screens, the Plan tab switches between **RFC** and **Discussion**, keeping the reply box visible. Reloading clears reading positions; it does not change the underlying conversation's persistence.
+
 Choose the chief of staff's model directly from the dropdown in its message toolbar; selections save immediately. The menu includes the configured default, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model available to your Claude Code account; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
 
 Choose **Configure SOUL** in the Chief composer to edit the Chief's per-project persona and working style. The editor supports Markdown, shows a live preview, and saves the SOUL for future Chief requests. Keep permissions, RFC approvals, and other safety rules out of the SOUL; those system rules always remain in force. Changes are blocked while a Chief request is queued or running.
@@ -138,6 +140,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Actual Codex workflow validation](docs/codex-live-validation.md)
 - [Actual Claude validation](docs/claude-live-validation.md)
 - [Browser workflow and media validation](docs/browser-validation.md)
+- [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh
 pnpm run typecheck
@@ -148,3 +151,5 @@ pnpm run build
 Tests use actual temporary SQLite databases and Git repositories plus controlled provider executables. They cover approval races, dispatch capacity, dependencies, group rollups, chief mutations, recovery, cancellation, restart recovery, provider framing, artifact containment, recording byte ranges, and HTTP validation. They do not spend model credits. Separate opt-in live validation scripts exercise the real authenticated providers in isolated repositories and independently rerun their tests; see the linked acceptance records.
 
 `pnpm run test:browser` runs the complete browser acceptance with controlled agents, actual SQLite/Git worktrees, and recorded media. Install its dedicated Chromium runtime once with `pnpm exec playwright install chromium` if it is not already present. `pnpm run test:live:claude`, `pnpm run test:live:codex`, `pnpm run test:live:chief`, and `pnpm run test:live:dependencies` use your authenticated provider accounts and make real model calls.
+
+`pnpm run test:browser:scroll` checks conversation scrolling in desktop and mobile Chromium with controlled agents and isolated data, including send timing, reading anchors, unread navigation, media resizing, and position restoration.

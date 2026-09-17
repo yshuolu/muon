@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUp, Check, CheckCircle2, ChevronRight, FileText, Loader2, PanelLeft, X } from 'lucide-react';
-import type { AppSnapshot, PlanningChat, Task } from '../../shared/types';
+import type { AppSnapshot, PlanningChat, PlanningChatMessage, Task } from '../../shared/types';
 import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
+import { useConversationScroll } from '../lib/conversation-scroll';
 import { Markdown, MuonMark } from './common';
+import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
 import { TaskDialog } from './task-dialog';
 
@@ -24,7 +26,11 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
   const model = chat?.model ?? chatConfig.model;
   const modelOptions = [...new Set([chatConfig.model, model, 'opus', 'sonnet', 'haiku'])];
   const modelDisabled = !chat || busy || savingModel || chat.busy;
-  const conversation = useRef<HTMLDivElement>(null);
+  const scroll = useConversationScroll({
+    conversationKey: JSON.stringify([snapshot.scope.workspaceId, snapshot.scope.projectId, 'planning', chatId]),
+    messages: chat?.messages ?? [],
+    ready: Boolean(chat),
+  });
   const chatMutationVersion = useRef(0);
   const chatLoadVersion = useRef(0);
   const appliedChatLoadVersion = useRef(0);
@@ -51,7 +57,6 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     const timer = setInterval(() => { void load(); }, 1200);
     return () => clearInterval(timer);
   }, [chat?.busy, chatId]);
-  useEffect(() => { conversation.current?.scrollTo({ top: conversation.current.scrollHeight, behavior: 'smooth' }); }, [chat?.messages.length]);
   function closeModelEdit() {
     setCustomModel(false);
     requestAnimationFrame(() => {
@@ -79,7 +84,13 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     event.preventDefault(); if (!content.trim() || modelDisabled || customModel) return;
     ++chatMutationVersion.current;
     setBusy(true); setSendError(null);
-    try { await api(`/planning-chats/${chatId}/messages`, 'POST', { content: content.trim() }); setContent(''); await load(); }
+    const intent = scroll.beginSend();
+    try {
+      const message = await api<PlanningChatMessage>(`/planning-chats/${chatId}/messages`, 'POST', { content: content.trim() });
+      scroll.acceptSend(intent, message.id);
+      setContent('');
+      await load();
+    }
     catch (cause) { setSendError(cause instanceof Error ? cause.message : 'Could not send your message.'); }
     finally { setBusy(false); }
   }
@@ -93,14 +104,14 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
       {snapshot.runtime.demo && <span className="demo-badge">Demo workspace</span>}
       <Button size="sm" aria-label="Taskify conversation" onClick={() => setTaskify(true)} disabled={modelDisabled || !chat?.messages.length}><CheckCircle2 size={15} />Taskify</Button>
     </header>
-    <div ref={conversation} className="planning-chat-conversation">
+    <ConversationViewport scroll={scroll} className="planning-chat-conversation" label="Planning conversation">
       {!chat && !error && <div className="planning-chat-empty"><Loader2 size={18} className="spin" />Opening planning thread…</div>}
       {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{missingChat ? 'This planning chat is no longer available.' : error}</strong>{missingChat && <><p>It may have been discarded or lost when the server restarted.</p><Button disabled={creatingChat} onClick={() => void onNewChat()}>{creatingChat ? 'Opening chat…' : 'Start new chat'}</Button></>}<Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
       {chat && !chat.messages.length && <div className="planning-chat-empty"><div className="chief-orb"><MuonMark /></div><h2>What are you thinking about?</h2><p>Explore the problem first. I’ll help turn the conversation into a clear task when you’re ready.</p></div>}
-      {chat?.messages.map(message => <article key={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>Claude Code · Read-only</span>}</div><Markdown>{message.content}</Markdown></div></article>)}
+      {chat?.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>Claude Code · Read-only</span>}</div><Markdown>{message.content}</Markdown></div></article>)}
       {chat?.error && <p className="form-error" role="alert">{chat.error}</p>}
       {chat?.busy && <div className="chief-working"><span className="working-dots"><i /><i /><i /></span>{chat.activity ?? 'Planning partner is thinking…'}</div>}
-    </div>
+    </ConversationViewport>
     <div className="planning-chat-composer-wrap">
       {!snapshot.runtime.providers.claude && <p className="form-notice">Claude Code is not detected. Install it, sign in, and restart the local server.</p>}
       {sendError && <p className="form-error" role="alert">{sendError}</p>}
