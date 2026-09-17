@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const prioritySchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 export const taskReferenceSchema = z.string().trim().min(1).max(240);
 export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled']);
+export const modelIdentifierSchema = z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]*$/, 'Enter a model alias or identifier without spaces.');
 export const createTaskSchema = z.strictObject({
   title: z.string().trim().min(1).max(240), description: z.string().max(30_000).optional(),
   provider: z.enum(['claude', 'codex']).optional(), priority: prioritySchema.optional(),
@@ -15,7 +16,7 @@ export const editTaskSchema = createTaskSchema.omit({ kind: true }).partial().ex
 export const settingsSchema = z.strictObject({
   maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
   defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
-  chiefModel: z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]*$/, 'Enter a model alias or identifier without spaces.').nullable().optional(),
+  chiefModel: modelIdentifierSchema.nullable().optional(),
   chiefSoul: z.string().trim().max(20_000).nullable().optional(),
 });
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
@@ -27,6 +28,7 @@ export const taskCommentSchema = z.strictObject({
 });
 export const chiefMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const planningChatMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
+export const updatePlanningChatSchema = z.strictObject({ model: modelIdentifierSchema.nullable() });
 export const emptyMutationSchema = z.strictObject({});
 export const importAssetSchema = z.strictObject({ path: z.string().min(1).max(2000) });
 export const attachAssetSchema = z.strictObject({ assetId: z.string().min(1).max(200) });
@@ -51,6 +53,7 @@ export type RequestPlanChangesRequest = z.infer<typeof requestChangesSchema>;
 export type PlanCommentRequest = z.infer<typeof planCommentSchema>;
 export type TaskCommentRequest = z.infer<typeof taskCommentSchema>;
 export type ChiefMessageRequest = z.infer<typeof chiefMessageSchema>;
+export type UpdatePlanningChatRequest = z.infer<typeof updatePlanningChatSchema>;
 export type ListTasksQuery = z.input<typeof listTasksQuerySchema>;
 export type ListAttentionQuery = z.input<typeof listAttentionQuerySchema>;
 export interface ApiErrorResponse { error: string }

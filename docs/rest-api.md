@@ -89,6 +89,7 @@ Use Markdown references directly in descriptions, comments, plans, results, or e
 | `POST /chief/messages` | `{ "content": "…" }` | 202 persisted user `ChiefMessage` |
 | `POST /planning-chats` | `{}` | 201 disposable read-only planning chat |
 | `GET /planning-chats/:id` |  | Current planning chat messages and activity |
+| `PATCH /planning-chats/:id` | `{ "model": "sonnet" }` or `{ "model": null }` | 200 planning chat with its selected model |
 | `POST /planning-chats/:id/messages` | `{ "content": "…" }` | 202 queued read-only planning reply |
 | `POST /planning-chats/:id/taskify` | `CreateTaskRequest` | 201 creates a normal task with the chat transcript in its description |
 | `DELETE /planning-chats/:id` | `{}` | 200 discards the chat and aborts an active reply |
@@ -117,6 +118,8 @@ Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnab
 Chief messages accept 1–30,000 nonblank characters. A simultaneous or already-pending chief request returns 409. A 202 response means the request was recorded for dispatch; poll `/chief/messages` and `/runtime` for the final result. Creating a Todo task similarly records it immediately; the dispatcher selects eligible work within the shared concurrency limit.
 
 Planning chats are separate, disposable read-only threads. They are held in memory, excluded from `/state`, the Chief history, and task navigation, and can be addressed through their `/planning-chats/:id` URL while the local server is running. Their provider may inspect the configured repository but cannot edit files or mutate tasks. Taskification is explicit; it copies the conversation into the new task description within the normal 30,000-character description limit, after which the normal RFC approval workflow applies.
+
+Each planning chat includes `model`, initially `null` for the configured Claude default. The owner may change it using `PATCH /planning-chats/:id`; model identifiers follow the same validation as `chiefModel`. Changes return 409 while a reply is being admitted or running. The selection applies to subsequent replies in that chat, including after a provider failure, and lasts until the chat is discarded or the server restarts. It does not change chief settings or task execution models. Model availability is checked by Claude when the next reply runs.
 
 ## Errors
 

@@ -6,7 +6,7 @@ export interface AgentRequest {
   phase: AgentPhase;
   prompt: string;
   cwd: string;
-  /** Overrides the configured Claude model for a chief request only. */
+  /** Overrides the configured Claude model for a chief or disposable chat request. */
   model?: string;
   sessionId?: string;
   signal?: AbortSignal;

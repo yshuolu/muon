@@ -194,6 +194,50 @@ describe('HTTP validation and local boundary', () => {
 });
 
 describe('REST record resources', () => {
+  it('selects a planning-chat model, switches after a limit error, and restores the configured default', async () => {
+    const chat = await (await request('/api/planning-chats', 'POST', {})).json();
+    expect(chat.model).toBeNull();
+    const selected = await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: '  sonnet[1m]  ' });
+    expect(selected.status).toBe(200);
+    expect(await selected.json()).toMatchObject({ id: chat.id, model: 'sonnet[1m]', messages: [] });
+    expect((await (await request(`/api/planning-chats/${chat.id}`)).json()).model).toBe('sonnet[1m]');
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Explore this idea.' })).status).toBe(202);
+    expect(claude.calls[0].request).toMatchObject({ phase: 'chat', model: 'sonnet[1m]' });
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'opus' })).status).toBe(409);
+    claude.calls[0].reject(new Error("You've reached your Fable limit."));
+    await eventually(() => !service.getPlanningChat(chat.id).busy);
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'opus' })).status).toBe(200);
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Continue with this model.' })).status).toBe(202);
+    expect(claude.calls[1].request.model).toBe('opus');
+    expect(claude.calls[1].request.prompt).toContain('Explore this idea.');
+    expect(service.getPlanningChat(chat.id).error).toBeUndefined();
+    claude.calls[1].resolve({ text: 'Here is the next step.' });
+    await eventually(() => !service.getPlanningChat(chat.id).busy);
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: null })).status).toBe(200);
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Use the configured default.' })).status).toBe(202);
+    expect(claude.calls[2].request.model).toBeUndefined();
+    expect(service.createPlanningChat().model).toBeNull();
+    expect((await repository.settings(scope)).chiefModel).toBeUndefined();
+  });
+
+  it.each(['', '   ', '-p', 'model --tools Bash', 'model\nname', 'model;command', 'x'.repeat(201), 42, {}])('rejects invalid planning-chat models: %j', async model => {
+    const chat = service.createPlanningChat();
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model })).status).toBe(400);
+    expect(service.getPlanningChat(chat.id).model).toBeNull();
+  });
+
+  it('requires an explicit model selection and preserves the owner boundary for planning chats', async () => {
+    const chat = service.createPlanningChat();
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', {})).status).toBe(400);
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet', busy: false })).status).toBe(400);
+    expect((await request('/api/planning-chats/missing', 'PATCH', { model: 'sonnet' })).status).toBe(404);
+    await service.sendChief('Organize the project');
+    await eventually(() => claude.calls.length === 1);
+    const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet' }, headers)).status).toBe(403);
+    expect(service.getPlanningChat(chat.id).model).toBeNull();
+  });
+
   it('keeps planning chats disposable and taskifies only on explicit request', async () => {
     const created = await request('/api/planning-chats', 'POST', {});
     expect(created.status).toBe(201);

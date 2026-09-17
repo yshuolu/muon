@@ -124,6 +124,32 @@ describe('ClaudeCodeAdapter', () => {
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
   });
+  it.each([false, true])('selects chat models while preserving the configured permission policy with bypassPermissions=%s', async bypassPermissions => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions });
+    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'sonnet[1m]' });
+    let { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet[1m]');
+    expect(args[args.indexOf('--effort') + 1]).toBe('max');
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    if (bypassPermissions) {
+      expect(args).toContain('--dangerously-skip-permissions');
+      expect(args).not.toContain('--restricted');
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Edit,Write,Bash');
+      expect(settings.sandbox).toMatchObject({ enabled: false, allowUnsandboxedCommands: true });
+    } else {
+      expect(args).toContain('--restricted');
+      expect(args).not.toContain('--dangerously-skip-permissions');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep');
+      expect(settings.sandbox).toMatchObject({ allowUnsandboxedCommands: false, network: { allowedDomains: [], allowLocalBinding: false } });
+    }
+    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Use the configured default' });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
+    await adapter.run({ provider: 'claude', phase: 'building', cwd: directory, prompt: 'Implement the approved task', model: 'chat-only-model' });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
+  });
   it('returns only the final result and frames split UTF-8 correctly', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     expect(await adapter.available()).toBe(true);

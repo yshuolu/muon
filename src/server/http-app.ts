@@ -8,7 +8,7 @@ import type { TaskService } from './task-service';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
-  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema,
+  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema, updatePlanningChatSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
@@ -234,6 +234,10 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     return c.json(service.createPlanningChat(), 201);
   });
   app.get('/api/planning-chats/:id', async c => c.json(service.getPlanningChat(c.req.param('id'))));
+  app.patch('/api/planning-chats/:id', async c => {
+    const { model } = updatePlanningChatSchema.parse(await c.req.json());
+    return c.json(service.updatePlanningChat(c.req.param('id'), model));
+  });
   app.post('/api/planning-chats/:id/messages', async c => {
     const { content } = planningChatMessageSchema.parse(await c.req.json());
     return c.json(await service.sendPlanningChat(c.req.param('id'), content), 202);

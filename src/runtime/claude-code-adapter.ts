@@ -74,9 +74,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (request.provider !== this.provider) throw new Error('Claude adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
     const chief = request.phase === 'chief';
+    const chat = request.phase === 'chat';
     const discussion = request.phase === 'discussion';
-    const model = chief ? request.model ?? this.model : this.model;
-    const readonly = request.phase === 'planning' || request.phase === 'chat' || discussion;
+    const model = chief || chat ? request.model ?? this.model : this.model;
+    const readonly = request.phase === 'planning' || chat || discussion;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
     const cliExecutable = cli?.command.replace(/^'|'$/g, '');
@@ -84,7 +85,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
     if (this.bypassPermissions && !chief && !discussion) {
-      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(this.model ? ['--model', this.model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(model ? ['--model', model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
       return this.runProcess(request, args);
     }
     const settings = {

@@ -6,7 +6,7 @@ Muon owns the task workflow, execution limits, approvals, workspaces, and durabl
 
 `AgentAdapter.run()` accepts a provider, workflow phase, prompt, absolute working directory, optional provider session ID, and cancellation signal. It returns final text and a provider session ID. `available()` checks whether the selected executable answers `--version`; it does not prove authentication, account capacity, or sandbox readiness.
 
-Chief requests may supply a `model` override from the project's saved `chiefModel` setting. The Claude adapter uses it only for the chief phase, retaining its configured model when the override is absent. Coding, planning, chat, and verification keep the configured model and thinking effort. Model selection does not change the chief's scoped CLI permissions.
+Chief requests may supply a `model` override from the project's saved `chiefModel` setting; disposable planning chats supply their own selected `model`. The Claude adapter honors overrides in the chief and chat phases, retaining its configured model when the override is absent. Task planning, building, discussion, and verification keep the configured model. Thinking effort stays configured for every phase. Model selection preserves the chief's scoped CLI permissions and the configured permission policy for chats.
 
 The adapters do not decide whether an RFC was approved. The application service must enforce the owner approval gate before invoking a building run, pass the approved RFC into that run, and persist the returned result. The same Claude adapter executes chief-of-staff requests. It executes Muon CLI commands against the REST service; its final Markdown is display-only. The agent never opens the task database. See [REST API](rest-api.md) and [CLI](cli.md).
 

@@ -539,7 +539,7 @@ export class TaskService implements Dispatcher {
   }
   createPlanningChat(): PlanningChat {
     const timestamp = now();
-    const chat: PlanningChat = { id: randomUUID(), messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false, activity: null };
+    const chat: PlanningChat = { id: randomUUID(), model: null, messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false, activity: null };
     this.planningChats.set(chat.id, chat);
     return chat;
   }
@@ -548,35 +548,47 @@ export class TaskService implements Dispatcher {
     if (!chat) throw new DomainError('Planning chat not found or already discarded.', 404);
     return chat;
   }
+  updatePlanningChat(id: string, model: string | null): PlanningChat {
+    const chat = this.getPlanningChat(id);
+    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before changing its model.', 409);
+    chat.model = model; chat.updatedAt = now();
+    return chat;
+  }
   async sendPlanningChat(id: string, content: string) {
     const chat = this.getPlanningChat(id);
     if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('The planning chat is still waiting for a reply.', 409);
-    const settings = await this.repo.settings(this.scope);
-    if (this.active.size + this.planningChatReservations.size >= settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
+    // Reserve before loading configuration so a concurrent send or model edit cannot change this turn.
     this.planningChatReservations.add(id);
-    const project = await this.repo.project(this.scope);
-    if (!project.repositoryPath) { this.planningChatReservations.delete(id); throw new DomainError('Set a repository path before starting a planning chat.'); }
-    const message: PlanningChatMessage = { id: randomUUID(), role: 'user', content, createdAt: now() };
-    chat.messages = [...chat.messages, message]; chat.updatedAt = now(); chat.error = undefined; chat.busy = true; chat.activity = 'Thinking through your idea…';
-    const abort = new AbortController();
-    const key = `planning-chat:${id}`;
-    const done = Promise.resolve().then(async () => {
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chat', prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
-      if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
-      const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: result.text.trim(), createdAt: now() };
-      chat.messages = [...chat.messages, reply]; chat.updatedAt = now();
-    }).catch(error => {
-      if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
-      chat.error = error instanceof Error ? error.message : String(error); chat.updatedAt = now();
-    }).finally(() => {
-      chat.busy = false; chat.activity = null; this.active.delete(key); this.planningChatReservations.delete(id); void this.tick().catch(console.error);
-    });
-    this.active.set(key, { abort, done });
-    return message;
+    try {
+      const settings = await this.repo.settings(this.scope);
+      const project = await this.repo.project(this.scope);
+      if (this.planningChats.get(id) !== chat) throw new DomainError('Planning chat not found or already discarded.', 404);
+      if (this.active.size + this.planningChatReservations.size > settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
+      if (!project.repositoryPath) throw new DomainError('Set a repository path before starting a planning chat.');
+      const message: PlanningChatMessage = { id: randomUUID(), role: 'user', content, createdAt: now() };
+      chat.messages = [...chat.messages, message]; chat.updatedAt = now(); chat.error = undefined; chat.busy = true; chat.activity = 'Thinking through your idea…';
+      const abort = new AbortController();
+      const key = `planning-chat:${id}`;
+      const done = Promise.resolve().then(async () => {
+        const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chat', model: chat.model ?? undefined, prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
+        if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
+        const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: result.text.trim(), createdAt: now() };
+        chat.messages = [...chat.messages, reply]; chat.updatedAt = now();
+      }).catch(error => {
+        if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
+        chat.error = error instanceof Error ? error.message : String(error); chat.updatedAt = now();
+      }).finally(() => {
+        chat.busy = false; chat.activity = null; this.active.delete(key); void this.tick().catch(console.error);
+      });
+      this.active.set(key, { abort, done });
+      return message;
+    } finally {
+      this.planningChatReservations.delete(id);
+    }
   }
   async taskifyPlanningChat(id: string, input: CreateTaskInput) {
     const chat = this.getPlanningChat(id);
-    if (chat.busy) throw new DomainError('Wait for the planning reply before creating the task.', 409);
+    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before creating the task.', 409);
     const transcript = chat.messages.map(message => `**${message.role === 'user' ? 'You' : 'Planning partner'}:**\n${message.content}`).join('\n\n');
     const context = transcript ? `\n\n## Planning conversation\n\n${transcript}` : '';
     const description = `${input.description ?? ''}${context}`.slice(0, 30_000);

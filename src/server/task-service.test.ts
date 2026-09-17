@@ -268,6 +268,73 @@ describe('TaskService workflow', () => {
     expect((await waitForCall(f, 2, 'chief')).request.model).toBeUndefined();
   });
 
+  it('reserves a planning chat before configuration loads so its selected model cannot change mid-send', async () => {
+    const f = await fixture();
+    const chat = f.service.createPlanningChat();
+    f.service.updatePlanningChat(chat.id, 'sonnet');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const settings = f.repo.settings.bind(f.repo);
+    vi.spyOn(f.repo, 'settings').mockImplementationOnce(async target => { await gate; return settings(target); });
+    const sending = f.service.sendPlanningChat(chat.id, 'Use the current model');
+    try {
+      expect(chat.busy).toBe(false);
+      expect(() => f.service.updatePlanningChat(chat.id, 'opus')).toThrow('before changing its model');
+      await expect(f.service.sendPlanningChat(chat.id, 'Duplicate turn')).rejects.toMatchObject({ status: 409 });
+      await expect(f.service.taskifyPlanningChat(chat.id, { title: 'Too soon' })).rejects.toMatchObject({ status: 409 });
+    } finally { release(); }
+    await sending;
+    const call = await waitForCall(f, 0, 'chat');
+    expect(call.request.model).toBe('sonnet');
+    expect(chat.messages).toHaveLength(1);
+    call.finish('The selected model answered.');
+    await eventually(() => !chat.busy, 'planning chat finished');
+    expect(f.service.updatePlanningChat(chat.id, 'opus').model).toBe('opus');
+  });
+
+  it('releases planning-chat reservations when configuration fails so the owner can switch and retry', async () => {
+    const f = await fixture();
+    const chat = f.service.createPlanningChat();
+    vi.spyOn(f.repo, 'project').mockRejectedValueOnce(new Error('Project lookup failed'));
+    await expect(f.service.sendPlanningChat(chat.id, 'Explore this idea')).rejects.toThrow('Project lookup failed');
+    expect(chat.messages).toEqual([]);
+    expect(f.service.updatePlanningChat(chat.id, 'sonnet').model).toBe('sonnet');
+    await f.service.sendPlanningChat(chat.id, 'Try again');
+    expect((await waitForCall(f, 0, 'chat')).request.model).toBe('sonnet');
+  });
+
+  it('counts each running planning chat once when admitting another chat', async () => {
+    const f = await fixture(2);
+    const first = f.service.createPlanningChat();
+    const second = f.service.createPlanningChat();
+    const third = f.service.createPlanningChat();
+    await f.service.sendPlanningChat(first.id, 'First idea');
+    await f.service.sendPlanningChat(second.id, 'Second idea');
+    await waitForCall(f, 1, 'chat');
+    await expect(f.service.sendPlanningChat(third.id, 'Third idea')).rejects.toMatchObject({ status: 409 });
+    expect(third.messages).toEqual([]);
+    expect(f.service.updatePlanningChat(third.id, 'sonnet').model).toBe('sonnet');
+    f.claude.calls[0].finish('First reply');
+    await eventually(() => !first.busy, 'first planning chat finished');
+    await f.service.sendPlanningChat(third.id, 'Third idea');
+    expect((await waitForCall(f, 2, 'chat')).request.model).toBe('sonnet');
+  });
+
+  it('does not launch a discarded planning chat after an in-flight configuration read', async () => {
+    const f = await fixture();
+    const chat = f.service.createPlanningChat();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const project = f.repo.project.bind(f.repo);
+    vi.spyOn(f.repo, 'project').mockImplementationOnce(async target => { await gate; return project(target); });
+    const sending = f.service.sendPlanningChat(chat.id, 'Discard before running');
+    const outcome = sending.catch(error => error);
+    f.service.discardPlanningChat(chat.id);
+    release();
+    expect(await outcome).toMatchObject({ status: 404 });
+    expect(f.claude.calls).toEqual([]);
+  });
+
   it('includes the saved Chief SOUL in the chief prompt and keeps it owner-only', async () => {
     const f = await fixture(2);
     await f.service.updateSettings({ chiefSoul: 'Be concise and ask before expanding scope.' });
