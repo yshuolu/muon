@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { ClaudeCodeAdapter, CodexAdapter, LocalWorktreeProvider } from '../src/runtime/index.js';
 import { createHttpApp } from '../src/server/http-app.js';
+import { singleProjectResolver } from '../src/server/project-registry.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { TaskService } from '../src/server/task-service.js';
@@ -35,7 +36,7 @@ const workspaces = new LocalWorktreeProvider(join(directory, 'worktrees'));
 await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Dependency integration fixture', identifier: 'DEP', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
 const service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude: new ClaudeCodeAdapter(), codex: new CodexAdapter() } });
 await service.initialize();
-const app = createHttpApp(service, artifacts);
+const app = createHttpApp(singleProjectResolver(service), artifacts);
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await app.request(`http://localhost:4310${path}`, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   assert.ok(response.ok, `HTTP ${response.status}: ${await response.clone().text()}`);

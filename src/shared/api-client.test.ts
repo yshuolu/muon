@@ -23,3 +23,16 @@ it('lets the platform set the multipart boundary and retains original upload byt
   });
   expect(await new ApiClient({ fetch: fetcher }).request('/assets', 'POST', form)).toEqual({ id: 'asset' });
 });
+
+it('addresses project-scoped resources under the selected project and leaves workspace paths alone', async () => {
+  const urls: string[] = [];
+  const client = new ApiClient({ project: 'local-project', fetch: async url => { urls.push(String(url)); return Response.json({}); } });
+  for (const path of ['/state', '/api/tasks?status=todo', '/project', '/projects', '/projects/other/archive', '/health', '/api', '/assets/a/content']) await client.request(path);
+  expect(urls).toEqual([
+    '/api/projects/local-project/state', '/api/projects/local-project/tasks?status=todo', '/api/projects/local-project/project',
+    '/api/projects', '/api/projects/other/archive', '/api/health', '/api', '/api/projects/local-project/assets/a/content',
+  ]);
+  client.project = undefined;
+  await client.request('/state');
+  expect(urls.at(-1)).toBe('/api/state');
+});

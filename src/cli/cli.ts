@@ -8,6 +8,8 @@ export const CLI_HELP = `Muon — task system REST client
 Usage: muon <resource> <command> [arguments] [options]
 
   health | state | project | runtime
+  projects [list] | projects create --json '{"name":"…","repositoryPath":"/abs/repo"}'
+  projects archive <id> | projects restore <id>
   settings [get] | settings update --json <object>
   tasks list [--status todo] [--provider claude] [--kind group]
              [--parent <id>] [--blocked-by <id>] [--search <text>]
@@ -32,6 +34,8 @@ Usage: muon <resource> <command> [arguments] [options]
   api <METHOD> /api/<path> [--json <object>] [--output <path|->]
 
 Task references accept UUIDs or identifiers such as MUO-12.
+Project-scoped commands address the server's default project unless
+--project <id|identifier> or MUON_PROJECT selects another one.
 JSON bodies: --json '{...}', --file body.json, or --file - for stdin.
 JSON is the default output; downloads use --output (- writes raw bytes).
 MUON_API_URL defaults to http://127.0.0.1:4310. MUON_API_TOKEN is read
@@ -93,7 +97,12 @@ export async function runCli(args: string[], io: CliIO): Promise<number> {
     let path = ''; let method = 'GET'; let body: unknown; let output: string | undefined; let planExport = false;
     const [resource, command, recordId] = words;
     if (['health', 'state', 'project', 'runtime'].includes(resource)) { expect(1); path = `/api/${resource}`; }
-    else if (resource === 'settings') {
+    else if (resource === 'projects') {
+      if (!command || command === 'list') { expect(command ? 2 : 1); path = '/api/projects'; }
+      else if (command === 'create') { expect(2); path = '/api/projects'; method = 'POST'; body = await readBody(); }
+      else if (command === 'archive' || command === 'restore') { expect(3); path = `/api/projects/${id(recordId)}/${command}`; method = 'POST'; body = {}; }
+      else fail('Unknown projects command.');
+    } else if (resource === 'settings') {
       if (!command || command === 'get') { expect(command ? 2 : 1); path = '/api/settings'; }
       else if (command === 'update') { expect(2); path = '/api/settings'; method = 'PATCH'; body = await readBody(); }
       else fail('Unknown settings command.');
@@ -166,8 +175,9 @@ export async function runCli(args: string[], io: CliIO): Promise<number> {
       if (body !== undefined && ['GET', 'HEAD'].includes(method)) fail(`${method} requests cannot have a JSON body.`);
       if (body === undefined && !['GET', 'HEAD'].includes(method)) body = {};
     } else fail('Unknown command. Run muon --help for usage.');
+    const project = option('project') || io.env.MUON_PROJECT || undefined;
     checkFlags();
-    const client = new ApiClient({ baseUrl: io.env.MUON_API_URL || 'http://127.0.0.1:4310', token: io.env.MUON_API_TOKEN, fetch: io.fetch });
+    const client = new ApiClient({ baseUrl: io.env.MUON_API_URL || 'http://127.0.0.1:4310', token: io.env.MUON_API_TOKEN, project, fetch: io.fetch });
     if (output !== undefined) {
       const result = planExport ? await client.request<{ content: string; format: string }>(path).then(plan => {
         if (typeof plan.content !== 'string' || !['markdown', 'html'].includes(plan.format)) throw new ApiError('Muon API returned an invalid plan.', 0, 'invalid_response');

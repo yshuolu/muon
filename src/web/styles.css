@@ -1217,3 +1217,31 @@ audio.asset-media { margin: 20px auto; width: calc(100% - 40px); }
   .library-actions { width: 100%; justify-content: flex-end; }
   .library-item small span:nth-child(2) { display: none; }
 }
+.project-nav > button[aria-current="true"] { color: var(--sidebar-accent-foreground); }
+.project-nav > button.project-add { color: var(--muted-foreground); font-size: 12px; }
+.project-nav > button.project-add:hover { color: var(--foreground); }
+.project-form { display: grid; gap: 17px; }
+.project-form > label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted-foreground); }
+.project-form input { font-size: 14px; }
+.project-form .dialog-footer { margin-top: 5px; }
+.archive-project { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--muted); }
+.archive-project strong { display: block; font-size: 13px; font-weight: 500; }
+.archive-project small { display: block; margin-top: 5px; font-size: 12px; line-height: 1.6; color: var(--muted-foreground); }
+.archive-confirm { display: flex; flex-shrink: 0; gap: 6px; }
+.archived-projects { display: grid; gap: 8px; margin-top: 14px; }
+.archived-projects > span { font-size: 12px; color: var(--muted-foreground); }
+.archived-projects > div { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.archived-projects > div > span:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.archived-projects strong { font-size: 13px; font-weight: 500; }
+.archived-projects small { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.startup-screen .form-error { max-width: 420px; }
+.startup-archived { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 22px; }
+.startup-archived > span { font-size: 12px; color: var(--muted-foreground); }
+.startup-archived button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 13px; color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.startup-archived button:hover:not(:disabled) { background: var(--accent); }
+@media (max-width: 640px) {
+  .archive-project { align-items: flex-start; flex-direction: column; }
+}
+.archived-projects > div { min-width: 0; }
+.archived-projects > div > span:nth-child(2) { overflow: hidden; }
+.archived-projects > div > .button { flex-shrink: 0; }

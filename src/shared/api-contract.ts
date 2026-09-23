@@ -19,6 +19,12 @@ export const settingsSchema = z.strictObject({
   chiefModel: modelIdentifierSchema.nullable().optional(),
   chiefSoul: z.string().trim().max(20_000).nullable().optional(),
 });
+export const projectIdentifierSchema = z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9]{1,4}$/, 'Identifiers are 2 to 5 letters or digits, starting with a letter.');
+export const createProjectSchema = z.strictObject({
+  name: z.string().trim().min(1).max(100), repositoryPath: z.string().trim().min(1).max(2000),
+  identifier: projectIdentifierSchema.optional(),
+});
+export const updateProjectSchema = z.strictObject({ name: z.string().trim().min(1).max(100).optional(), repositoryPath: z.string().trim().max(2000).optional() });
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });
@@ -58,6 +64,8 @@ export type TaskCommentRequest = z.infer<typeof taskCommentSchema>;
 export type ChiefMessageRequest = z.infer<typeof chiefMessageSchema>;
 export type UpdatePlanningChatRequest = z.infer<typeof updatePlanningChatSchema>;
 export type CreateNoteRequest = z.infer<typeof createNoteSchema>;
+export type CreateProjectRequest = z.input<typeof createProjectSchema>;
+export type UpdateProjectRequest = z.infer<typeof updateProjectSchema>;
 export type ListTasksQuery = z.input<typeof listTasksQuerySchema>;
 export type ListAttentionQuery = z.input<typeof listAttentionQuerySchema>;
 export interface ApiErrorResponse { error: string }

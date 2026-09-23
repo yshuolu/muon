@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server';
 import { chromium, expect, type Browser, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { createHttpApp } from '../src/server/http-app';
+import { singleProjectResolver } from '../src/server/project-registry';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
@@ -42,7 +43,7 @@ const chiefCommands = new LocalChiefCommands({ apiUrl: url, scope });
 const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
 await service.initialize();
 service.start();
-const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
+const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const checks: string[] = [];
@@ -94,7 +95,7 @@ try {
   await checkCompactLayout(page);
   const chatUrl = page.url();
   const chatId = decodeURIComponent(new URL(chatUrl).pathname.split('/').at(-1)!);
-  const chatEndpoint = `**/api/planning-chats/${chatId}`;
+  const chatEndpoint = `**/planning-chats/${chatId}`;
   const composer = page.locator('.planning-chat-composer-wrap');
   const toolbar = composer.locator('.composer-bottom');
   const modelSelect = toolbar.getByRole('combobox', { name: 'Planning chat model', exact: true });
@@ -354,11 +355,11 @@ try {
 
   let createRequests = 0;
   page.on('request', request => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/planning-chats') ++createRequests;
+    if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/planning-chats')) ++createRequests;
   });
   let releaseCreation: (() => void) | undefined;
   const pendingCreation = new Promise<void>(resolveCreation => { releaseCreation = resolveCreation; });
-  await page.route('**/api/planning-chats', async route => {
+  await page.route('**/planning-chats', async route => {
     if (route.request().method() === 'POST') await pendingCreation;
     await route.continue();
   });
@@ -405,7 +406,7 @@ try {
   let discardHeld = false;
   let releaseDiscard: (() => void) | undefined;
   const pendingDiscard = new Promise<void>(resolveDiscard => { releaseDiscard = resolveDiscard; });
-  await page.route(`**/api/planning-chats/${retryChatId}`, async route => {
+  await page.route(`**/planning-chats/${retryChatId}`, async route => {
     if (route.request().method() === 'DELETE') {
       if (failDiscard) {
         await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: deleteError }) });

@@ -8,6 +8,7 @@ import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { TaskService } from '../src/server/task-service.js';
 import { createHttpApp } from '../src/server/http-app.js';
+import { singleProjectResolver } from '../src/server/project-registry.js';
 
 const exec = promisify(execFile);
 const root = resolve('.muon/acceptance', `codex-${Date.now()}`);
@@ -25,7 +26,7 @@ const repo = new SqliteRepository(join(root, 'state.sqlite'));
 const artifacts = new LocalArtifactStore(join(root, 'artifacts'));
 await repo.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Codex live acceptance', identifier: 'LIVE', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: true, defaultProvider: 'codex' });
 const service = new TaskService({ scope, repository: repo, artifacts, workspaces: new LocalWorktreeProvider(join(root, 'worktrees')), adapters: { codex: new CodexAdapter(), claude: new ClaudeCodeAdapter() } });
-const app = createHttpApp(service, artifacts);
+const app = createHttpApp(singleProjectResolver(service), artifacts);
 let taskId = '';
 const start = Date.now();
 async function request(path: string, body: unknown) {

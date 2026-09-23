@@ -8,7 +8,9 @@ Shared request validation and TypeScript input types live in [`src/shared/api-co
 
 ## Identity and access
 
-Every route uses the service’s configured `workspaceId`, `projectId`, and owner scope. The caller cannot select another project or user using request bodies, headers, or query parameters. Task ownership and identifiers are immutable. Records from another scope return 404 and cannot be used as parent/dependency references.
+Every route uses the server's configured `workspaceId` and owner scope. The project is selected by path: each project resource below is served under `/projects/:project/…`, where `:project` is the project's stable ID or its identifier (case-insensitive). The same resources without the prefix, such as `/tasks`, address the workspace's **default project**: the first active project in creation order. They remain for compatibility with single-project clients and return 404 when every project is archived. The caller cannot select another workspace or user using request bodies, headers, or query parameters. Task ownership and identifiers are immutable. Records from another project return 404 and cannot be used as parent/dependency references.
+
+Chief bearer credentials are bound to the project that opened them: they must use the `/projects/:project/…` form for that project, and unprefixed or other-project paths return 403. The chief launcher freezes `MUON_PROJECT` so its CLI does this automatically.
 
 The local HTTP boundary validates the Host and Origin headers, accepts local hosts only, and checks each mutation's content type. The `HttpRequestAccess` interface adds request authorization and optional observation of successful responses. The runtime provides temporary bearer credentials to chief CLI sessions. This allows the server to distinguish the chief from the local owner and reject owner-only actions; a future hosted deployment can provide an authenticated access implementation and scoped services at this boundary. This is not a cloud identity or multi-user implementation.
 
@@ -21,7 +23,9 @@ The chief may manage task records through its authorized CLI calls. It cannot ap
 | Method and path | Response |
 | --- | --- |
 | `GET /health` | `{ "ok": true }` |
-| `GET /state` | `AppSnapshot` with scope, project, settings, tasks, attention, chief messages, runtime |
+| `GET /projects` | Every `Project` in the workspace in creation order, including archived ones (workspace route, never prefixed) |
+| `GET /projects/:project` | One `Project`, archived or active |
+| `GET /state` | `AppSnapshot` with scope, project, settings, tasks, attention, chief messages, runtime, and `projects` (the workspace list) |
 | `GET /project` | `Project`, including configured repository path |
 | `GET /settings` | `Settings`: concurrency, dispatcher state, default provider, optional chief model override and SOUL |
 | `GET /runtime` | `AppSnapshot["runtime"]`: active count, chief state, provider availability, demo flag |
@@ -73,6 +77,10 @@ Use Markdown references directly in descriptions, comments, plans, results, or e
 
 | Method and path | Body | Success response |
 | --- | --- | --- |
+| `POST /projects` | `{ "name": "…", "repositoryPath": "/abs/repo", "identifier"?: "ABC" }` | 201 `Project` with its coordinator started (workspace route) |
+| `PATCH /projects/:project` | `{ "name"?: "…", "repositoryPath"?: "…" }` | 200 `Project`; repository changes use the same guards as `/settings` |
+| `POST /projects/:project/archive` | `{}` | 200 archived `Project`; 409 while agents, a chief request, follow-ups, or in-progress tasks are active |
+| `POST /projects/:project/restore` | `{}` | 200 restored `Project` with its coordinator started again |
 | `POST /tasks` | `CreateTaskRequest` | 201 `Task` |
 | `PATCH /tasks/:task` | `EditTaskRequest` | 200 `Task` |
 | `POST /assets` | Multipart `file` | 201 standalone `Asset` |
@@ -116,6 +124,8 @@ Each comment has `id`, `role`, `content`, and `createdAt`; owner comments includ
 A message interrupts active work, waits for confirmed agent shutdown, and queues a read-only reply in the retained provider session and worktree. Interrupted work then resumes its prior phase with the comment context and existing approval requirements. Questions on Done or Blocked tasks preserve their lifecycle and verification evidence. Comments on unstarted tasks become context for initial planning. Use `mode: "replan"` for changed scope: implementation pauses for a new RFC and explicit owner approval. Comment delivery observes dispatcher capacity and pause settings; poll the task for delivery state and `/comments` for final replies. Failed delivery retains the comments and can be retried with `/comments/retry`.
 
 Recovery preserves prior attempts and artifacts: `retry` resumes the failed phase, `fix` returns to building within the approved scope, and `replan` requires a fresh owner review before building. Recovery feedback is optional and limited to 20,000 characters. The service validates whether each operation is appropriate for the task’s current state.
+
+A `Project` contains `id`, `workspaceId`, `ownerUserId`, `name`, `identifier`, `repositoryPath`, and optional `createdAt` and `archivedAt`. Creating a project requires a name of 1–100 characters and the absolute path of a Git repository root with at least one commit; two projects may share a repository. The identifier is 2–5 letters or digits starting with a letter and must be unique in the workspace; when omitted it is derived from the name (word initials for multi-word names, otherwise the leading letters, with a numeric suffix on collision). New projects start with the default settings (two concurrent agents, dispatch enabled outside demo mode, Claude as the default agent). Archiving stops the project's dispatcher and hides it from prefixed routing (404 `Project is archived`); its records, assets, and worktrees remain, in-memory planning chats are discarded, and restoring starts a fresh coordinator. Project mutations are owner operations.
 
 Settings accepts optional `maxConcurrentAgents` (integer 1–8), `dispatcherEnabled` (boolean), `defaultProvider`, `repositoryPath`, `projectName`, `chiefModel`, and `chiefSoul`. The chief model is a trimmed model alias or identifier of 1–200 characters, starting with a letter or digit and containing only letters, digits, `.`, `_`, `:`, `/`, `[`, `]`, or `-`. Set it to `null` to use the configured Claude default. `chiefSoul` is trimmed text up to 20,000 characters; set it to `null` to restore the default behavior. It is included as owner-authored persona and communication context in future Chief prompts, while Muon's permissions and approval rules remain authoritative. Model and SOUL changes return 409 while a chief request is queued or running. Settings writes and chief submission are serialized so an accepted request retains its selected configuration. Model availability is checked by the Claude runtime when it runs. Repository changes require a valid committed Git root and are rejected while they would disrupt current work. Changing project display name does not change its stable project ID or task identifier prefix.
 

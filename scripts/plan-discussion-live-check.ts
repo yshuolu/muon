@@ -9,6 +9,7 @@ import { TaskService } from '../src/server/task-service';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
+import { singleProjectResolver } from '../src/server/project-registry';
 import type { Task } from '../src/shared/types';
 
 // Opt-in authenticated Claude check: real CLI -> REST -> SQLite -> planning agent.
@@ -53,7 +54,7 @@ await service.initialize();
 assert.equal((await service.snapshot()).runtime.providers.claude, true);
 const port = Number(process.env.MUON_DISCUSSION_TEST_PORT ?? 4334);
 const url = `http://127.0.0.1:${port}`;
-const app = createHttpApp(service, artifacts, { port });
+const app = createHttpApp(singleProjectResolver(service), artifacts, { port });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 service.start();
 console.log(`Live validation directory: ${directory}`);

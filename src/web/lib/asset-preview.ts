@@ -1,4 +1,5 @@
 import type { Asset } from '../../shared/types';
+import { projectApiPrefix } from './project';
 
 export type AssetPreviewKind = 'markdown' | 'image' | 'video' | 'audio' | 'text' | 'download';
 
@@ -15,7 +16,7 @@ export function assetPreviewKind(asset: Pick<Asset, 'name' | 'mediaType'>): Asse
 }
 
 export function assetContentUrl(id: string, download = false): string {
-  return `/api/assets/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`;
+  return `${projectApiPrefix()}/assets/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`;
 }
 
 export function formatAssetSize(bytes: number): string {
@@ -25,7 +26,7 @@ export function formatAssetSize(bytes: number): string {
 }
 
 export function isAssetImageUrl(src: string | undefined): boolean {
-  return typeof src === 'string' && /^\/api\/assets\/[A-Za-z0-9_-]+\/content$/.test(src);
+  return typeof src === 'string' && /^\/api\/(projects\/[A-Za-z0-9_.%~-]+\/)?assets\/[A-Za-z0-9_-]+\/content$/.test(src);
 }
 
 interface MarkdownTree {

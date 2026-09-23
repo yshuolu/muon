@@ -96,6 +96,19 @@ muon tasks update MUO-3 --file - < edits.json
 
 Successful record commands emit one JSON value to stdout. Errors emit one `{ "error": { "code", "message", "status" } }` value to stderr and exit with status 1. HTTP failures preserve the API status and code; local argument and connectivity failures use status 0. Help is ordinary text. No model logs, npm banners, or SQLite output are mixed into command results when using the launcher directly.
 
+## Projects
+
+```sh
+muon projects list
+muon projects create --json '{"name":"Billing service","repositoryPath":"/Users/you/projects/billing"}'
+muon tasks list --project BS
+MUON_PROJECT=BS muon state
+muon projects archive BS
+muon projects restore BS
+```
+
+Project-scoped commands address the server's default project (the first active one) unless `--project <id|identifier>` or the `MUON_PROJECT` environment variable selects another; the flag wins. The CLI then sends those requests under `/api/projects/<project>/…`, including `api` escape-hatch paths, while `projects` and `health` stay workspace-level. The chief's launcher freezes `MUON_PROJECT` to the project that started it, so the chief can only act on its own project.
+
 ## Plans, dependency patches, and asset files
 
 ```sh

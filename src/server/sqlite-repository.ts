@@ -82,6 +82,9 @@ export class SqliteRepository implements Repository {
     if (!project) throw new Error('Project not found');
     return project;
   }
+  async projects(workspaceId: string) {
+    return this.db.prepare('SELECT payload FROM projects WHERE workspace_id=? ORDER BY rowid').all(workspaceId).map(row => decode<Project>(row)!);
+  }
   async saveProject(scope: Scope, project: Project) {
     this.db.prepare('UPDATE projects SET payload=? WHERE workspace_id=? AND project_id=?').run(JSON.stringify(project), ...this.keys(scope));
   }

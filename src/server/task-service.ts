@@ -20,6 +20,8 @@ export interface ServiceOptions {
   scope: Scope; repository: Repository; artifacts: ArtifactStore; workspaces: WorkspaceProvider;
   adapters: Record<'claude' | 'codex', AgentAdapter>; demo?: boolean; chiefCommands?: ChiefCommandGateway;
   assets?: AssetService;
+  /** Shared probe result when several project services share the same adapters. */
+  providerAvailability?: Record<'claude' | 'codex', boolean>;
 }
 
 export class TaskService implements Dispatcher {
@@ -40,8 +42,11 @@ export class TaskService implements Dispatcher {
   private get repo() { return this.options.repository; }
   constructor(private options: ServiceOptions) { this.scope = options.scope; }
   async initialize() {
-    const results = await Promise.allSettled([this.options.adapters.claude.available(), this.options.adapters.codex.available()]);
-    this.availability = { claude: results[0].status === 'fulfilled' && results[0].value, codex: results[1].status === 'fulfilled' && results[1].value };
+    if (this.options.providerAvailability) this.availability = { ...this.options.providerAvailability };
+    else {
+      const results = await Promise.allSettled([this.options.adapters.claude.available(), this.options.adapters.codex.available()]);
+      this.availability = { claude: results[0].status === 'fulfilled' && results[0].value, codex: results[1].status === 'fulfilled' && results[1].value };
+    }
     let interrupted = false;
     for (let task of await this.repo.tasks(this.scope)) {
       if (task.runId || task.status === 'in_progress') {
@@ -492,6 +497,25 @@ export class TaskService implements Dispatcher {
     const attention = (await this.repo.attention(this.scope)).find(item => item.id === id);
     if (!attention) throw new DomainError('Attention item not found.', 404);
     await this.repo.putAttention(this.scope, { ...attention, readAt: now() });
+  }
+  /**
+   * Stops this project's dispatcher only when nothing is running or queued for an agent.
+   * Retained worktrees, reviews, and blocked tasks do not prevent archiving; they resume after restore.
+   */
+  async quiesceForArchive() {
+    this.mutatingRepository = true;
+    try {
+      await this.tickIdle;
+      if (this.active.size || this.chiefActive) throw new DomainError('Wait for active agents and the chief of staff to finish before archiving this project.', 409);
+      if (await this.repo.pendingChief(this.scope)) throw new DomainError('Wait for the queued chief request to finish before archiving this project.', 409);
+      const tasks = await this.repo.tasks(this.scope);
+      if (tasks.some(task => task.followUp)) throw new DomainError('Wait for pending agent replies to finish before archiving this project.', 409);
+      if (tasks.some(task => task.status === 'in_progress' && task.kind !== 'group')) throw new DomainError('Finish or cancel tasks in progress before archiving this project.', 409);
+      await this.stop();
+    } catch (error) {
+      this.mutatingRepository = false;
+      throw error;
+    }
   }
   async updateSettings(input: Partial<Settings> & { repositoryPath?: string; projectName?: string }) {
     // Serialize settings writes with chief submission so a queued request keeps its selected model.

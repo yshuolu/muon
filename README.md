@@ -11,7 +11,7 @@ pnpm install
 pnpm run user
 ```
 
-Open **http://127.0.0.1:5173**. `pnpm run user` is the normal local user launch command: it starts the real API and web app together. Open **Settings**, set the absolute path to a Git repository root with at least one commit, select your default agent, and set the concurrency limit. A task created in **Todo** automatically starts planning. **Backlog** captures work without starting an agent.
+Open **http://127.0.0.1:5173**. `pnpm run user` is the normal local user launch command: it starts the real API and web app together. Open **Settings**, set the absolute path to a Git repository root with at least one commit, select your default agent, and set the concurrency limit. Use **Add project** in the sidebar for each additional repository you want to direct agents in. A task created in **Todo** automatically starts planning. **Backlog** captures work without starting an agent.
 
 `pnpm run dev` remains available as a development alias.
 
@@ -75,6 +75,14 @@ Asset metadata lives in SQLite and file bytes live in managed local storage, ind
 
 The library refreshes when a task starts referencing new files and after your own additions; use **Refresh library** after adding files through the CLI. The chief can read the library through the REST API but cannot write notes or upload files.
 
+## Projects
+
+A **project** is one Git repository folder with its own tasks, settings, chief of staff, attention, and library, the way a project list in a desktop coding app maps folders to work. The sidebar lists every active project; click one to switch, or choose **Add project** and give it a name and the absolute path of a Git repository root with at least one commit. Task identifiers use a short prefix derived from the name (`Billing service` → `BS-1`), which you can override when adding the project. Two projects may point at the same repository; their worktrees never collide because each task gets its own branch and directory.
+
+Every URL carries the project, such as `/projects/PROJECT-ID/tasks`. Paths without a project, including old bookmarks, open the project you used last or the first active one. Concurrency limits, dispatch pausing, the chief model and SOUL, and planning chats are per project, so the total number of agents on this machine is the sum of the project limits.
+
+**Project settings** renames a project or rebinds its repository (the existing guards for active agents and open worktrees apply) and can **Archive** it once no agent, chief request, or pending reply is running. An archived project disappears from the switcher and stops dispatching, while its tasks, files, and worktrees stay in place; open planning chats are discarded. **Restore** it from the same dialog or from the empty-workspace screen. When the workspace has no projects yet, Muon seeds one from `MUON_REPOSITORY_PATH`; existing single-project installations keep their project and identifiers unchanged.
+
 ## REST API and CLI
 
 The HTTP service is the system of record. The web panel, owner CLI, and local chief all use it; clients never open SQLite. A future cloud chief can call the same REST resources directly.
@@ -120,7 +128,7 @@ Choose **Configure SOUL** in the Chief composer to edit the Chief's per-project 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MUON_DATA_DIR` | `.muon` | Parent directory for local/demo state |
-| `MUON_REPOSITORY_PATH` | empty | Initial repository path; existing settings take precedence |
+| `MUON_REPOSITORY_PATH` | empty | Repository path for the first project when the workspace has none; existing projects take precedence |
 | `MUON_CLAUDE_EXECUTABLE` | `claude` | Claude Code executable |
 | `MUON_CLAUDE_MODEL` | `claude-fable-5-1[1m]` | Claude Code model |
 | `MUON_CLAUDE_EFFORT` | `max` | Claude Code thinking effort |
@@ -139,7 +147,7 @@ By default, Muon launches coding, planning, chat, and verification agents with t
 
 ## Architecture and validation
 
-TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node's SQLite driver. Provider processes, worktrees, persistence, identity, asset storage, and dispatch have explicit contracts. The UI supports one project and one owner; stored IDs and repository scopes reserve the path to collaboration.
+TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node's SQLite driver. Provider processes, worktrees, persistence, identity, asset storage, and dispatch have explicit contracts. The UI supports several projects for one owner, each running its own coordinator over shared storage; stored IDs and repository scopes reserve the path to collaboration.
 
 - [Linear product study and adapted PRD](docs/linear-product-study.md)
 - [Implementation architecture and cloud boundaries](docs/architecture.md)
@@ -149,6 +157,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Actual Claude validation](docs/claude-live-validation.md)
 - [Browser workflow and media validation](docs/browser-validation.md)
 - [Library and reference note validation](docs/library-validation.md)
+- [Multi-project validation](docs/projects-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh

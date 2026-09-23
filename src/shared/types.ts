@@ -76,6 +76,9 @@ export interface Attention {
 export interface Project {
   id: string; workspaceId: string; name: string; identifier: string;
   repositoryPath: string; ownerUserId: string;
+  createdAt?: string;
+  /** An archived project keeps its records and worktrees but runs no agents until restored. */
+  archivedAt?: string;
 }
 export interface Settings { maxConcurrentAgents: number; dispatcherEnabled: boolean; defaultProvider: Provider; chiefModel?: string | null; chiefSoul?: string | null }
 export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
@@ -85,6 +88,8 @@ export interface AgentRuntimeConfig { model: string; thinking: string; bypassPer
 export interface AppSnapshot {
   scope: Scope; project: Project; settings: Settings; tasks: Task[];
   attention: Attention[]; messages: ChiefMessage[];
+  /** Every project in the workspace, including archived ones; supplied by the HTTP layer. */
+  projects?: Project[];
   runtime: { activeRuns: number; chiefRunning: boolean; chiefActivity?: string | null; providers: Record<Provider, boolean>; config?: Record<Provider, AgentRuntimeConfig>; demo: boolean };
 }
 export interface CreateTaskInput {

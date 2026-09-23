@@ -11,6 +11,7 @@ import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
+import { singleProjectResolver } from '../src/server/project-registry';
 import type { Task } from '../src/shared/types';
 
 // Dedicated headless browser, isolated SQLite, and real HTTP/Git/artifact storage.
@@ -56,7 +57,7 @@ const service = new TaskService({ scope, repository, artifacts, workspaces, adap
 await service.initialize();
 service.start();
 const url = `http://127.0.0.1:${port}`;
-const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist'), access: commands });
+const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: commands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 const browser = await chromium.launch({ headless: true });
 const screenshots: string[] = [];
@@ -136,7 +137,7 @@ try {
   const initialPlan = (await service.getTask(child.id)).plans.at(-1)!;
   await page.getByLabel('Comment on the plan', { exact: true }).fill('Please explain how the screenshot proves the result and include keyboard navigation in verification.');
   await expect(page.getByRole('button', { name: 'Approve plan', exact: true })).toBeDisabled();
-  await page.route(`**/api/tasks/${child.id}/plan-discussion`, route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This task changed. Refresh and try again.' }) }), { times: 1 });
+  await page.route(`**/tasks/${child.id}/plan-discussion`, route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This task changed. Refresh and try again.' }) }), { times: 1 });
   await page.getByRole('button', { name: 'Send comment', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'This task changed. Refresh and try again.' }).first()).toBeVisible();
   await expect(page.getByLabel('Comment on the plan', { exact: true })).toHaveValue('Please explain how the screenshot proves the result and include keyboard navigation in verification.');
@@ -309,7 +310,7 @@ try {
   await page.getByLabel('Message your chief of staff', { exact: true }).fill('Capture a backlog follow-up for this fixture.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const chief = await call(9, 'chief');
-  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token } });
+  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token, MUON_PROJECT: scope.projectId } });
   chief.finish('Captured the follow-up in the backlog.');
   await expect(page.getByRole('button').filter({ hasText: 'Fixture follow-up' })).toBeVisible();
   await page.getByRole('button').filter({ hasText: 'Fixture follow-up' }).click();

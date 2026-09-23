@@ -3,6 +3,8 @@ import type { AppSnapshot, Asset, Attention, ChiefMessage, Project, Scope, Setti
 export interface Repository {
   initialize(scope: Scope, project: Project, settings: Settings): Promise<void>;
   project(scope: Scope): Promise<Project>;
+  /** Every project row in a workspace, in creation order, including archived ones. */
+  projects(workspaceId: string): Promise<Project[]>;
   saveProject(scope: Scope, project: Project): Promise<void>;
   settings(scope: Scope): Promise<Settings>;
   saveSettings(scope: Scope, settings: Settings): Promise<void>;

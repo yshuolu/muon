@@ -5,6 +5,7 @@ import { AgentProcessUnreapedError } from '../runtime';
 import type { ArtifactStore } from './ports';
 import { DomainError } from './ports';
 import { createHttpApp } from './http-app';
+import { singleProjectResolver } from './project-registry';
 import { LocalChiefCommands } from './local-chief-commands';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
@@ -47,7 +48,7 @@ beforeEach(async () => {
   commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
   service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
   await service.initialize();
-  app = createHttpApp(service, artifacts, { staticRoot: process.cwd(), access: commands });
+  app = createHttpApp(singleProjectResolver(service), artifacts, { staticRoot: process.cwd(), access: commands });
 });
 afterEach(async () => {
   for (const call of [...claude.calls, ...codex.calls]) call.reject(new Error('Test cleanup'));
@@ -56,6 +57,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+/** Chief credentials must address their own project explicitly. */
+const chiefPath = (path: string) => path.replace(/^\/api/, `/api/projects/${scope.projectId}`);
 async function request(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>) {
   return app.request(`http://localhost:4310${path}`, {
     method, headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -98,7 +101,7 @@ describe('HTTP validation and local boundary', () => {
     await service.sendChief('Organize the project');
     await eventually(() => claude.calls.length === 1);
     const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
-    expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' }, headers)).status).toBe(403);
+    expect((await request(chiefPath('/api/settings'), 'PATCH', { chiefModel: 'sonnet' }, headers)).status).toBe(403);
     expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' })).status).toBe(409);
     expect((await repository.settings(scope)).chiefModel).toBeUndefined();
   });
@@ -234,7 +237,7 @@ describe('REST record resources', () => {
     await service.sendChief('Organize the project');
     await eventually(() => claude.calls.length === 1);
     const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
-    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet' }, headers)).status).toBe(403);
+    expect((await request(chiefPath(`/api/planning-chats/${chat.id}`), 'PATCH', { model: 'sonnet' }, headers)).status).toBe(403);
     expect(service.getPlanningChat(chat.id).model).toBeNull();
   });
 
@@ -372,7 +375,7 @@ describe('REST record resources', () => {
 
   it('authorizes before mutations and observes only successful responses without consuming them', async () => {
     const observed: string[] = [];
-    app = createHttpApp(service, artifacts, { access: {
+    app = createHttpApp(singleProjectResolver(service), artifacts, { access: {
       authorize: request => { if (request.headers.get('authorization') !== 'Bearer allowed') throw new DomainError('Credential rejected.', 403); },
       observe: async (request, response) => { observed.push(`${request.method} ${new URL(request.url).pathname}`); expect(await response.clone().json()).toBeDefined(); },
     } });
@@ -440,8 +443,9 @@ describe('RFC discussion API', () => {
     const grant = await commands.open(scope, new AbortController().signal);
     try {
       const headers = { authorization: `Bearer ${grant.cli.token}` };
-      expect((await request(`/api/tasks/${task.id}/plan-discussion`, 'GET', undefined, headers)).status).toBe(200);
-      expect((await request(`/api/tasks/${task.id}/plan-discussion`, 'POST', { planId: 'original-plan', content: 'Chief impersonating owner.' }, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/plan-discussion`), 'GET', undefined, headers)).status).toBe(200);
+      expect((await request(`/api/tasks/${task.id}/plan-discussion`, 'GET', undefined, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/plan-discussion`), 'POST', { planId: 'original-plan', content: 'Chief impersonating owner.' }, headers)).status).toBe(403);
       expect(await service.getTask(task.id)).toEqual(original);
     } finally { await grant.close(); }
     expect((await request('/api/tasks/missing/plan-discussion')).status).toBe(404);
@@ -492,9 +496,9 @@ describe('task comments API', () => {
     const grant = await commands.open(scope, new AbortController().signal);
     try {
       const headers = { authorization: `Bearer ${grant.cli.token}` };
-      expect((await request(`/api/tasks/${task.id}/comments`, 'GET', undefined, headers)).status).toBe(200);
-      expect((await request(`/api/tasks/${task.id}/comments`, 'POST', { requestId, content: 'Impersonate the owner' }, headers)).status).toBe(403);
-      expect((await request(`/api/tasks/${task.id}/comments/retry`, 'POST', {}, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/comments`), 'GET', undefined, headers)).status).toBe(200);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/comments`), 'POST', { requestId, content: 'Impersonate the owner' }, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/comments/retry`), 'POST', {}, headers)).status).toBe(403);
       expect(await service.getTask(task.id)).toEqual(task);
     } finally { await grant.close(); }
   });
@@ -536,7 +540,7 @@ describe('runtime integration regressions', () => {
     expect((await request('/api/chief/messages', 'POST', { content: 'Make this task urgent' })).status).toBe(202);
     await eventually(() => claude.calls.length === 1);
     expect(claude.calls[0].request.phase).toBe('chief');
-    expect((await request(`/api/tasks/${task.id}`, 'PATCH', { priority: 1 }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
+    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { priority: 1 }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
     claude.calls[0].resolve({ text: 'Priority updated.' });
     await eventually(async () => (await repository.messages(scope)).some(message => message.role === 'assistant'));
     expect(await service.getTask(task.id)).toMatchObject({ status: 'backlog', priority: 1 });
@@ -546,7 +550,7 @@ describe('runtime integration regressions', () => {
     const task = await service.createTask({ title: 'Status only', status: 'backlog', priority: 2 });
     await service.sendChief('Queue this task');
     await eventually(() => claude.calls.length === 1);
-    expect((await request(`/api/tasks/${task.id}`, 'PATCH', { status: 'todo' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
+    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { status: 'todo' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
     claude.calls[0].resolve({ text: 'Task queued.' });
     await eventually(async () => (await repository.messages(scope)).some(message => message.role === 'assistant'));
     expect(await service.getTask(task.id)).toMatchObject({ status: 'todo', priority: 2 });
@@ -591,7 +595,7 @@ describe('runtime integration regressions', () => {
     await eventually(() => claude.calls.length === 1);
     claude.calls[0].resolve({ text: JSON.stringify({ message: 'Created.', actions: [{ type: 'create_task', title: 'Late task', status: 'backlog' }] }) });
     await service.stop();
-    expect((await request('/api/tasks', 'POST', { title: 'Late task' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(401);
+    expect((await request(chiefPath('/api/tasks'), 'POST', { title: 'Late task' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(401);
     expect(await repository.tasks(scope)).toEqual([]);
   });
 

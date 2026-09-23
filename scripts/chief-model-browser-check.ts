@@ -6,6 +6,7 @@ import { serve } from '@hono/node-server';
 import { chromium, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { createHttpApp } from '../src/server/http-app';
+import { singleProjectResolver } from '../src/server/project-registry';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
@@ -42,7 +43,7 @@ const chiefCommands = new LocalChiefCommands({ apiUrl: url, scope });
 const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
 await service.initialize();
 service.start();
-const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
+const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const checks: string[] = [];
@@ -90,7 +91,7 @@ try {
   const initialOptions = await modelSelect.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value));
   for (const model of [configuredModel, 'opus', 'sonnet', 'haiku']) assert.ok(initialOptions.includes(model), `Model list must include ${model} before editing the current model.`);
   check('The toolbar dropdown includes the configured default, Opus, Sonnet, and Haiku.');
-  await page.route('**/api/settings', async route => {
+  await page.route('**/settings', async route => {
     if (route.request().method() === 'PATCH') await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Model settings could not be saved.' }) });
     else await route.continue();
   }, { times: 1 });
@@ -101,7 +102,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0);
   let releaseSave: (() => void) | undefined;
   const pendingSave = new Promise<void>(resolveSave => { releaseSave = resolveSave; });
-  await page.route('**/api/settings', async route => {
+  await page.route('**/settings', async route => {
     if (route.request().method() === 'PATCH') await pendingSave;
     await route.continue();
   }, { times: 1 });

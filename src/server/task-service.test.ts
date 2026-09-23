@@ -6,6 +6,7 @@ import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService, type ServiceOptions } from './task-service';
 import { createHttpApp } from './http-app';
+import { singleProjectResolver } from './project-registry';
 import { LocalChiefCommands } from './local-chief-commands';
 
 interface ControlledCall {
@@ -72,7 +73,7 @@ async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
   const options = { scope, repository: repo, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands };
   const service = new TaskService(options);
   await service.initialize();
-  const app = createHttpApp(service, artifacts, { access: commands });
+  const app = createHttpApp(singleProjectResolver(service), artifacts, { access: commands });
   const result = { repo, service, claude, codex, options, workspaces, artifacts, app };
   fixtures.push(result);
   return result;
@@ -116,7 +117,7 @@ async function waitForState(fixture: Fixture, taskId: string, status: Task['stat
 }
 async function chiefRequest<T = Task>(fixture: Fixture, call: ControlledCall, path: string, method: string, body: unknown, status = 200): Promise<T> {
   expect(call.request.chiefCli?.token).toBeTruthy();
-  const response = await fixture.app.request(`http://127.0.0.1:4310/api${path}`, {
+  const response = await fixture.app.request(`http://127.0.0.1:4310/api/projects/${fixture.service.scope.projectId}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${call.request.chiefCli!.token}` },
     body: JSON.stringify(body),

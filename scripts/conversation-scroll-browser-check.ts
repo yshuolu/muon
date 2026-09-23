@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server';
 import { chromium, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { createHttpApp } from '../src/server/http-app';
+import { singleProjectResolver } from '../src/server/project-registry';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
@@ -67,7 +68,7 @@ const chiefCommands = new LocalChiefCommands({ apiUrl: url, scope });
 const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
 await service.initialize();
 service.start();
-const app = createHttpApp(service, artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
+const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const browser = await chromium.launch({ headless: true });
@@ -100,12 +101,12 @@ async function fixture(surface: Surface, profile: string): Promise<Conversation>
       for (const item of messages) await repository.appendMessage(scope, item);
       seededChief = true;
     }
-    return { surface, imagePrefix, path: '/chief', endpoint: '/api/chief/messages', scroller: '.chief-conversation', composer: '.chief-composer', input: '#chief-message', send: 'Send message' };
+    return { surface, imagePrefix, path: '/chief', endpoint: '/chief/messages', scroller: '.chief-conversation', composer: '.chief-composer', input: '#chief-message', send: 'Send message' };
   }
   if (surface === 'planning') {
     const chat = service.createPlanningChat();
     chat.messages = messages;
-    return { surface, imagePrefix, chatId: chat.id, path: `/planning-chats/${chat.id}`, endpoint: `/api/planning-chats/${chat.id}/messages`, scroller: '.planning-chat-conversation', composer: '.chief-composer', input: '#planning-chat-message', send: 'Send message' };
+    return { surface, imagePrefix, chatId: chat.id, path: `/planning-chats/${chat.id}`, endpoint: `/planning-chats/${chat.id}/messages`, scroller: '.planning-chat-conversation', composer: '.chief-composer', input: '#planning-chat-message', send: 'Send message' };
   }
   const created = await service.createTask({ title: `${profile} ${surface} scroll fixture`, status: 'backlog' });
   const initialPlan = plan(1);
@@ -113,7 +114,7 @@ async function fixture(surface: Surface, profile: string): Promise<Conversation>
     comments: surface === 'comments' ? messages.map((item, index) => ({ ...item, userId: scope.userId, ...(item.role === 'assistant' ? { replyToIds: [messages[index - 1].id] } : {}) })) : [],
     planDiscussion: surface === 'plan' ? messages.map(item => ({ ...item, userId: scope.userId, planId: initialPlan.id })) : [],
   }, created.version);
-  return { surface, imagePrefix, taskId: created.id, taskTitle: created.title, path: `/tasks/${created.id}`, endpoint: `/api/tasks/${created.id}/${surface === 'comments' ? 'comments' : 'plan-discussion'}`,
+  return { surface, imagePrefix, taskId: created.id, taskTitle: created.title, path: `/tasks/${created.id}`, endpoint: `/tasks/${created.id}/${surface === 'comments' ? 'comments' : 'plan-discussion'}`,
     scroller: surface === 'comments' ? '.task-comments-messages' : '.plan-discussion-messages', composer: surface === 'comments' ? '.task-comments-composer' : '.plan-comment-form',
     input: surface === 'comments' ? '.task-comments-composer textarea' : '.plan-comment-form textarea', send: surface === 'comments' ? 'Send task comment' : 'Send comment' };
 }
@@ -363,7 +364,7 @@ async function runSurface(profile: string, dimensions: { width: number; height: 
     await expect(page.locator(conversation.input)).toHaveValue('');
     await position(page, conversation, 'history');
     const batchAnchor = await metric(page, conversation);
-    const pollEndpoint = conversation.chatId ? `/api/planning-chats/${conversation.chatId}` : '/api/state';
+    const pollEndpoint = conversation.chatId ? `/planning-chats/${conversation.chatId}` : '/state';
     let disconnected = true;
     let missedPoll = false;
     await page.route(`**${pollEndpoint}`, async route => {

@@ -7,6 +7,7 @@ import type { AgentAdapter, WorkspaceProvider } from '../runtime';
 import type { Asset, Task } from '../shared/types';
 import { AssetService } from './asset-service';
 import { createHttpApp } from './http-app';
+import { singleProjectResolver } from './project-registry';
 import { LocalAssetStorage } from './local-assets';
 import { LocalChiefCommands } from './local-chief-commands';
 import type { ArtifactStore } from './ports';
@@ -40,7 +41,7 @@ beforeEach(async () => {
   commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
   service = new TaskService({ scope, repository, artifacts, assets, workspaces, adapters: { claude, codex }, chiefCommands: commands });
   await service.initialize();
-  app = createHttpApp(service, artifacts, { staticRoot: directory, access: commands });
+  app = createHttpApp(singleProjectResolver(service), artifacts, { staticRoot: directory, access: commands });
 });
 
 afterEach(async () => {
@@ -50,6 +51,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+const chiefPath = (path: string) => path.replace(/^\/api/, `/api/projects/${scope.projectId}`);
 function request(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>) {
   return app.request(`http://localhost:4310${path}`, {
     method, headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -248,10 +250,10 @@ describe('asset HTTP resources', () => {
     const session = await commands.open(scope, new AbortController().signal);
     const headers = { authorization: `Bearer ${session.cli.token}` };
     try {
-      expect((await upload('/api/assets', 'brief.md', '# Brief', 'text/markdown', headers)).status).toBe(403);
-      expect((await upload(`/api/tasks/${task.id}/assets`, 'brief.md', '# Brief', 'text/markdown', headers)).status).toBe(403);
-      expect((await request(`/api/tasks/${task.id}/assets/attach`, 'POST', { assetId: 'missing' }, headers)).status).toBe(403);
-      expect((await request(`/api/tasks/${task.id}/assets/import`, 'POST', { path: 'report.md' }, headers)).status).toBe(403);
+      expect((await upload(chiefPath('/api/assets'), 'brief.md', '# Brief', 'text/markdown', headers)).status).toBe(403);
+      expect((await upload(chiefPath(`/api/tasks/${task.id}/assets`), 'brief.md', '# Brief', 'text/markdown', headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/assets/attach`), 'POST', { assetId: 'missing' }, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/tasks/${task.id}/assets/import`), 'POST', { path: 'report.md' }, headers)).status).toBe(403);
       expect(await repository.assets(scope)).toEqual([]);
     } finally {
       await session.close();
@@ -320,8 +322,9 @@ describe('library resources', () => {
     const session = await commands.open(scope, new AbortController().signal);
     const headers = { authorization: `Bearer ${session.cli.token}` };
     try {
-      expect(await (await request('/api/assets', 'GET', undefined, headers)).json()).toEqual([note]);
-      expect((await request('/api/assets/notes', 'POST', { name: 'Chief note', content: 'Body' }, headers)).status).toBe(403);
+      expect(await (await request(chiefPath('/api/assets'), 'GET', undefined, headers)).json()).toEqual([note]);
+      expect((await request('/api/assets', 'GET', undefined, headers)).status).toBe(403);
+      expect((await request(chiefPath('/api/assets/notes'), 'POST', { name: 'Chief note', content: 'Body' }, headers)).status).toBe(403);
       expect((await repository.assets(scope)).map(asset => asset.id)).toEqual([note.id]);
     } finally {
       await session.close();

@@ -9,8 +9,15 @@ export interface ApiClientOptions {
   /** Server origin, optionally ending in /api. /api uses the browser's current origin. */
   baseUrl?: string;
   token?: string;
+  /** Project ID or identifier; project-scoped paths are sent under /api/projects/<project>. */
+  project?: string;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
+}
+
+/** Paths that address the workspace rather than one project. */
+export function isWorkspaceApiPath(suffix: string): boolean {
+  return suffix === '' || /^\/health(\?|$)/.test(suffix) || /^\/projects(\/|\?|$)/.test(suffix);
 }
 
 export class ApiClient {
@@ -18,8 +25,11 @@ export class ApiClient {
   private readonly fetcher: typeof globalThis.fetch;
   private readonly token?: string;
   private readonly timeoutMs: number;
+  /** The project addressed by project-scoped paths; the server's default project when unset. */
+  project?: string;
 
   constructor(options: ApiClientOptions = {}) {
+    this.project = options.project || undefined;
     const base = options.baseUrl ?? '/api';
     if (base === '/api' || base === '') this.baseUrl = '/api';
     else {
@@ -42,7 +52,9 @@ export class ApiClient {
     let decoded: string;
     try { decoded = decodeURIComponent(path.split('?')[0]); } catch { throw new ApiError('Invalid API path encoding.', 0, 'invalid_api_path'); }
     if (decoded.split('/').some(segment => segment === '..' || segment === '.') || decoded.includes('\\')) throw new ApiError('API paths cannot traverse directories.', 0, 'invalid_api_path');
-    return this.baseUrl + (path === '/api' ? '' : path.startsWith('/api/') ? path.slice(4) : path);
+    const suffix = path === '/api' ? '' : path.startsWith('/api/') ? path.slice(4) : path;
+    if (this.project && !isWorkspaceApiPath(suffix)) return `${this.baseUrl}/projects/${encodeURIComponent(this.project)}${suffix}`;
+    return this.baseUrl + suffix;
   }
 
   private async response(path: string, method: string, body?: unknown): Promise<Response> {

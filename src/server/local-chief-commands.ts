@@ -7,30 +7,41 @@ import type { Scope } from '../shared/types';
 import { DomainError, type ChiefCommandGateway, type ChiefCommandSession } from './ports';
 
 interface Grant { scope: Scope; expiresAt: number; taskIds: Set<string> }
-const sameScope = (a: Scope, b: Scope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId && a.userId === b.userId;
+interface Workspace { workspaceId: string; userId: string }
+const sameWorkspace = (a: Workspace, b: Workspace) => a.workspaceId === b.workspaceId && a.userId === b.userId;
+
+/** Splits `/api/projects/<project>/<rest>` into its project segment and the project-relative API path. */
+export function projectApiPath(pathname: string): { project: string; path: string } | undefined {
+  const match = /^\/api\/projects\/([^/]+)(\/.*)?$/.exec(pathname);
+  if (!match) return undefined;
+  try { return { project: decodeURIComponent(match[1]), path: `/api${match[2] ?? ''}` }; }
+  catch { return undefined; }
+}
 
 /** Local-owner access stays on the trusted loopback interface. Agent credentials are
- * short lived and carry narrower authority; they never become owner credentials. */
+ * short lived, bound to one project, and carry narrower authority; they never become owner credentials. */
 export class LocalChiefCommands implements ChiefCommandGateway {
   private grants = new Map<string, Grant>();
   private admitted = new WeakMap<Request, Grant>();
   private readonly cliPath: string;
-  constructor(private options: { apiUrl: string; scope: Scope; cliPath?: string; lifetimeMs?: number }) {
+  private readonly workspace: Workspace;
+  constructor(private options: { apiUrl: string; scope: Workspace; cliPath?: string; lifetimeMs?: number; resolveProjectId?: (reference: string) => string | undefined }) {
     const url = new URL(options.apiUrl);
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Local chief commands require a loopback API origin.');
     this.cliPath = options.cliPath ?? fileURLToPath(new URL('../../bin/muon.mjs', import.meta.url));
+    this.workspace = { workspaceId: options.scope.workspaceId, userId: options.scope.userId };
   }
 
   async open(scope: Scope, signal: AbortSignal): Promise<ChiefCommandSession> {
-    if (!sameScope(scope, this.options.scope)) throw new DomainError('Chief session scope does not match this workspace.', 403);
+    if (!sameWorkspace(scope, this.workspace)) throw new DomainError('Chief session scope does not match this workspace.', 403);
     if (signal.aborted) throw new Error('Chief request canceled.');
     const token = randomBytes(32).toString('hex');
     const grant: Grant = { scope: { ...scope }, expiresAt: Date.now() + (this.options.lifetimeMs ?? 30 * 60_000), taskIds: new Set() };
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-chief-cli-')));
     const launcher = join(directory, 'muon');
-    // Freeze the endpoint and credential inside a read-only per-run launcher. Shell
-    // environment overrides cannot turn this allowed command into an owner client.
-    const content = `#!${process.execPath}\nprocess.env.MUON_API_URL = ${JSON.stringify(this.options.apiUrl)};\nprocess.env.MUON_API_TOKEN = ${JSON.stringify(token)};\nawait import(${JSON.stringify(pathToFileURL(this.cliPath).href)});\n`;
+    // Freeze the endpoint, credential, and project inside a read-only per-run launcher. Shell
+    // environment overrides cannot turn this allowed command into an owner client or retarget it.
+    const content = `#!${process.execPath}\nprocess.env.MUON_API_URL = ${JSON.stringify(this.options.apiUrl)};\nprocess.env.MUON_API_TOKEN = ${JSON.stringify(token)};\nprocess.env.MUON_PROJECT = ${JSON.stringify(scope.projectId)};\nawait import(${JSON.stringify(pathToFileURL(this.cliPath).href)});\n`;
     await writeFile(launcher, content, { mode: 0o500 });
     await chmod(directory, 0o500);
     const revoke = () => this.grants.delete(token);
@@ -55,17 +66,25 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     if (!authorization) return undefined;
     const token = /^Bearer ([a-f0-9]{64})$/.exec(authorization)?.[1];
     const grant = token ? this.grants.get(token) : undefined;
-    if (!grant || grant.expiresAt <= Date.now() || !sameScope(grant.scope, this.options.scope)) {
+    if (!grant || grant.expiresAt <= Date.now() || !sameWorkspace(grant.scope, this.workspace)) {
       if (token) this.grants.delete(token);
       throw new DomainError('The agent credential is invalid or expired.', 401);
     }
     return grant;
   }
 
+  private grantedProject(grant: Grant, pathname: string): string | undefined {
+    const target = projectApiPath(pathname);
+    if (!target) return undefined;
+    const projectId = target.project === grant.scope.projectId ? target.project : this.options.resolveProjectId?.(target.project);
+    return projectId === grant.scope.projectId ? target.path : undefined;
+  }
+
   authorize(request: Request) {
     const grant = this.grant(request);
     if (!grant) return; // The existing local UI/owner CLI trust boundary.
-    const path = new URL(request.url).pathname;
+    const path = this.grantedProject(grant, new URL(request.url).pathname);
+    if (!path) throw new DomainError('The chief can only act on its own project through /api/projects/<project>/… routes.', 403);
     const method = request.method;
     const read = ['GET', 'HEAD'].includes(method) && /^\/api\/(health|state|project|settings|runtime|tasks|attention|chief\/messages|artifacts|assets)(\/|$)/.test(path);
     const taskWrite = method === 'POST' && path === '/api/tasks'
@@ -80,7 +99,7 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     // A write admitted before cancellation/expiry may already have committed.
     // Journal that result without re-authorizing a later request.
     const grant = this.admitted.get(request);
-    if (!grant || !new URL(request.url).pathname.startsWith('/api/tasks')) return;
+    if (!grant || !this.grantedProject(grant, new URL(request.url).pathname)?.startsWith('/api/tasks')) return;
     const result = await response.clone().json() as { id?: unknown; workspaceId?: unknown; projectId?: unknown };
     if (typeof result.id === 'string' && result.workspaceId === grant.scope.workspaceId && result.projectId === grant.scope.projectId) grant.taskIds.add(result.id);
   }
