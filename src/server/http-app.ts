@@ -8,7 +8,7 @@ import type { TaskService } from './task-service';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
-  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, importAssetSchema, updatePlanningChatSchema,
+  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, createNoteSchema, importAssetSchema, updatePlanningChatSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
@@ -138,7 +138,9 @@ export function createHttpApp(service: TaskService, artifacts: ArtifactStore, op
     if (file.size > 100 * 1024 * 1024) throw new DomainError('Assets must be at most 100 MiB.', 413);
     return { name: file.name, mediaType: file.type || undefined, data: new Uint8Array(await file.arrayBuffer()) };
   };
+  app.get('/api/assets', async c => c.json(await service.listAssets()));
   app.post('/api/assets', async c => c.json(await service.uploadAsset(await uploadedFile(c.req.raw)), 201));
+  app.post('/api/assets/notes', async c => c.json(await service.createNote(createNoteSchema.parse(await c.req.json())), 201));
   app.post('/api/tasks/:id/assets', async c => {
     const task = await taskByReference(c.req.param('id'));
     return c.json(await service.uploadTaskAsset(task.id, await uploadedFile(c.req.raw)), 201);

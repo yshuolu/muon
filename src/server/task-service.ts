@@ -117,6 +117,12 @@ export class TaskService implements Dispatcher {
   uploadAsset(input: { name: string; mediaType?: string; data: Uint8Array }) {
     return this.assets.upload(this.scope, input);
   }
+  listAssets() {
+    return this.assets.list(this.scope);
+  }
+  createNote(input: { name: string; content: string }) {
+    return this.assets.createNote(this.scope, input);
+  }
   async listTaskAssets(id: string) {
     const task = await this.getTask(id);
     return this.assets.list(this.scope, taskAssetIds(task));

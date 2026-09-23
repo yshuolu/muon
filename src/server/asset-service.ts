@@ -93,6 +93,15 @@ export class AssetService {
     return this.store(scope, { ...input, name: validName(input.name), mediaType: mediaType(input.name, input.mediaType), origin: 'upload' });
   }
 
+  /** A reference note is an owner-written Markdown asset; revisions are new assets. */
+  async createNote(scope: Scope, input: { name: string; content: string }) {
+    const trimmed = input.name.trim();
+    const name = validName(/\.(md|markdown)$/i.test(trimmed) ? trimmed : `${trimmed}.md`);
+    if (!input.content.trim()) throw new DomainError('Write something in the note.');
+    const data = Buffer.from(`${input.content.trim()}\n`, 'utf8');
+    return this.store(scope, { name, mediaType: 'text/markdown', data, origin: 'upload' });
+  }
+
   async importFile(scope: Scope, input: ImportFileInput) {
     if (!input.relativePath || isAbsolute(input.relativePath) || input.relativePath.includes('\0')) {
       throw new DomainError('Asset paths must be relative to the task worktree.');

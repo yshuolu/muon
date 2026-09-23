@@ -278,3 +278,53 @@ describe('asset HTTP resources', () => {
     expect(await repository.assets(scope)).toEqual([]);
   });
 });
+
+describe('library resources', () => {
+  it('lists every authorized asset in the project and hides other owners’ private files', async () => {
+    const task = await service.createTask({ title: 'Read the brief', status: 'backlog' });
+    const brief = await (await upload(`/api/tasks/${task.id}/assets`, 'brief.md', '# Brief', 'text/markdown')).json() as Asset;
+    const standalone = await (await upload('/api/assets', 'diagram.png', new Uint8Array([137, 80, 78, 71]), 'image/png')).json() as Asset;
+    const shared = await repository.insertAsset(scope, { ...standalone, id: 'shared-asset', objectKey: 'shared-asset', ownerUserId: 'teammate', createdByUserId: 'teammate', visibility: 'project' });
+    await repository.insertAsset(scope, { ...standalone, id: 'private-asset', objectKey: 'private-asset', ownerUserId: 'teammate', createdByUserId: 'teammate', visibility: 'private' });
+    const response = await request('/api/assets');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual([brief, standalone, shared]);
+  });
+
+  it('creates Markdown reference notes as immutable owner assets', async () => {
+    const response = await request('/api/assets/notes', 'POST', { name: 'Release checklist', content: '# Checklist\n\n- Run tests  \n\n' });
+    expect(response.status).toBe(201);
+    const note = await response.json() as Asset;
+    expect(note).toMatchObject({ name: 'Release checklist.md', mediaType: 'text/markdown', origin: 'upload', ownerUserId: scope.userId, visibility: 'private' });
+    expect(await (await request(`/api/assets/${note.id}/content`)).text()).toBe('# Checklist\n\n- Run tests\n');
+    const keepsExtension = await (await request('/api/assets/notes', 'POST', { name: 'decisions.MD', content: 'Keep it.' })).json() as Asset;
+    expect(keepsExtension.name).toBe('decisions.MD');
+    const revision = await (await request('/api/assets/notes', 'POST', { name: 'Release checklist', content: '# Checklist v2' })).json() as Asset;
+    expect(revision.id).not.toBe(note.id);
+    expect((await (await request('/api/assets')).json() as Asset[]).map(asset => asset.id)).toEqual([note.id, keepsExtension.id, revision.id]);
+  });
+
+  it('rejects blank, oversized, or path-like notes and multipart note bodies', async () => {
+    expect((await request('/api/assets/notes', 'POST', { name: '   ', content: 'Body' })).status).toBe(400);
+    expect((await request('/api/assets/notes', 'POST', { name: 'Empty', content: ' \n\t' })).status).toBe(400);
+    expect((await request('/api/assets/notes', 'POST', { name: 'nested/note', content: 'Body' })).status).toBe(400);
+    expect((await request('/api/assets/notes', 'POST', { name: 'Big', content: 'x'.repeat(200_001) })).status).toBe(400);
+    expect((await request('/api/assets/notes', 'POST', { name: 'Extra', content: 'Body', visibility: 'project' })).status).toBe(400);
+    expect((await upload('/api/assets/notes', 'note.md', '# Note', 'text/markdown')).status).toBe(415);
+    expect(await repository.assets(scope)).toEqual([]);
+  });
+
+  it('lets chief credentials read the library but not write notes', async () => {
+    const note = await (await request('/api/assets/notes', 'POST', { name: 'Context', content: 'Read me.' })).json() as Asset;
+    const session = await commands.open(scope, new AbortController().signal);
+    const headers = { authorization: `Bearer ${session.cli.token}` };
+    try {
+      expect(await (await request('/api/assets', 'GET', undefined, headers)).json()).toEqual([note]);
+      expect((await request('/api/assets/notes', 'POST', { name: 'Chief note', content: 'Body' }, headers)).status).toBe(403);
+      expect((await repository.assets(scope)).map(asset => asset.id)).toEqual([note.id]);
+    } finally {
+      await session.close();
+    }
+  });
+});

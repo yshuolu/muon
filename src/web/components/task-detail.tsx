@@ -29,7 +29,7 @@ interface TaskViewState {
 }
 const TASK_VIEW_STATES = new Map<string, TaskViewState>();
 
-export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSubtask, backLabel }: { task: Task; snapshot: AppSnapshot; onClose: () => void; onRefresh: () => void; onSelect: (task: Task) => void; onSubtask: (task: Task) => void; backLabel: string }) {
+export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSubtask, onOpenLibrary, backLabel }: { task: Task; snapshot: AppSnapshot; onClose: () => void; onRefresh: () => void; onSelect: (task: Task) => void; onSubtask: (task: Task) => void; onOpenLibrary?: (assetId: string | null) => void; backLabel: string }) {
   const viewKey = JSON.stringify([task.workspaceId, task.projectId, task.id]);
   const cachedView = useRef(TASK_VIEW_STATES.get(viewKey));
   const [tab, setTab] = useState<Tab>(cachedView.current?.tab ?? (task.kind === 'group' ? 'overview' : task.phase === 'plan_review' ? 'plan' : task.status === 'done' ? 'evidence' : 'overview'));
@@ -168,7 +168,7 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
           return updated?.comments?.find(message => message.requestId === input.requestId)?.id ?? false;
         }} onRetry={() => mutate(`/tasks/${task.id}/comments/retry`, 'POST', {})} /></div>}
         {tab === 'evidence' && <VerificationEvidence task={task} />}
-        {tab === 'assets' && <AssetsPanel task={task} userId={snapshot.scope.userId} selectedId={selectedAssetId} onSelect={setSelectedAssetId} onRefresh={onRefresh} />}
+        {tab === 'assets' && <AssetsPanel task={task} userId={snapshot.scope.userId} selectedId={selectedAssetId} onSelect={setSelectedAssetId} onRefresh={onRefresh} onOpenLibrary={onOpenLibrary} />}
         {tab === 'files' && (task.changedFiles.length === 0 ? <EmptyState icon={<Code2 size={26} />} title="A clear view of what changed" description="Files changed in this task’s isolated worktree will appear here, with additions and deletions." /> : <div className="files-content">{task.worktree && <div className="files-branch"><GitBranch size={15} /><span>{task.worktree.branch}</span><span>Isolated worktree</span></div>}<div className="files-summary"><strong>{task.changedFiles.length} files changed</strong><FileChanges additions={task.changedFiles.reduce((sum, file) => sum + file.additions, 0)} deletions={task.changedFiles.reduce((sum, file) => sum + file.deletions, 0)} /></div><div className="changed-files">{task.changedFiles.map(file => <div key={file.path}><File size={15} /><code>{file.path}</code><span className="file-status" title={file.status}>{file.status}</span><FileChanges additions={file.additions} deletions={file.deletions} />{!['D', 'deleted'].includes(file.status) && task.worktree && <Button variant="ghost" size="sm" disabled={importingPath !== null || !canRetainFiles} title={canRetainFiles ? 'Retain this file and open its preview' : 'The task owner can retain files after the task has stopped'} onClick={() => void openChangedFile(file.path)} aria-label={`Open ${file.path} as asset`}>{importingPath === file.path ? 'Opening…' : 'Open as asset'}</Button>}</div>)}</div></div>)}
       </div>
     </div>

@@ -32,6 +32,9 @@ export const updatePlanningChatSchema = z.strictObject({ model: modelIdentifierS
 export const emptyMutationSchema = z.strictObject({});
 export const importAssetSchema = z.strictObject({ path: z.string().min(1).max(2000) });
 export const attachAssetSchema = z.strictObject({ assetId: z.string().min(1).max(200) });
+export const createNoteSchema = z.strictObject({
+  name: z.string().trim().min(1).max(255), content: z.string().max(200_000).refine(value => value.trim().length > 0, 'Write something in the note.'),
+});
 export const listTasksQuerySchema = z.strictObject({
   status: taskStatusSchema.optional(),
   parentId: taskReferenceSchema.transform(value => value === 'null' ? null : value).optional(),
@@ -54,6 +57,7 @@ export type PlanCommentRequest = z.infer<typeof planCommentSchema>;
 export type TaskCommentRequest = z.infer<typeof taskCommentSchema>;
 export type ChiefMessageRequest = z.infer<typeof chiefMessageSchema>;
 export type UpdatePlanningChatRequest = z.infer<typeof updatePlanningChatSchema>;
+export type CreateNoteRequest = z.infer<typeof createNoteSchema>;
 export type ListTasksQuery = z.input<typeof listTasksQuerySchema>;
 export type ListAttentionQuery = z.input<typeof listAttentionQuerySchema>;
 export interface ApiErrorResponse { error: string }

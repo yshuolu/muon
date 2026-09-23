@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { File, FileImage, FileText, Film, Upload } from 'lucide-react';
+import { BookOpen, File, FileImage, FileText, Film, Upload } from 'lucide-react';
 import type { Asset, Task } from '../../shared/types';
 import { api } from '../lib/api';
 import { taskAssetIds } from '../../shared/asset-references';
@@ -7,12 +7,13 @@ import { assetPreviewKind, formatAssetSize } from '../lib/asset-preview';
 import { AssetPreview } from './asset-preview';
 import { Button } from './ui/button';
 
-export function AssetsPanel({ task, userId, selectedId, onSelect, onRefresh }: {
+export function AssetsPanel({ task, userId, selectedId, onSelect, onRefresh, onOpenLibrary }: {
   task: Task;
   userId: string;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onRefresh: () => void;
+  onOpenLibrary?: (assetId: string | null) => void;
 }) {
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export function AssetsPanel({ task, userId, selectedId, onSelect, onRefresh }: {
     }
   }
   return <div className="assets-panel">
-    <div className="assets-intro"><div><h3>Assets</h3><p>Files referenced in this task’s description, plans, and results.</p></div>{canUpload && <><input ref={fileInput} type="file" className="sr-only" tabIndex={-1} aria-label="Choose a file" disabled={uploading} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} /><Button size="sm" variant="secondary" disabled={uploading} onClick={() => fileInput.current?.click()}><Upload size={14} />{uploading ? 'Uploading…' : 'Add file'}</Button></>}</div>
+    <div className="assets-intro"><div><h3>Assets</h3><p>Files referenced in this task’s description, plans, and results.</p></div>{onOpenLibrary && <Button size="sm" variant="ghost" onClick={() => onOpenLibrary(selected?.id ?? null)} title={selected ? `Open ${selected.name} in the Library` : 'Browse every retained file'}><BookOpen size={14} />{selected ? 'Open in Library' : 'Browse Library'}</Button>}{canUpload && <><input ref={fileInput} type="file" className="sr-only" tabIndex={-1} aria-label="Choose a file" disabled={uploading} onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} /><Button size="sm" variant="secondary" disabled={uploading} onClick={() => fileInput.current?.click()}><Upload size={14} />{uploading ? 'Uploading…' : 'Add file'}</Button></>}</div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {!assets ? !error && <p className="asset-loading" role="status">Loading assets…</p> : <>
       <section className="asset-group asset-catalog" aria-label="Referenced files"><h4>Referenced files<span>{assets.length}</span></h4>{assets.length ? <ul>{assets.map(asset => {

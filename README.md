@@ -67,6 +67,14 @@ Files can be up to 100 MiB. Text previews are limited to 2 MiB; **Download** alw
 
 Asset metadata lives in SQLite and file bytes live in managed local storage, independent of the source worktree. New assets are private to their owner; project visibility permits access within the asset's project. The storage boundary records a backend ID and object key so a future GCS implementation can provide the same contract; GCS is not configured or shipped yet. Existing evidence attachments and legacy download URLs remain supported.
 
+## Library
+
+**Library** in the sidebar lists every asset you can read in the project: documentation and reference notes you write, files you add, and the reports, screenshots, and recordings your agents generate. The list is newest first and can be narrowed by type (documents and notes, images, video and audio, text and data, other files), by source (uploaded, generated, imported), and by search. Search also matches the identifier and title of any task that references a file. Choosing a file opens `/library/ASSET-ID`, shows its type, source, size, and visibility, links to the tasks that reference it, and renders the same reader as the task Assets tab, including **Copy reference** and **Download**. **Open in Library** on a task's Assets tab jumps to the same file.
+
+**New note** writes a Markdown reference note directly into the library. Give it a name and content; `.md` is added when the name has no Markdown extension, and a **Preview** toggle renders the note before saving. **Add file** stores any file up to 100 MiB without attaching it to a task. Assets stay immutable, so **Revise as new note** on a Markdown document opens the composer with its current text and saves the result as a separate file while the original remains available. Reference a library file from any task description, comment, or note with `[Name](asset://ASSET-ID)`; the reference does not grant access on its own.
+
+The library refreshes when a task starts referencing new files and after your own additions; use **Refresh library** after adding files through the CLI. The chief can read the library through the REST API but cannot write notes or upload files.
+
 ## REST API and CLI
 
 The HTTP service is the system of record. The web panel, owner CLI, and local chief all use it; clients never open SQLite. A future cloud chief can call the same REST resources directly.
@@ -140,6 +148,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Actual Codex workflow validation](docs/codex-live-validation.md)
 - [Actual Claude validation](docs/claude-live-validation.md)
 - [Browser workflow and media validation](docs/browser-validation.md)
+- [Library and reference note validation](docs/library-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh
