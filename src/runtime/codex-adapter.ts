@@ -34,9 +34,12 @@ export class CodexAdapter implements AgentAdapter {
     if (request.provider !== this.provider) throw new Error('Codex adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
     const chief = request.phase === 'chief';
-    const readonly = request.phase === 'planning' || request.phase === 'chat' || request.phase === 'discussion';
-    // The chief never runs with full access: it may only read the repository and call its scoped Muon CLI.
-    const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion' && !chief;
+    const chat = request.phase === 'chat';
+    // The chief and planning chats work in the owner's real repository, never a task worktree:
+    // they may read it and write temporary files to a scratch directory, and nothing else.
+    const advisory = chief || chat;
+    const readonly = request.phase === 'planning' || request.phase === 'discussion';
+    const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion' && !advisory;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cliExecutable = request.chiefCli?.command.replace(/^'|'$/g, '');
     if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
@@ -46,9 +49,9 @@ export class CodexAdapter implements AgentAdapter {
     }
     // Codex sandboxes by working directory: an empty scratch directory keeps the repository read-only while the
     // launcher still reaches the loopback API. The prompt names the repository so the chief can inspect it.
-    const scratch = chief ? await mkdtemp(join(tmpdir(), 'muon-codex-chief-')) : undefined;
+    const scratch = advisory ? await mkdtemp(join(tmpdir(), chief ? 'muon-codex-chief-' : 'muon-codex-chat-')) : undefined;
     const workingDirectory = scratch ?? request.cwd;
-    const prompt = chief ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder.\n${request.prompt}` : request.prompt;
+    const prompt = advisory ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder for temporary files.\n${request.prompt}` : request.prompt;
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;
@@ -189,7 +192,7 @@ export class CodexAdapter implements AgentAdapter {
           ? { type: 'dangerFullAccess' }
           : readonly
           ? { type: 'readOnly' }
-          : { type: 'workspaceWrite', writableRoots: [workingDirectory], networkAccess: true },
+          : { type: 'workspaceWrite', writableRoots: [workingDirectory], networkAccess: !chat },
       }));
       turnId = text(record(started?.turn)?.id) ?? turnId;
       if (!turnId) {

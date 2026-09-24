@@ -6,7 +6,12 @@ import { ClaudeCodeAdapter } from './claude-code-adapter.js';
 import { CodexAdapter } from './codex-adapter.js';
 
 let directory: string;
-beforeEach(async () => { directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-runtime-'))); });
+beforeEach(async () => {
+  directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-runtime-')));
+  // Advisory sessions run from a scratch working directory that is deleted afterwards, so fixtures log here.
+  vi.stubEnv('MUON_CLAUDE_TEST_DIR', directory);
+  vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
+});
 afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
 async function executable(name: string, source: string): Promise<string> {
@@ -21,7 +26,7 @@ import { writeFileSync } from 'node:fs';
 if (process.argv.includes('--version')) { console.log('2.1.258'); process.exit(0); }
 let prompt = '';
 process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', () => {
-  writeFileSync('invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt, chiefToken: process.env.MUON_API_TOKEN }));
+  writeFileSync((process.env.MUON_CLAUDE_TEST_DIR ?? '.') + '/invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt, chiefToken: process.env.MUON_API_TOKEN, cwd: process.cwd() }));
   if (prompt === 'crash') { process.stderr.write('Please sign in first'); process.exit(1); }
   if (prompt === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); return; }
   if (prompt === 'malformed') { console.log('broken JSON'); return; }
@@ -125,25 +130,29 @@ describe('ClaudeCodeAdapter', () => {
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
   });
-  it.each([false, true])('selects chat models while preserving the configured permission policy with bypassPermissions=%s', async bypassPermissions => {
-    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions });
+  it.each([false, true])('keeps chats read-only in the repository with a scratch directory even when bypassPermissions=%s', async bypassPermissions => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions, allowLocalBinding: true, allowedNetworkDomains: ['registry.npmjs.org'] });
     await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'sonnet[1m]' });
-    let { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    let invocation = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    let { args } = invocation;
     expect(args[args.indexOf('--model') + 1]).toBe('sonnet[1m]');
     expect(args[args.indexOf('--effort') + 1]).toBe('max');
     const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
-    if (bypassPermissions) {
-      expect(args).toContain('--dangerously-skip-permissions');
-      expect(args).not.toContain('--restricted');
-      expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Edit,Write,Bash');
-      expect(settings.sandbox).toMatchObject({ enabled: false, allowUnsandboxedCommands: true });
-    } else {
-      expect(args).toContain('--restricted');
-      expect(args).not.toContain('--dangerously-skip-permissions');
-      expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
-      expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep');
-      expect(settings.sandbox).toMatchObject({ allowUnsandboxedCommands: false, network: { allowedDomains: [], allowLocalBinding: false } });
-    }
+    expect(args).toContain('--restricted');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Bash');
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(['Edit', 'Write', 'Read(./.env)']));
+    expect(settings.permissions.allow).toBeUndefined();
+    const scratch = settings.sandbox.filesystem.allowWrite[0] as string;
+    expect(scratch).toContain('muon-claude-scratch-');
+    expect(scratch).not.toBe(directory);
+    expect(settings.permissions.additionalDirectories).toEqual([directory]);
+    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, network: { allowedDomains: [], allowLocalBinding: false }, filesystem: { allowWrite: [scratch], denyWrite: [directory], denyRead: [join(directory, '.muon'), join(directory, '.env')] } });
+    expect(invocation.cwd).toBe(scratch);
+    expect(invocation.prompt).toContain(`The project repository is at ${directory}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder`);
+    expect(invocation.prompt).toContain('Explore an idea');
+    await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
     await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Use the configured default' });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
@@ -304,6 +313,19 @@ describe('CodexAdapter', () => {
     await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, command: 'muon; rm -rf /' } })).rejects.toThrow('shell metacharacters');
     await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
     await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'permission', chiefCli })).rejects.toThrow('owner attention');
+  });
+
+  it('runs chats from a scratch directory without network and never with full access', async () => {
+    vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    await expect(adapter.run({ provider: 'codex', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'gpt-6-astra-mini' })).resolves.toMatchObject({ text: 'Final result' });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const scratch = requests[3].params.cwd as string;
+    expect(scratch).toContain('muon-codex-chat-');
+    expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', config: { model: 'gpt-6-astra-mini' } });
+    expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: false } });
+    expect(requests[4].params.input[0].text).toContain(`The project repository is at ${directory}`);
+    await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('returns authoritative RFC plan items with read-only permissions', async () => {

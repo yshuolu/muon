@@ -1,6 +1,8 @@
 import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { record, text } from './protocol-values.js';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
 
 function compact(value: unknown, limit = 140): string | undefined {
@@ -76,49 +78,60 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     const chief = request.phase === 'chief';
     const chat = request.phase === 'chat';
     const discussion = request.phase === 'discussion';
-    const model = chief || chat ? request.model ?? this.model : this.model;
-    const readonly = request.phase === 'planning' || chat || discussion;
+    // The chief and planning chats work in the owner's real repository, never a task worktree:
+    // they may read it and write temporary files to a scratch directory, and nothing else.
+    const advisory = chief || chat;
+    const model = advisory ? request.model ?? this.model : this.model;
+    const readonly = request.phase === 'planning' || discussion;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
     const cliExecutable = cli?.command.replace(/^'|'$/g, '');
     if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
-    if (this.bypassPermissions && !chief && !discussion) {
+    if (this.bypassPermissions && !advisory && !discussion) {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(model ? ['--model', model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
       return this.runProcess(request, args);
     }
-    const settings = {
-      disableAllHooks: true,
-      permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: [],
-        ...(discussion ? { deny: ['Edit', 'Write', 'Bash'] } : {}),
-        ...(chief ? {
-          allow: [`Bash(${cliExecutable} *)`],
-          deny: ['Edit', 'Write', `Read(${join(request.cwd, '.muon').replace(/^\//, '//')}/**)`, 'Read(./.env)', 'Read(./.env.*)'],
-        } : {}),
-      },
-      sandbox: {
-        enabled: !readonly,
-        failIfUnavailable: true,
-        autoAllowBashIfSandboxed: !readonly && !chief,
-        allowUnsandboxedCommands: false,
-        excludedCommands: [],
-        network: { allowedDomains: chief ? [api!.host] : readonly ? [] : this.allowedNetworkDomains, allowLocalBinding: !readonly && !chief && this.allowLocalBinding, ...(chief ? { strictAllowlist: true } : {}) },
-        filesystem: chief ? { allowWrite: [], denyWrite: [request.cwd, dirname(cliExecutable!)], denyRead: [join(request.cwd, '.muon'), join(request.cwd, '.env')] } : { allowWrite: [request.cwd] },
-      },
-    };
-    const args = [
-      '-p', '--output-format', 'stream-json', '--verbose', '--restricted', '--strict-mcp-config',
-      '--permission-mode', readonly ? 'plan' : chief ? 'default' : 'acceptEdits',
-      '--permission-prompts', 'none',
-      '--tools', readonly ? 'Read,Glob,Grep' : chief ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
-      ...(model ? ['--model', model] : []),
-      ...(this.effort ? ['--effort', this.effort] : []),
-      '--disallowedTools', 'mcp__*',
-      '--settings', JSON.stringify(settings),
-      ...(request.sessionId ? ['--resume', request.sessionId] : []),
-    ];
-    return this.runProcess(request, args, chief ? { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } : undefined);
+    const scratch = advisory ? await realpath(await mkdtemp(join(tmpdir(), 'muon-claude-scratch-'))) : undefined;
+    try {
+      const settings = {
+        disableAllHooks: true,
+        // Advisory sessions start in the scratch directory so the CLI's own state files never land in the
+        // repository; the repository is attached as an additional (read-only) directory.
+        permissions: { disableBypassPermissionsMode: 'disable', additionalDirectories: scratch ? [request.cwd] : [],
+          ...(discussion ? { deny: ['Edit', 'Write', 'Bash'] } : {}),
+          ...(chief ? { allow: [`Bash(${cliExecutable} *)`] } : {}),
+          ...(advisory ? { deny: ['Edit', 'Write', `Read(${join(request.cwd, '.muon').replace(/^\//, '//')}/**)`, 'Read(./.env)', 'Read(./.env.*)'] } : {}),
+        },
+        sandbox: {
+          enabled: !readonly,
+          failIfUnavailable: true,
+          autoAllowBashIfSandboxed: !readonly && !chief,
+          allowUnsandboxedCommands: false,
+          excludedCommands: [],
+          network: { allowedDomains: chief ? [api!.host] : readonly || chat ? [] : this.allowedNetworkDomains, allowLocalBinding: !readonly && !advisory && this.allowLocalBinding, ...(chief ? { strictAllowlist: true } : {}) },
+          filesystem: advisory
+            ? { allowWrite: [scratch!], denyWrite: [request.cwd, ...(chief ? [dirname(cliExecutable!)] : [])], denyRead: [join(request.cwd, '.muon'), join(request.cwd, '.env')] }
+            : { allowWrite: [request.cwd] },
+        },
+      };
+      const args = [
+        '-p', '--output-format', 'stream-json', '--verbose', '--restricted', '--strict-mcp-config',
+        '--permission-mode', readonly ? 'plan' : advisory ? 'default' : 'acceptEdits',
+        '--permission-prompts', 'none',
+        '--tools', readonly ? 'Read,Glob,Grep' : advisory ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
+        ...(model ? ['--model', model] : []),
+        ...(this.effort ? ['--effort', this.effort] : []),
+        '--disallowedTools', 'mcp__*',
+        '--settings', JSON.stringify(settings),
+        ...(request.sessionId ? ['--resume', request.sessionId] : []),
+      ];
+      const prompt = scratch ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder: write any temporary files only there.\n${request.prompt}` : request.prompt;
+      return await this.runProcess({ ...request, prompt, cwd: scratch ?? request.cwd }, args, chief ? { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } : undefined);
+    } finally {
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    }
   }
 
   private async runProcess(request: AgentRequest, args: string[], env?: NodeJS.ProcessEnv): Promise<AgentResult> {
