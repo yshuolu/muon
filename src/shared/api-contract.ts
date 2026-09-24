@@ -16,6 +16,7 @@ export const editTaskSchema = createTaskSchema.omit({ kind: true }).partial().ex
 export const settingsSchema = z.strictObject({
   maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
   defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
+  chiefProvider: z.enum(['claude', 'codex']).nullable().optional(),
   chiefModel: modelIdentifierSchema.nullable().optional(),
   chiefSoul: z.string().trim().max(20_000).nullable().optional(),
 });

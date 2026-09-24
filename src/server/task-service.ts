@@ -526,9 +526,12 @@ export class TaskService implements Dispatcher {
     try {
       const { repositoryPath, projectName, ...settings } = input;
       const currentSettings = await this.repo.settings(this.scope);
+      const changingChiefProvider = settings.chiefProvider !== undefined && (settings.chiefProvider ?? 'claude') !== (currentSettings.chiefProvider ?? 'claude');
       const changingChiefModel = settings.chiefModel !== undefined && settings.chiefModel !== (currentSettings.chiefModel ?? null);
       const changingChiefSoul = settings.chiefSoul !== undefined && settings.chiefSoul !== (currentSettings.chiefSoul ?? null);
-      if ((changingChiefModel || changingChiefSoul) && (this.chiefActive || await this.repo.pendingChief(this.scope))) throw new DomainError('Wait for the chief of staff to finish before changing its model or SOUL.', 409);
+      if ((changingChiefProvider || changingChiefModel || changingChiefSoul) && (this.chiefActive || await this.repo.pendingChief(this.scope))) throw new DomainError('Wait for the chief of staff to finish before changing its agent, model, or SOUL.', 409);
+      // Model identifiers belong to one agent; a new chief agent starts from its configured default unless a model is given.
+      if (changingChiefProvider && settings.chiefModel === undefined) settings.chiefModel = null;
       const project = await this.repo.project(this.scope);
       const changingRepository = repositoryPath !== undefined && repositoryPath !== project.repositoryPath;
       if (changingRepository) {
@@ -936,15 +939,17 @@ export class TaskService implements Dispatcher {
       this.chiefActivity = 'Connecting task controls…';
       commands = await this.options.chiefCommands?.open(this.scope, abort.signal);
       if (this.stopped || abort.signal.aborted) return;
-      this.chiefActivity = 'Running Claude Code…';
-      const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command, settings.chiefSoul), cwd: project.repositoryPath, model: settings.chiefModel ?? undefined, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
+      const provider: Provider = settings.chiefProvider ?? 'claude';
+      if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or choose another chief agent.`);
+      this.chiefActivity = `Running ${provider === 'claude' ? 'Claude Code' : 'Codex'}…`;
+      const result = await this.options.adapters[provider].run({ provider, phase: 'chief', prompt: chiefPrompt(project, messages, commands?.cli.command, settings.chiefSoul), cwd: project.repositoryPath, model: settings.chiefModel ?? undefined, signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');
       this.chiefActivity = 'Applying task updates…';
       // Task operations have already gone through CLI -> REST -> TaskService. A
       // model's final text is display-only and never interpreted as commands.
-      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content, createdAt: now(), taskIds: commands?.taskIds() ?? [] });
+      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content, createdAt: now(), taskIds: commands?.taskIds() ?? [], provider });
     }).catch(async error => {
       if (error instanceof AgentProcessUnreapedError) canRelease = false;
       await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: `I couldn't complete this request. ${error instanceof Error ? error.message : String(error)} Any task changes already saved through the CLI are retained.`, createdAt: now(), taskIds: commands?.taskIds() ?? [] });

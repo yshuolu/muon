@@ -97,6 +97,27 @@ describe('HTTP validation and local boundary', () => {
     expect((await repository.settings(scope)).chiefModel).toBeUndefined();
   });
 
+  it('runs the chief through Codex when selected and resets the model on an agent switch', async () => {
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: 'gemini' })).status).toBe(400);
+    expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' })).status).toBe(200);
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: 'codex' })).status).toBe(200);
+    expect(await repository.settings(scope)).toMatchObject({ chiefProvider: 'codex', chiefModel: null });
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: 'codex', chiefModel: 'gpt-6-astra-mini' })).status).toBe(200);
+    await service.sendChief('Organize the project');
+    await eventually(() => codex.calls.length === 1);
+    expect(claude.calls).toHaveLength(0);
+    expect(codex.calls[0].request).toMatchObject({ provider: 'codex', phase: 'chief', model: 'gpt-6-astra-mini', cwd: '/test/repo' });
+    expect(codex.calls[0].request.chiefCli?.token).toBeTruthy();
+    expect(codex.calls[0].request.prompt).not.toContain('a Claude Code agent');
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: 'claude' })).status).toBe(409);
+    codex.calls[0].resolve({ text: 'Everything is queued.' });
+    await eventually(async () => !(await service.snapshot()).runtime.chiefRunning);
+    const messages = (await service.snapshot()).messages;
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Everything is queued.', provider: 'codex' });
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: null })).status).toBe(200);
+    expect(await repository.settings(scope)).toMatchObject({ chiefProvider: null, chiefModel: null });
+  });
+
   it('keeps chief model settings owner-only and rejects changing an active request model', async () => {
     await service.sendChief('Organize the project');
     await eventually(() => claude.calls.length === 1);

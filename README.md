@@ -121,7 +121,9 @@ Planning chats use a compact toolbar for navigation and **Taskify**, leaving the
 
 Chief, planning chats, task Comments, and RFC discussions share the same scrolling behavior. Sending reveals your message; incoming replies follow only while you are at the latest messages. Reading older messages keeps your place and shows a compact new-message control and **Jump to latest**. Switching conversations or task tabs restores your place while the app page remains open. On narrow screens, the Plan tab switches between **RFC** and **Discussion**, keeping the reply box visible. Reloading clears reading positions; it does not change the underlying conversation's persistence.
 
-Choose the chief of staff's model directly from the dropdown in its message toolbar; selections save immediately. The menu includes the configured default, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model available to your Claude Code account; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT`. Wait until the chief finishes before changing its model.
+Choose the chief of staff's agent and model directly from the dropdowns in its message toolbar; selections save immediately. The agent is **Claude Code** or **Codex**; switching agents keeps the whole conversation, because each chief request starts a fresh run that receives the recent transcript from Muon's database, and returns the model to that agent's default. The model menu includes the agent's configured default plus, for Claude Code, `opus`, `sonnet`, and `haiku`. **Enter model ID…** opens an inline field for another model of that agent; Enter saves and Escape cancels. The selection is saved for this project and applies only to chief requests. Select the **(default)** option to return to `MUON_CLAUDE_MODEL` or `MUON_CODEX_MODEL`; thinking effort continues to use `MUON_CLAUDE_EFFORT` or `MUON_CODEX_REASONING_EFFORT`. Wait until the chief finishes before changing its agent or model. Each reply is labeled with the agent that produced it.
+
+A Codex chief runs with Codex's workspace-write sandbox from an empty scratch directory, so the repository stays read-only and only the loopback API is reachable through Muon's scoped CLI; it never gets full access even when `MUON_AGENT_BYPASS_PERMISSIONS` is enabled. Codex has no per-path read denials, so unlike the Claude Code chief it can read `.env` files in the repository.
 
 Choose **Configure SOUL** in the Chief composer to edit the Chief's per-project persona and working style. The editor supports Markdown, shows a live preview, and saves the SOUL for future Chief requests. Keep permissions, RFC approvals, and other safety rules out of the SOUL; those system rules always remain in force. Changes are blocked while a Chief request is queued or running.
 
@@ -158,6 +160,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Browser workflow and media validation](docs/browser-validation.md)
 - [Library and reference note validation](docs/library-validation.md)
 - [Multi-project validation](docs/projects-validation.md)
+- [Chief of staff agent validation](docs/chief-agent-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh

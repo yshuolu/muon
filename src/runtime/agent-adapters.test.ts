@@ -1,13 +1,13 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeCodeAdapter } from './claude-code-adapter.js';
 import { CodexAdapter } from './codex-adapter.js';
 
 let directory: string;
 beforeEach(async () => { directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-runtime-'))); });
-afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
 async function executable(name: string, source: string): Promise<string> {
   const path = join(directory, `${name}.mjs`);
@@ -46,13 +46,14 @@ async function codexFixture(options: { sessionId?: unknown } = {}): Promise<stri
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { console.log('codex 1.0'); process.exit(0); }
-writeFileSync('codex-invocation.json', JSON.stringify({args:process.argv.slice(2)}));
+const logDirectory = process.env.MUON_CODEX_TEST_DIR ?? '.';
+writeFileSync(logDirectory + '/codex-invocation.json', JSON.stringify({args:process.argv.slice(2)}));
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const options = ${JSON.stringify(options)};
 const lines = createInterface({input:process.stdin});
 lines.on('line', line => {
   const frame = JSON.parse(line);
-  appendFileSync('requests.jsonl', line + '\\n');
+  appendFileSync(logDirectory + '/requests.jsonl', line + '\\n');
   if (!frame.method) return;
   if (frame.method === 'initialize') send({id:frame.id,result:{}});
   if (frame.method === 'config/read') send({id:frame.id,result:{config:{model:'configured-model',mcp_servers:{'personal-tools':{command:'tool-server'},'project.tools':{url:'https://example.invalid/mcp'}}}}});
@@ -62,7 +63,7 @@ lines.on('line', line => {
     const prompt = frame.params.input[0].text;
     send({id:frame.id,result:prompt === 'deferred-id' ? {} : {turn:{id:'turn-1',status:'inProgress'}}});
     setTimeout(() => {
-      if (prompt === 'permission') send({id:900,method:'item/commandExecution/requestApproval',params:{threadId,turnId:'turn-1'}});
+      if (prompt.endsWith('permission')) send({id:900,method:'item/commandExecution/requestApproval',params:{threadId,turnId:'turn-1'}});
       if (prompt === 'permissions') send({id:901,method:'item/permissions/requestApproval',params:{threadId,turnId:'turn-1'}});
       const event = (method, params) => send({method,params:{threadId,turnId:'turn-1',...params}});
       event('turn/started',{turn:{id:'turn-1'}});
@@ -281,6 +282,28 @@ describe('CodexAdapter', () => {
     expect(requests[4].params).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'workspaceWrite', writableRoots: [directory], networkAccess: true } });
     const { args } = JSON.parse(await readFile(join(directory, 'codex-invocation.json'), 'utf8'));
     expect(args).toEqual(['app-server', '--disable', 'apps', '--disable', 'plugins', '--disable', 'hooks', '--disable', 'multi_agent']);
+  });
+
+  it('runs the chief from a scratch directory with network for its CLI and never with full access', async () => {
+    // The chief's scratch working directory is deleted after the run, so the fixture logs into the test directory.
+    vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    const chiefCli = { command: `'${join(directory, 'muon-launcher')}'`, apiUrl: 'http://127.0.0.1:4310', token: 'chief-token' };
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', model: 'gpt-6-astra-mini', chiefCli })).resolves.toMatchObject({ text: 'Final result' });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const scratch = requests[3].params.cwd as string;
+    expect(scratch).not.toBe(directory);
+    expect(scratch).toContain('muon-codex-chief-');
+    expect(requests[2].params.cwd).toBe(scratch);
+    expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', approvalPolicy: 'never', config: { model: 'gpt-6-astra-mini' } });
+    expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: true } });
+    expect(requests[4].params.input[0].text).toContain(`The project repository is at ${directory}`);
+    expect(requests[4].params.input[0].text).toContain('Organize');
+    await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize' })).rejects.toThrow('scoped Muon CLI');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, command: 'muon; rm -rf /' } })).rejects.toThrow('shell metacharacters');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'permission', chiefCli })).rejects.toThrow('owner attention');
   });
 
   it('returns authoritative RFC plan items with read-only permissions', async () => {

@@ -70,7 +70,7 @@ export function parseJsonResult(text: string): unknown {
 }
 
 export function chiefPrompt(project: Project, messages: ChiefMessage[], command = 'muon', soul?: string | null) {
-  return `You are Muon's chief of staff, a Claude Code agent using the same runtime as coding agents. Help the owner organize, prioritize, and manage work. Inspect repository source read-only when useful, but do not implement code or write files.
+  return `You are Muon's chief of staff, a coding agent using the same runtime as Muon's task agents. Help the owner organize, prioritize, and manage work. Inspect repository source read-only when useful, but do not implement code or write files.
 Project: ${project.name}
 The system of record is the Muon REST service. Interact with it exclusively through this session's Muon CLI, using Bash:
 ${command} --help

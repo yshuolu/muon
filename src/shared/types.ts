@@ -80,8 +80,15 @@ export interface Project {
   /** An archived project keeps its records and worktrees but runs no agents until restored. */
   archivedAt?: string;
 }
-export interface Settings { maxConcurrentAgents: number; dispatcherEnabled: boolean; defaultProvider: Provider; chiefModel?: string | null; chiefSoul?: string | null }
-export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
+export interface Settings {
+  maxConcurrentAgents: number; dispatcherEnabled: boolean; defaultProvider: Provider;
+  /** The agent that runs chief requests; null or absent means Claude Code. */
+  chiefProvider?: Provider | null;
+  /** A model override for the chief agent, or null for that agent's configured default. */
+  chiefModel?: string | null;
+  chiefSoul?: string | null;
+}
+export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[]; provider?: Provider }
 export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string }
 export interface PlanningChat {
   id: string;

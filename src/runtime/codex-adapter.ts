@@ -1,7 +1,10 @@
 import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { errorMessage, record, text } from './protocol-values.js';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 
 type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 const isolatedFeatures = { apps: false, plugins: false, hooks: false, multi_agent: false };
@@ -30,8 +33,22 @@ export class CodexAdapter implements AgentAdapter {
   async run(request: AgentRequest): Promise<AgentResult> {
     if (request.provider !== this.provider) throw new Error('Codex adapter received another provider.');
     await validateWorkingDirectory(request.cwd);
-    const readonly = request.phase === 'planning' || request.phase === 'chief' || request.phase === 'chat' || request.phase === 'discussion';
-    const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion';
+    const chief = request.phase === 'chief';
+    const readonly = request.phase === 'planning' || request.phase === 'chat' || request.phase === 'discussion';
+    // The chief never runs with full access: it may only read the repository and call its scoped Muon CLI.
+    const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion' && !chief;
+    if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
+    const cliExecutable = request.chiefCli?.command.replace(/^'|'$/g, '');
+    if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
+    if (chief) {
+      const api = new URL(request.chiefCli!.apiUrl);
+      if (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password) throw new Error('The local chief requires a loopback API endpoint.');
+    }
+    // Codex sandboxes by working directory: an empty scratch directory keeps the repository read-only while the
+    // launcher still reaches the loopback API. The prompt names the repository so the chief can inspect it.
+    const scratch = chief ? await mkdtemp(join(tmpdir(), 'muon-codex-chief-')) : undefined;
+    const workingDirectory = scratch ?? request.cwd;
+    const prompt = chief ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder.\n${request.prompt}` : request.prompt;
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;
@@ -67,7 +84,7 @@ export class CodexAdapter implements AgentAdapter {
     let process: JsonProcess | undefined;
     try {
       process = new JsonProcess({
-        executable: this.executable, args: [...this.prefixArgs, 'app-server', ...Object.keys(isolatedFeatures).flatMap(feature => ['--disable', feature])], cwd: request.cwd, signal: request.signal,
+        executable: this.executable, args: [...this.prefixArgs, 'app-server', ...Object.keys(isolatedFeatures).flatMap(feature => ['--disable', feature])], cwd: workingDirectory, signal: request.signal,
         onFault: fail,
         onRecord: (value) => {
           const frame = record(value);
@@ -143,18 +160,18 @@ export class CodexAdapter implements AgentAdapter {
       connection.send({ method: 'initialized' });
       // Empty MCP tables merge with user/project config; disable each effective server explicitly.
       // Read only configuration in memory: never rewrite the owner's config or credentials.
-      const configuration = record(record(await rpc('config/read', { cwd: request.cwd, includeLayers: false }))?.config);
+      const configuration = record(record(await rpc('config/read', { cwd: workingDirectory, includeLayers: false }))?.config);
       if (!configuration) throw new Error('Codex could not resolve isolated task configuration. Use the app-managed CLI.');
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
-      // Quick chats may pick their own model; task phases keep the configured one.
-      const model = request.phase === 'chat' ? request.model ?? this.model : this.model;
+      // Quick chats and the chief may pick their own model; task phases keep the configured one.
+      const model = request.phase === 'chat' || chief ? request.model ?? this.model : this.model;
       const config = { mcp_servers: mcpServers, features: isolatedFeatures,
         ...(model ? { model } : {}),
         ...(this.reasoningEffort ? { model_reasoning_effort: this.reasoningEffort } : {}),
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
-        cwd: request.cwd, approvalPolicy: 'never', sandbox: bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
+        cwd: workingDirectory, approvalPolicy: 'never', sandbox: bypassPermissions ? 'danger-full-access' : readonly ? 'read-only' : 'workspace-write',
         config,
       }));
       sessionId = text(record(opened?.thread)?.id);
@@ -165,14 +182,14 @@ export class CodexAdapter implements AgentAdapter {
       request.onSessionId?.(sessionId);
       const started = record(await rpc('turn/start', {
         threadId: sessionId,
-        input: [{ type: 'text', text: request.prompt }],
-        cwd: request.cwd,
+        input: [{ type: 'text', text: prompt }],
+        cwd: workingDirectory,
         approvalPolicy: 'never',
         sandboxPolicy: bypassPermissions
           ? { type: 'dangerFullAccess' }
           : readonly
           ? { type: 'readOnly' }
-          : { type: 'workspaceWrite', writableRoots: [request.cwd], networkAccess: true },
+          : { type: 'workspaceWrite', writableRoots: [workingDirectory], networkAccess: true },
       }));
       turnId = text(record(started?.turn)?.id) ?? turnId;
       if (!turnId) {
@@ -192,6 +209,7 @@ export class CodexAdapter implements AgentAdapter {
     } finally {
       fail(new Error('Codex connection closed.'));
       await process?.stop();
+      if (scratch) await rm(scratch, { recursive: true, force: true });
     }
   }
 }
