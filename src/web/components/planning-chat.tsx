@@ -4,6 +4,7 @@ import type { AppSnapshot, PlanningChat, PlanningChatMessage, Provider, Task } f
 import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
 import { useConversationScroll } from '../lib/conversation-scroll';
+import { deliverNotification } from '../lib/notifications';
 import { Markdown, MuonMark } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
@@ -67,6 +68,16 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     const timer = setInterval(() => { void load(); }, 1200);
     return () => clearInterval(timer);
   }, [chat?.busy, chatId]);
+  // Announce a reply that arrived while this chat was waiting; replies already present when the chat opened stay quiet.
+  const lastAssistantId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!chat) return;
+    const latest = chat.messages.findLast(message => message.role === 'assistant')?.id ?? null;
+    if (lastAssistantId.current !== undefined && latest && latest !== lastAssistantId.current) {
+      deliverNotification({ kind: 'planning', title: 'Planning partner replied', body: chat.messages.find(message => message.id === latest)?.content.replace(/\s+/g, ' ').trim().slice(0, 140) ?? '', tag: `planning:${latest}` }, () => window.focus());
+    }
+    lastAssistantId.current = latest;
+  }, [chat]);
   function closeModelEdit() {
     setCustomModel(false);
     requestAnimationFrame(() => {

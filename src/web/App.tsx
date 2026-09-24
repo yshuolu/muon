@@ -4,6 +4,7 @@ import type { Project, Task } from '../shared/types';
 import { ApiError } from '../shared/api-client';
 import { api, useWorkspace } from './lib/api';
 import { rememberedProjectId } from './lib/project';
+import { deliverNotification, snapshotNotifications, unlockAudio } from './lib/notifications';
 import { visibleAttention } from './lib/utils';
 import { useVisualViewport } from './lib/use-visual-viewport';
 import { AttentionView } from './components/attention';
@@ -75,6 +76,21 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const selected = snapshot?.tasks.find(task => task.id === selectedId);
   const unread = snapshot ? visibleAttention(snapshot).length : 0;
+  // Announce new attention records and agent replies by diffing consecutive polls of the same project.
+  const previousSnapshot = useRef<typeof snapshot>(null);
+  useEffect(() => { unlockAudio(); }, []);
+  useEffect(() => {
+    const previous = previousSnapshot.current;
+    previousSnapshot.current = snapshot;
+    if (!snapshot) return;
+    for (const notification of snapshotNotifications(previous, snapshot)) {
+      deliverNotification(notification, () => {
+        if (notification.taskId && notification.kind !== 'chief') navigate('tasks', notification.taskId);
+        else if (notification.kind === 'chief') navigate('chief');
+        else navigate('attention');
+      });
+    }
+  }, [snapshot, navigate]);
   // Switching projects starts from its task list; the disposable planning chat is discarded first, under the old project.
   const switchProject = useCallback((id: string, replace = false) => {
     discardChat();

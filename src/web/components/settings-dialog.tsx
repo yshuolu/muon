@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, CheckCircle2, Circle, FolderGit2, Terminal } from 'lucide-react';
+import { Archive, ArchiveRestore, Bell, CheckCircle2, Circle, FolderGit2, Terminal } from 'lucide-react';
 import type { AppSnapshot, Project, Provider } from '../../shared/types';
 import { api } from '../lib/api';
+import { notificationPreferences, playChime, requestSystemNotifications, saveNotificationPreferences, systemNotificationSupport } from '../lib/notifications';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 
@@ -18,6 +19,15 @@ export function SettingsDialog({ snapshot, open, onOpenChange, onSaved, onArchiv
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [notifications, setNotifications] = useState(notificationPreferences);
+  const [systemSupport, setSystemSupport] = useState(systemNotificationSupport);
+  function updateNotifications(next: typeof notifications) { setNotifications(next); saveNotificationPreferences(next); }
+  async function toggleSystemNotifications(enabled: boolean) {
+    if (!enabled) { updateNotifications({ ...notifications, system: false }); return; }
+    const granted = await requestSystemNotifications();
+    setSystemSupport(systemNotificationSupport());
+    updateNotifications({ ...notifications, system: granted });
+  }
   const archived = (snapshot.projects ?? []).filter(project => project.archivedAt);
   const agentsRunning = snapshot.runtime.activeRuns > 0 || snapshot.runtime.chiefRunning;
   async function save(event: React.FormEvent) {
@@ -55,6 +65,9 @@ export function SettingsDialog({ snapshot, open, onOpenChange, onSaved, onArchiv
       <p className="provider-setup-hint">Muon uses your installed Claude Code and a project-managed Codex CLI. Both use your existing agent sign-ins. Open Claude Code once to sign in; for Codex, use pnpm exec codex login from the Muon folder. Installed means the executable was detected; sign-in or execution failures appear on the task with recovery actions.</p>
       <div className="form-grid"><label>Default agent<select value={provider} onChange={e => setProvider(e.target.value as Provider)}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><label>Concurrent agents<select value={limit} onChange={e => setLimit(Number(e.target.value))}>{Array.from({ length: 8 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1} {i === 0 ? 'agent' : 'agents'}</option>)}</select></label></div>
       <label className="switch-row"><span><strong>Automatic dispatch</strong><small>Start ready Todo tasks as capacity opens up. Limits and dispatch apply to this project only.</small></span><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} role="switch" /></label>
+      <div className="settings-section-label"><Bell size={14} />Notifications in this browser</div>
+      <label className="switch-row"><span><strong>Sound</strong><small>A short chime when a task finishes, needs your review or help, or an agent replies. <button type="button" className="inline-link" onClick={() => playChime()}>Play it</button></small></span><input type="checkbox" checked={notifications.sound} onChange={event => updateNotifications({ ...notifications, sound: event.target.checked })} role="switch" /></label>
+      <label className="switch-row"><span><strong>System notifications</strong><small>{systemSupport === 'unsupported' ? 'This browser does not support system notifications.' : systemSupport === 'denied' ? 'Blocked by the browser. Allow notifications for this site in the browser settings to enable them.' : 'Shown by your operating system while this tab is in the background, and opens the task when clicked.'}</small></span><input type="checkbox" checked={notifications.system && systemSupport === 'granted'} disabled={systemSupport === 'unsupported' || systemSupport === 'denied'} onChange={event => void toggleSystemNotifications(event.target.checked)} role="switch" /></label>
       <div className="settings-section-label"><Archive size={14} />Archive</div>
       <div className="archive-project">
         <div><strong>Archive this project</strong><small>{agentsRunning ? 'Wait for active agents and the chief to finish first.' : 'Stops its dispatcher and hides it from the project list. Tasks, files, and worktrees stay; open planning chats are discarded. You can restore it any time.'}</small></div>
