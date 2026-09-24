@@ -228,8 +228,8 @@ function projectRoutes(projects: ProjectResolver) {
   });
   app.get('/planning-chats/:id', async c => c.json(c.get('service').getPlanningChat(c.req.param('id'))));
   app.patch('/planning-chats/:id', async c => {
-    const { model } = updatePlanningChatSchema.parse(await c.req.json());
-    return c.json(c.get('service').updatePlanningChat(c.req.param('id'), model));
+    const patch = updatePlanningChatSchema.parse(await c.req.json());
+    return c.json(c.get('service').updatePlanningChat(c.req.param('id'), patch));
   });
   app.post('/planning-chats/:id/messages', async c => {
     const { content } = planningChatMessageSchema.parse(await c.req.json());

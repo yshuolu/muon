@@ -36,7 +36,9 @@ export const taskCommentSchema = z.strictObject({
 });
 export const chiefMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const planningChatMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
-export const updatePlanningChatSchema = z.strictObject({ model: modelIdentifierSchema.nullable() });
+export const updatePlanningChatSchema = z.strictObject({
+  model: modelIdentifierSchema.nullable().optional(), provider: z.enum(['claude', 'codex']).optional(),
+}).refine(value => value.model !== undefined || value.provider !== undefined, 'Choose a provider or a model.');
 export const emptyMutationSchema = z.strictObject({});
 export const importAssetSchema = z.strictObject({ path: z.string().min(1).max(2000) });
 export const attachAssetSchema = z.strictObject({ assetId: z.string().min(1).max(200) });

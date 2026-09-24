@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AppSnapshot, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import type { AgentRun, AppSnapshot, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
 import { AgentProcessUnreapedError, type AgentAdapter, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
 import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema } from './agent-prompts';
@@ -569,7 +569,7 @@ export class TaskService implements Dispatcher {
   }
   createPlanningChat(): PlanningChat {
     const timestamp = now();
-    const chat: PlanningChat = { id: randomUUID(), model: null, messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false, activity: null };
+    const chat: PlanningChat = { id: randomUUID(), provider: 'claude', model: null, messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false, activity: null };
     this.planningChats.set(chat.id, chat);
     return chat;
   }
@@ -578,10 +578,15 @@ export class TaskService implements Dispatcher {
     if (!chat) throw new DomainError('Planning chat not found or already discarded.', 404);
     return chat;
   }
-  updatePlanningChat(id: string, model: string | null): PlanningChat {
+  updatePlanningChat(id: string, patch: { model?: string | null; provider?: Provider }): PlanningChat {
     const chat = this.getPlanningChat(id);
-    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before changing its model.', 409);
-    chat.model = model; chat.updatedAt = now();
+    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before changing its provider or model.', 409);
+    if (patch.provider !== undefined && patch.provider !== chat.provider) {
+      // Model identifiers belong to one provider; a switch starts from that provider's default.
+      chat.provider = patch.provider; chat.model = null;
+    }
+    if (patch.model !== undefined) chat.model = patch.model;
+    chat.updatedAt = now();
     return chat;
   }
   async sendPlanningChat(id: string, content: string) {
@@ -600,7 +605,9 @@ export class TaskService implements Dispatcher {
       const abort = new AbortController();
       const key = `planning-chat:${id}`;
       const done = Promise.resolve().then(async () => {
-        const result = await this.options.adapters.claude.run({ provider: 'claude', phase: 'chat', model: chat.model ?? undefined, prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
+        const provider = chat.provider;
+        if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or switch this chat to another agent.`);
+        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: chat.model ?? undefined, prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
         const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: result.text.trim(), createdAt: now() };
         chat.messages = [...chat.messages, reply]; chat.updatedAt = now();

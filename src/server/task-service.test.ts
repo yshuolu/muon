@@ -272,7 +272,7 @@ describe('TaskService workflow', () => {
   it('reserves a planning chat before configuration loads so its selected model cannot change mid-send', async () => {
     const f = await fixture();
     const chat = f.service.createPlanningChat();
-    f.service.updatePlanningChat(chat.id, 'sonnet');
+    f.service.updatePlanningChat(chat.id, { model: 'sonnet' });
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const settings = f.repo.settings.bind(f.repo);
@@ -280,7 +280,7 @@ describe('TaskService workflow', () => {
     const sending = f.service.sendPlanningChat(chat.id, 'Use the current model');
     try {
       expect(chat.busy).toBe(false);
-      expect(() => f.service.updatePlanningChat(chat.id, 'opus')).toThrow('before changing its model');
+      expect(() => f.service.updatePlanningChat(chat.id, { model: 'opus' })).toThrow('before changing its provider or model');
       await expect(f.service.sendPlanningChat(chat.id, 'Duplicate turn')).rejects.toMatchObject({ status: 409 });
       await expect(f.service.taskifyPlanningChat(chat.id, { title: 'Too soon' })).rejects.toMatchObject({ status: 409 });
     } finally { release(); }
@@ -290,7 +290,7 @@ describe('TaskService workflow', () => {
     expect(chat.messages).toHaveLength(1);
     call.finish('The selected model answered.');
     await eventually(() => !chat.busy, 'planning chat finished');
-    expect(f.service.updatePlanningChat(chat.id, 'opus').model).toBe('opus');
+    expect(f.service.updatePlanningChat(chat.id, { model: 'opus' }).model).toBe('opus');
   });
 
   it('releases planning-chat reservations when configuration fails so the owner can switch and retry', async () => {
@@ -299,7 +299,7 @@ describe('TaskService workflow', () => {
     vi.spyOn(f.repo, 'project').mockRejectedValueOnce(new Error('Project lookup failed'));
     await expect(f.service.sendPlanningChat(chat.id, 'Explore this idea')).rejects.toThrow('Project lookup failed');
     expect(chat.messages).toEqual([]);
-    expect(f.service.updatePlanningChat(chat.id, 'sonnet').model).toBe('sonnet');
+    expect(f.service.updatePlanningChat(chat.id, { model: 'sonnet' }).model).toBe('sonnet');
     await f.service.sendPlanningChat(chat.id, 'Try again');
     expect((await waitForCall(f, 0, 'chat')).request.model).toBe('sonnet');
   });
@@ -314,7 +314,7 @@ describe('TaskService workflow', () => {
     await waitForCall(f, 1, 'chat');
     await expect(f.service.sendPlanningChat(third.id, 'Third idea')).rejects.toMatchObject({ status: 409 });
     expect(third.messages).toEqual([]);
-    expect(f.service.updatePlanningChat(third.id, 'sonnet').model).toBe('sonnet');
+    expect(f.service.updatePlanningChat(third.id, { model: 'sonnet' }).model).toBe('sonnet');
     f.claude.calls[0].finish('First reply');
     await eventually(() => !first.busy, 'first planning chat finished');
     await f.service.sendPlanningChat(third.id, 'Third idea');

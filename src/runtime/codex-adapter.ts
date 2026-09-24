@@ -146,8 +146,10 @@ export class CodexAdapter implements AgentAdapter {
       const configuration = record(record(await rpc('config/read', { cwd: request.cwd, includeLayers: false }))?.config);
       if (!configuration) throw new Error('Codex could not resolve isolated task configuration. Use the app-managed CLI.');
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
+      // Quick chats may pick their own model; task phases keep the configured one.
+      const model = request.phase === 'chat' ? request.model ?? this.model : this.model;
       const config = { mcp_servers: mcpServers, features: isolatedFeatures,
-        ...(this.model ? { model: this.model } : {}),
+        ...(model ? { model } : {}),
         ...(this.reasoningEffort ? { model_reasoning_effort: this.reasoningEffort } : {}),
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {

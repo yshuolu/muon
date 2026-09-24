@@ -83,7 +83,14 @@ export interface Project {
 export interface Settings { maxConcurrentAgents: number; dispatcherEnabled: boolean; defaultProvider: Provider; chiefModel?: string | null; chiefSoul?: string | null }
 export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
 export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string }
-export interface PlanningChat { id: string; model: string | null; messages: PlanningChatMessage[]; createdAt: string; updatedAt: string; busy: boolean; activity?: string | null; error?: string }
+export interface PlanningChat {
+  id: string;
+  /** The agent that answers this chat; switching it resets the model to that provider's default. */
+  provider: Provider;
+  /** A model override for the provider, or null for the configured default. */
+  model: string | null;
+  messages: PlanningChatMessage[]; createdAt: string; updatedAt: string; busy: boolean; activity?: string | null; error?: string;
+}
 export interface AgentRuntimeConfig { model: string; thinking: string; bypassPermissions: boolean }
 export interface AppSnapshot {
   scope: Scope; project: Project; settings: Settings; tasks: Task[];

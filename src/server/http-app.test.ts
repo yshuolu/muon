@@ -241,6 +241,26 @@ describe('REST record resources', () => {
     expect(service.getPlanningChat(chat.id).model).toBeNull();
   });
 
+  it('lets a planning chat switch between Claude Code and Codex, resetting the model on each switch', async () => {
+    const chat = service.createPlanningChat();
+    expect(chat).toMatchObject({ provider: 'claude', model: null });
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', {})).status).toBe(400);
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'gemini' })).status).toBe(400);
+    await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet' });
+    const switched = await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'codex' });
+    expect(await switched.json()).toMatchObject({ id: chat.id, provider: 'codex', model: null });
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'codex', model: 'gpt-6-astra-mini' })).json()).toMatchObject({ provider: 'codex', model: 'gpt-6-astra-mini' });
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Which files handle routing?' })).status).toBe(202);
+    await eventually(() => codex.calls.length === 1);
+    expect(claude.calls).toHaveLength(0);
+    expect(codex.calls[0].request).toMatchObject({ provider: 'codex', phase: 'chat', model: 'gpt-6-astra-mini', cwd: '/test/repo' });
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'claude' })).status).toBe(409);
+    codex.calls[0].resolve({ text: 'Routing lives in src/server/http-app.ts.' });
+    await eventually(() => !service.getPlanningChat(chat.id).busy);
+    expect(service.getPlanningChat(chat.id).messages.map(message => message.role)).toEqual(['user', 'assistant']);
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'claude' })).json()).toMatchObject({ provider: 'claude', model: null });
+  });
+
   it('keeps planning chats disposable and taskifies only on explicit request', async () => {
     const created = await request('/api/planning-chats', 'POST', {});
     expect(created.status).toBe(201);
