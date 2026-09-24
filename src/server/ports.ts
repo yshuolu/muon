@@ -1,4 +1,4 @@
-import type { AppSnapshot, Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { AppSnapshot, Asset, Attention, ChiefMessage, PlanningChat, Project, Scope, Settings, Task } from '../shared/types';
 
 export interface Repository {
   initialize(scope: Scope, project: Project, settings: Settings): Promise<void>;
@@ -15,6 +15,10 @@ export interface Repository {
   assets(scope: Scope): Promise<Asset[]>;
   asset(scope: Scope, id: string): Promise<Asset | undefined>;
   insertAsset(scope: Scope, asset: Asset): Promise<Asset>;
+  /** Planning chats persist so a server restart does not lose an in-progress conversation. */
+  planningChats(scope: Scope): Promise<PlanningChat[]>;
+  savePlanningChat(scope: Scope, chat: PlanningChat): Promise<void>;
+  deletePlanningChat(scope: Scope, id: string): Promise<void>;
   attention(scope: Scope): Promise<Attention[]>;
   putAttention(scope: Scope, attention: Attention): Promise<void>;
   removeAttention(scope: Scope, taskId: string, kind?: Attention['kind']): Promise<void>;

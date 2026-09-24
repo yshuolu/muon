@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { Asset, Attention, ChiefMessage, PlanningChat, Project, Scope, Settings, Task } from '../shared/types';
 import { ConflictError, type Repository } from './ports';
 
 type Row = Record<string, unknown>;
@@ -20,7 +20,7 @@ export class SqliteRepository implements Repository {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const schemaVersion = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
-      if (schemaVersion > 2) throw new Error('This database requires a newer version of Muon.');
+      if (schemaVersion > 3) throw new Error('This database requires a newer version of Muon.');
       if (schemaVersion < 1) this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, payload TEXT NOT NULL,
@@ -64,6 +64,14 @@ export class SqliteRepository implements Repository {
           FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id)
         );
         PRAGMA user_version = 2;
+      `);
+      if (schemaVersion < 3) this.db.exec(`
+        CREATE TABLE IF NOT EXISTS planning_chats (
+          workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, project_id, id),
+          FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id)
+        );
+        PRAGMA user_version = 3;
       `);
       this.db.exec('COMMIT');
     } catch (error) {
@@ -133,6 +141,15 @@ export class SqliteRepository implements Repository {
     const result = this.db.prepare('UPDATE tasks SET status=?,phase=?,priority=?,version=?,payload=? WHERE workspace_id=? AND project_id=? AND id=? AND version=?').run(saved.status, saved.phase, saved.priority, saved.version, JSON.stringify(saved), ...this.keys(scope), task.id, expectedVersion);
     if (result.changes !== 1) throw new ConflictError();
     return saved;
+  }
+  async planningChats(scope: Scope) {
+    return this.db.prepare('SELECT payload FROM planning_chats WHERE workspace_id=? AND project_id=? ORDER BY rowid').all(...this.keys(scope)).map(row => decode<PlanningChat>(row)!);
+  }
+  async savePlanningChat(scope: Scope, chat: PlanningChat) {
+    this.db.prepare('INSERT INTO planning_chats VALUES (?,?,?,?) ON CONFLICT(workspace_id,project_id,id) DO UPDATE SET payload=excluded.payload').run(...this.keys(scope), chat.id, JSON.stringify(chat));
+  }
+  async deletePlanningChat(scope: Scope, id: string) {
+    this.db.prepare('DELETE FROM planning_chats WHERE workspace_id=? AND project_id=? AND id=?').run(...this.keys(scope), id);
   }
   async attention(scope: Scope) {
     return this.db.prepare('SELECT payload FROM attention WHERE workspace_id=? AND project_id=? ORDER BY rowid DESC').all(...this.keys(scope)).map(row => decode<Attention>(row)!);

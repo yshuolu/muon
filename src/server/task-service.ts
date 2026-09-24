@@ -75,6 +75,13 @@ export class TaskService implements Dispatcher {
     if (this.options.assets) {
       for (const task of await this.repo.tasks(this.scope)) await this.migrateEvidenceAssets(task);
     }
+    // Planning chats survive restarts; a reply that was in flight is reported as interrupted, never invented.
+    for (const chat of await this.repo.planningChats(this.scope)) {
+      if (!chat.messages.length) { await this.repo.deletePlanningChat(this.scope, chat.id); continue; }
+      const restored: PlanningChat = { ...chat, busy: false, activity: null, error: chat.busy ? 'The reply was interrupted when the server restarted. Send a follow-up to continue.' : chat.error };
+      this.planningChats.set(chat.id, restored);
+      if (chat.busy) await this.repo.savePlanningChat(this.scope, restored);
+    }
   }
   start() { this.timer = setInterval(() => { void this.tick().catch(console.error); }, 1000); this.timer.unref(); void this.tick().catch(console.error); }
   async stop() {
@@ -570,10 +577,15 @@ export class TaskService implements Dispatcher {
       void this.tick().catch(console.error);
     }
   }
+  /** SQLite writes complete synchronously inside the call; the promise only carries failures to the log. */
+  private persistPlanningChat(chat: PlanningChat) {
+    void this.repo.savePlanningChat(this.scope, chat).catch(error => console.error('Planning chat could not be saved', error));
+  }
   createPlanningChat(): PlanningChat {
     const timestamp = now();
     const chat: PlanningChat = { id: randomUUID(), provider: 'claude', model: null, messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false, activity: null };
     this.planningChats.set(chat.id, chat);
+    this.persistPlanningChat(chat);
     return chat;
   }
   getPlanningChat(id: string): PlanningChat {
@@ -590,6 +602,7 @@ export class TaskService implements Dispatcher {
     }
     if (patch.model !== undefined) chat.model = patch.model;
     chat.updatedAt = now();
+    this.persistPlanningChat(chat);
     return chat;
   }
   async sendPlanningChat(id: string, content: string) {
@@ -605,6 +618,7 @@ export class TaskService implements Dispatcher {
       if (!project.repositoryPath) throw new DomainError('Set a repository path before starting a planning chat.');
       const message: PlanningChatMessage = { id: randomUUID(), role: 'user', content, createdAt: now() };
       chat.messages = [...chat.messages, message]; chat.updatedAt = now(); chat.error = undefined; chat.busy = true; chat.activity = 'Thinking through your idea…';
+      this.persistPlanningChat(chat);
       const abort = new AbortController();
       const key = `planning-chat:${id}`;
       const done = Promise.resolve().then(async () => {
@@ -618,7 +632,9 @@ export class TaskService implements Dispatcher {
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
         chat.error = error instanceof Error ? error.message : String(error); chat.updatedAt = now();
       }).finally(() => {
-        chat.busy = false; chat.activity = null; this.active.delete(key); void this.tick().catch(console.error);
+        chat.busy = false; chat.activity = null; this.active.delete(key);
+        if (this.planningChats.get(id) === chat) this.persistPlanningChat(chat);
+        void this.tick().catch(console.error);
       });
       this.active.set(key, { abort, done });
       return message;
@@ -634,12 +650,14 @@ export class TaskService implements Dispatcher {
     const description = `${input.description ?? ''}${context}`.slice(0, 30_000);
     const task = await this.createTask({ ...input, description });
     this.planningChats.delete(id);
+    await this.repo.deletePlanningChat(this.scope, id);
     return task;
   }
   discardPlanningChat(id: string) {
     this.getPlanningChat(id);
     this.active.get(`planning-chat:${id}`)?.abort.abort();
     this.planningChats.delete(id);
+    void this.repo.deletePlanningChat(this.scope, id).catch(error => console.error('Planning chat could not be deleted', error));
   }
   async tick() {
     if (this.stopped || this.mutatingRepository) return;

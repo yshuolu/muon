@@ -282,6 +282,28 @@ describe('REST record resources', () => {
     expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'claude' })).json()).toMatchObject({ provider: 'claude', model: null });
   });
 
+  it('keeps planning chats across a restart and reports a reply that was in flight as interrupted', async () => {
+    const chat = service.createPlanningChat();
+    await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet' });
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Where does routing live?' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    const empty = service.createPlanningChat();
+    // Simulate a crash while the reply is still running: a new service reads the database before any
+    // graceful shutdown could mark the chat idle.
+    const restarted = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
+    await restarted.initialize();
+    try {
+      const recovered = restarted.getPlanningChat(chat.id);
+      expect(recovered).toMatchObject({ provider: 'claude', model: 'sonnet', busy: false, activity: null });
+      expect(recovered.messages.map(message => message.content)).toEqual(['Where does routing live?']);
+      expect(recovered.error).toContain('interrupted when the server restarted');
+      expect(() => restarted.getPlanningChat(empty.id)).toThrow('not found');
+      expect((await repository.planningChats(scope)).map(item => item.id)).toEqual([chat.id]);
+      await restarted.taskifyPlanningChat(chat.id, { title: 'Recovered plan', status: 'backlog' });
+      expect(await repository.planningChats(scope)).toEqual([]);
+    } finally { await restarted.stop(); }
+  });
+
   it('keeps planning chats disposable and taskifies only on explicit request', async () => {
     const created = await request('/api/planning-chats', 'POST', {});
     expect(created.status).toBe(201);

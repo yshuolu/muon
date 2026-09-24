@@ -84,7 +84,7 @@ describe('SqliteRepository', () => {
     expect(await repo.asset(scope, stored.id)).toEqual(stored);
     expect((await repo.insertTask(scope, task('second'))).identifier).toBe('MUO-2');
     const migratedDatabase = new DatabaseSync(filename);
-    expect(migratedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
+    expect(migratedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(3);
     migratedDatabase.close();
   });
 
@@ -93,11 +93,11 @@ describe('SqliteRepository', () => {
     directories.push(directory);
     const filename = join(directory, 'muon.sqlite');
     const futureDatabase = new DatabaseSync(filename);
-    futureDatabase.exec('PRAGMA user_version = 3;');
+    futureDatabase.exec('PRAGMA user_version = 4;');
     futureDatabase.close();
     expect(() => new SqliteRepository(filename)).toThrow('newer version');
     const unchangedDatabase = new DatabaseSync(filename);
-    expect(unchangedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(3);
+    expect(unchangedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(4);
     unchangedDatabase.close();
   });
 

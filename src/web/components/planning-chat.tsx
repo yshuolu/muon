@@ -5,6 +5,7 @@ import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
 import { useConversationScroll } from '../lib/conversation-scroll';
 import { deliverNotification } from '../lib/notifications';
+import { proposedTaskFromReply } from '../lib/planning-task';
 import { Markdown, MuonMark } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
@@ -117,7 +118,9 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     finally { setBusy(false); }
   }
   const firstQuestion = chat?.messages.find(message => message.role === 'user')?.content ?? '';
-  const initialTitle = firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 80) || 'New task';
+  // The partner's latest proposal prefills Taskify; the first question is the fallback title.
+  const proposal = proposedTaskFromReply(chat?.messages.findLast(message => message.role === 'assistant')?.content);
+  const initialTitle = proposal?.title ?? (firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 80) || 'New task');
   return <div className="planning-chat-view">
     <header className="planning-chat-toolbar">
       <Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={onOpenNavigation}><PanelLeft size={17} /></Button>
@@ -169,6 +172,6 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
         {savingModel && <span className="sr-only" role="status">Saving selection…</span>}
       </form>}
     </div>
-    <TaskDialog key={chatId} open={taskify} onOpenChange={setTaskify} snapshot={snapshot} initialTitle={initialTitle} initialDescription="" planningChatId={chatId} onCreated={onTaskified} />
+    <TaskDialog key={chatId} open={taskify} onOpenChange={setTaskify} snapshot={snapshot} initialTitle={initialTitle} initialDescription={proposal?.description ?? ''} planningChatId={chatId} onCreated={onTaskified} />
   </div>;
 }
