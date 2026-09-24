@@ -101,6 +101,7 @@ Successful record commands emit one JSON value to stdout. Errors emit one `{ "er
 ```sh
 muon projects list
 muon projects create --json '{"name":"Billing service","repositoryPath":"/Users/you/projects/billing"}'
+muon projects create --json '{"name":"Notes","repositoryPath":"/Users/you/notes","initializeRepository":true}'
 muon tasks list --project BS
 MUON_PROJECT=BS muon state
 muon projects archive BS

@@ -136,8 +136,13 @@ export class ProjectRegistry implements ProjectResolver {
       const repositoryPath = input.repositoryPath.trim();
       if (!name) throw new DomainError('Give the project a name.');
       if (!repositoryPath) throw new DomainError('Choose the absolute path of a Git repository root.');
+      if (input.initializeRepository) {
+        if (!this.options.workspaces.initializeRepository) throw new DomainError('This workspace provider cannot initialize repositories.');
+        try { await this.options.workspaces.initializeRepository(repositoryPath); }
+        catch (error) { throw new DomainError(`Could not initialize a Git repository in this folder. ${error instanceof Error ? error.message : ''}`.trim()); }
+      }
       try { await this.options.workspaces.validateRepository?.(repositoryPath); }
-      catch (error) { throw new DomainError(`Choose a Git repository root with at least one commit. ${error instanceof Error ? error.message : ''}`.trim()); }
+      catch (error) { throw new DomainError(`Choose a Git repository root with at least one commit, or let Muon initialize one in this folder. ${error instanceof Error ? error.message : ''}`.trim()); }
       const taken = (await this.list()).map(project => project.identifier);
       const identifier = input.identifier?.trim().toUpperCase() || deriveIdentifier(name, taken);
       if (!IDENTIFIER.test(identifier)) throw new DomainError('Identifiers are 2 to 5 letters or digits, starting with a letter.');

@@ -23,6 +23,8 @@ export const projectIdentifierSchema = z.string().trim().toUpperCase().regex(/^[
 export const createProjectSchema = z.strictObject({
   name: z.string().trim().min(1).max(100), repositoryPath: z.string().trim().min(1).max(2000),
   identifier: projectIdentifierSchema.optional(),
+  /** Create a Git repository with an initial commit when the folder is not one yet. */
+  initializeRepository: z.boolean().optional(),
 });
 export const updateProjectSchema = z.strictObject({ name: z.string().trim().min(1).max(100).optional(), repositoryPath: z.string().trim().max(2000).optional() });
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });

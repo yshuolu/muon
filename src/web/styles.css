@@ -1245,3 +1245,5 @@ audio.asset-media { margin: 20px auto; width: calc(100% - 40px); }
 .archived-projects > div { min-width: 0; }
 .archived-projects > div > span:nth-child(2) { overflow: hidden; }
 .archived-projects > div > .button { flex-shrink: 0; }
+.project-form > label.project-init-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--muted); }
+.project-form > label.project-init-row input { width: 30px; height: 17px; flex-shrink: 0; }

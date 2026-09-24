@@ -194,3 +194,39 @@ describe('LocalWorktreeProvider', () => {
     await expect(provider.exportChanges(source)).rejects.toThrow('32 MiB export bound');
   });
 });
+
+describe('LocalWorktreeProvider.initializeRepository', () => {
+  it('turns a plain folder into a repository with the current files committed, and keeps existing history', async () => {
+    const provider = new LocalWorktreeProvider(root);
+    const plain = join(directory, 'plain');
+    await mkdir(join(plain, 'src'), { recursive: true });
+    await writeFile(join(plain, 'src', 'index.ts'), 'export const ok = true;\n');
+    await expect(provider.validateRepository(plain)).rejects.toThrow();
+    await provider.initializeRepository(plain);
+    await expect(provider.validateRepository(plain)).resolves.toBeUndefined();
+    expect(await git(plain, 'log', '--format=%s')).toBe('Initial commit recorded by Muon');
+    expect(await git(plain, 'ls-files')).toBe('src/index.ts');
+    expect(await git(plain, 'status', '--porcelain')).toBe('');
+    const workspace = await provider.ensure({ repositoryPath: plain, taskId: 'plain-task' });
+    expect(await readFile(join(workspace.path, 'src', 'index.ts'), 'utf8')).toBe('export const ok = true;\n');
+    await provider.initializeRepository(plain);
+    expect(await git(plain, 'rev-list', '--count', 'HEAD')).toBe('1');
+    await provider.initializeRepository(repository);
+    expect(await git(repository, 'log', '--format=%s')).toBe('Initial');
+  });
+
+  it('commits an empty repository and rejects folders nested inside another repository', async () => {
+    const provider = new LocalWorktreeProvider(root);
+    const empty = join(directory, 'empty');
+    await mkdir(empty);
+    await git(empty, 'init');
+    await git(empty, 'config', 'user.name', 'Muon Test');
+    await git(empty, 'config', 'user.email', 'test@localhost');
+    await provider.initializeRepository(empty);
+    expect(await git(empty, 'rev-list', '--count', 'HEAD')).toBe('1');
+    await mkdir(join(repository, 'nested'));
+    await expect(provider.initializeRepository(join(repository, 'nested'))).rejects.toThrow('inside another Git repository');
+    await expect(provider.initializeRepository(join(repository, 'source.txt'))).rejects.toThrow('folder');
+    await expect(provider.initializeRepository('relative')).rejects.toThrow('absolute');
+  });
+});

@@ -124,6 +124,23 @@ describe('project registry', () => {
     expect((await json<Project[]>(await request('/api/projects'))).map(project => project.identifier)).toEqual(['MUO', 'SA', 'SA2']);
   });
 
+  it('initializes a plain folder as a repository only when asked, and explains the alternative otherwise', async () => {
+    const initialized: string[] = [];
+    workspaces.initializeRepository = vi.fn(async path => { initialized.push(path); });
+    vi.mocked(workspaces.validateRepository!).mockImplementation(async path => { if (!initialized.includes(path) && !path.startsWith('/repos/')) throw new Error('not a git repository'); });
+    const refused = await request('/api/projects', 'POST', { name: 'Plain', repositoryPath: '/plain/folder' });
+    expect(refused.status).toBe(400);
+    expect((await refused.json() as { error: string }).error).toContain('let Muon initialize one');
+    expect(initialized).toEqual([]);
+    const created = await json<Project>(await request('/api/projects', 'POST', { name: 'Plain', repositoryPath: '/plain/folder', initializeRepository: true }), 201);
+    expect(created.repositoryPath).toBe('/plain/folder');
+    expect(initialized).toEqual(['/plain/folder']);
+    vi.mocked(workspaces.initializeRepository!).mockRejectedValueOnce(new Error('inside another Git repository'));
+    const nested = await request('/api/projects', 'POST', { name: 'Nested', repositoryPath: '/repos/first/nested', initializeRepository: true });
+    expect(nested.status).toBe(400);
+    expect((await nested.json() as { error: string }).error).toContain('Could not initialize');
+  });
+
   it('renames and rebinds a project through its own resource', async () => {
     const renamed = await json<Project>(await request('/api/projects/local-project', 'PATCH', { name: 'Renamed', repositoryPath: '/repos/moved' }));
     expect(renamed).toMatchObject({ id: 'local-project', name: 'Renamed', repositoryPath: '/repos/moved' });

@@ -52,6 +52,8 @@ export interface WorkspaceChanges {
 
 export interface WorkspaceProvider {
   validateRepository?(repositoryPath: string): Promise<void>;
+  /** Turns a plain folder into a repository with an initial commit of its current contents, at the owner's request. */
+  initializeRepository?(repositoryPath: string): Promise<void>;
   ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;
   changedFiles(input: { path: string; baseCommit: string }): Promise<ChangedFile[]>;
   exportChanges?(input: TaskWorkspace & { maxBytes?: number }): Promise<WorkspaceChanges>;

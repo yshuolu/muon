@@ -54,6 +54,28 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     await git(path, ['rev-parse', '--verify', 'HEAD^{commit}']);
   }
 
+  /**
+   * Initializes Git in a folder that is not yet a repository root, then records its current contents as the
+   * first commit so task worktrees start from what the owner sees today. Existing history is never rewritten.
+   */
+  async initializeRepository(repositoryPath: string): Promise<void> {
+    if (!isAbsolute(repositoryPath)) throw new Error('Repository path must be absolute.');
+    const path = await realpath(repositoryPath);
+    if (!(await lstat(path)).isDirectory()) throw new Error('Choose a folder, not a file.');
+    let top: string | undefined;
+    try { top = await realpath((await git(path, ['rev-parse', '--show-toplevel'])).trim()); } catch { top = undefined; }
+    if (top !== undefined && top !== path) throw new Error('This folder is inside another Git repository. Choose that repository root instead.');
+    if (top === undefined) await git(path, ['init', '--quiet']);
+    try { await git(path, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']); return; } catch { /* No commits yet. */ }
+    const identity: string[] = [];
+    for (const [key, fallback] of [['user.name', 'Muon'], ['user.email', 'muon@localhost']] as const) {
+      const configured = await git(path, ['config', '--get', key]).catch(() => '');
+      if (!configured.trim()) identity.push('-c', `${key}=${fallback}`);
+    }
+    await git(path, ['add', '--all']);
+    await git(path, [...identity, 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Initial commit recorded by Muon']);
+  }
+
   private async validateExport(input: TaskWorkspace): Promise<Manifest> {
     if (!/^[0-9a-f]{40,64}$/.test(input.baseCommit)) throw new Error('A verified base commit is required.');
     const root = await realpath(this.root);
