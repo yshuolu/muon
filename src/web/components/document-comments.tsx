@@ -45,7 +45,7 @@ function CommentCard({ comment, selected, editable, busy, onSelect, onEdit, onDe
   return <article className={`doc-comment-card ${comment.status} ${selected ? 'selected' : ''}`} data-comment-card={comment.id} onClick={onSelect}>
     <div className="doc-comment-quote">{comment.anchor ? <q>{comment.anchor.quote.length > 120 ? `${comment.anchor.quote.slice(0, 119)}…` : comment.anchor.quote}</q> : <span>Whole document</span>}</div>
     {editing ? <form className="doc-comment-edit" onSubmit={async event => { event.preventDefault(); if (!onEdit || !text.trim()) return; setSaving(true); try { await onEdit(text.trim()); setEditing(false); } finally { setSaving(false); } }}>
-      <textarea value={text} onChange={event => setText(event.target.value)} maxLength={4000} rows={3} autoFocus aria-label="Edit comment" />
+      <textarea value={text} onChange={event => setText(event.target.value)} maxLength={4000} rows={3} autoFocus aria-label="Edit comment" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } else if (event.key === 'Escape') { event.preventDefault(); setText(comment.content); setEditing(false); } }} />
       <div><Button type="button" size="sm" variant="ghost" disabled={saving} onClick={() => { setText(comment.content); setEditing(false); }}>Cancel</Button><Button type="submit" size="sm" disabled={saving || !text.trim()}>{saving ? 'Saving…' : 'Save'}</Button></div>
     </form> : <div className="doc-comment-body"><Markdown>{comment.content}</Markdown></div>}
     <div className="doc-comment-meta">
@@ -165,7 +165,7 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
     {(error || actionError) && <p className="form-error" role="alert">{actionError ?? error}</p>}
     {draft && <form className="doc-comment-composer" onSubmit={event => { event.preventDefault(); void submitDraft(); }}>
       <div className="doc-comment-quote">{draft.anchor ? <q>{draft.anchor.quote.length > 120 ? `${draft.anchor.quote.slice(0, 119)}…` : draft.anchor.quote}</q> : <span>Whole document</span>}</div>
-      <textarea value={draft.content} onChange={event => setDraft({ ...draft, content: event.target.value })} maxLength={4000} rows={3} autoFocus placeholder="Ask a question, or tell the agent what to change or remove…" aria-label="New comment" onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submitDraft(); } }} />
+      <textarea value={draft.content} onChange={event => setDraft({ ...draft, content: event.target.value })} maxLength={4000} rows={3} autoFocus placeholder="Ask a question, or tell the agent what to change or remove… Enter to add, Shift+Enter for a new line" aria-label="New comment" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.content.trim()) void submitDraft(); } }} />
       <div><Button type="button" size="sm" variant="ghost" onClick={() => setDraft(null)}><X size={13} />Cancel</Button><Button type="submit" size="sm" disabled={busy || !draft.content.trim()}>{busy ? 'Adding…' : 'Add comment'}</Button></div>
     </form>}
     {!thread && !error && <p className="asset-loading" role="status">Loading comments…</p>}
