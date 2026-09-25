@@ -10,6 +10,8 @@ import { relativeTime } from '../lib/utils';
 import { Markdown, MuonMark } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
+import { EffortSelect } from './effort-select';
+import { MentionTextarea } from './mention-textarea';
 import { TaskDialog } from './task-dialog';
 
 const PROVIDER_LABELS: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
@@ -120,7 +122,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
       if (document.activeElement === document.body) modelSelect.current?.focus();
     });
   }
-  async function saveSelection(patch: { model?: string | null; provider?: Provider }) {
+  async function saveSelection(patch: { model?: string | null; provider?: Provider; effort?: string | null }) {
     if (modelDisabled) return;
     ++chatMutationVersion.current;
     setSavingModel(true);
@@ -186,7 +188,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
       {sendError && <p className="form-error" role="alert">{sendError}</p>}
       {error === null && <form className="chief-composer" onSubmit={send}>
         <label htmlFor="planning-chat-message" className="sr-only">Message your planning partner</label>
-        <textarea id="planning-chat-message" maxLength={30000} rows={2} placeholder="Ask a question or describe the idea…" value={content} onChange={event => setContent(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
+        <MentionTextarea id="planning-chat-message" maxLength={30000} rows={2} placeholder="Ask a question or describe the idea… @ mentions a Library document" value={content} onChange={setContent} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
         <div className="composer-bottom chief-composer-bottom">
           <div className="chief-runtime-meta">
             <span><span className="provider-symbol" aria-hidden="true">{PROVIDER_SYMBOLS[provider]}</span><select className="chief-model-control planning-chat-provider" aria-label="Planning chat agent" value={provider} disabled={modelDisabled || customModel} onChange={event => { setModelError(null); void saveSelection({ provider: event.target.value as Provider }); }}>
@@ -208,7 +210,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
               {modelOptions.map(option => <option key={option} value={option}>{option}{option === chatConfig.model ? ' (default)' : ''}</option>)}
               <option value="">Enter model ID…</option>
             </select>}
-            <span>Thinking: {chatConfig.thinking}</span>
+            <span>Thinking:<EffortSelect provider={provider} value={chat?.effort} defaultLevel={chatConfig.thinking} disabled={modelDisabled || customModel} label="Planning chat thinking effort" onChange={effort => { setModelError(null); void saveSelection({ effort }); }} /></span>
           </div>
           <Button size="icon" aria-label="Send message" type="submit" disabled={!content.trim() || modelDisabled || customModel}><ArrowUp size={17} /></Button>
         </div>

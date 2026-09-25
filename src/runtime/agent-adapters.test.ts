@@ -22,11 +22,11 @@ async function executable(name: string, source: string): Promise<string> {
 
 async function claudeFixture(): Promise<string> {
   return executable('claude', `
-import { writeFileSync } from 'node:fs';
+import { readdirSync, writeFileSync } from 'node:fs';
 if (process.argv.includes('--version')) { console.log('2.1.258'); process.exit(0); }
 let prompt = '';
 process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', () => {
-  writeFileSync((process.env.MUON_CLAUDE_TEST_DIR ?? '.') + '/invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt, chiefToken: process.env.MUON_API_TOKEN, cwd: process.cwd() }));
+  writeFileSync((process.env.MUON_CLAUDE_TEST_DIR ?? '.') + '/invocation.json', JSON.stringify({ args: process.argv.slice(2), prompt, chiefToken: process.env.MUON_API_TOKEN, cwd: process.cwd(), files: readdirSync(process.cwd(), { recursive: true }) }));
   if (prompt === 'crash') { process.stderr.write('Please sign in first'); process.exit(1); }
   if (prompt === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); return; }
   if (prompt === 'malformed') { console.log('broken JSON'); return; }
@@ -132,9 +132,11 @@ describe('ClaudeCodeAdapter', () => {
   });
   it.each([false, true])('keeps chats read-only in the repository with a scratch directory even when bypassPermissions=%s', async bypassPermissions => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions, allowLocalBinding: true, allowedNetworkDomains: ['registry.npmjs.org'] });
-    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'sonnet[1m]' });
+    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'sonnet[1m]', files: [{ path: 'library/notes.md', data: new TextEncoder().encode('# Notes') }] });
     let invocation = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
     let { args } = invocation;
+    // Library copies land in the scratch directory before the session starts and vanish with it.
+    expect(invocation.files).toEqual(expect.arrayContaining(['library', join('library', 'notes.md')]));
     expect(args[args.indexOf('--model') + 1]).toBe('sonnet[1m]');
     expect(args[args.indexOf('--effort') + 1]).toBe('max');
     const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
@@ -159,10 +161,14 @@ describe('ClaudeCodeAdapter', () => {
     await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Review a document', effort: 'high' });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    // Task phases keep the configured model but honor a per-task thinking effort.
     await adapter.run({ provider: 'claude', phase: 'building', cwd: directory, prompt: 'Implement the approved task', model: 'chat-only-model', effort: 'low' });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
-    expect(args[args.indexOf('--effort') + 1]).toBe('max');
+    expect(args[args.indexOf('--effort') + 1]).toBe('low');
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
+    await adapter.run({ provider: 'claude', phase: 'building', cwd: directory, prompt: 'Implement the approved task' });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--effort') + 1]).toBe('max');
   });
   it('returns only the final result and frames split UTF-8 correctly', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());

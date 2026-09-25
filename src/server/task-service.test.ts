@@ -142,6 +142,20 @@ async function prepareVerification(fixture: Fixture) {
 }
 
 describe('TaskService workflow', () => {
+  it('passes a task’s chosen thinking effort to its runs and drops a level the agent does not accept', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Careful change', effort: 'low' });
+    await dispatch(f);
+    const planning = await waitForCall(f, 0, 'planning');
+    expect(planning.request.effort).toBe('low');
+    planning.finish('# RFC\nA small plan.');
+    await waitForState(f, task.id, 'in_review', 'plan_review');
+    const codexTask = await f.service.createTask({ title: 'Codex task', provider: 'codex', effort: 'max' });
+    expect(codexTask.effort).toBe('max');
+    await dispatch(f);
+    expect((await waitForCall(f, 0, 'planning', 'codex')).request.effort).toBeUndefined();
+  });
+
   it('requires the owner to approve the exact current RFC before a single build can launch', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Add results view' });
@@ -280,7 +294,7 @@ describe('TaskService workflow', () => {
     const sending = f.service.sendPlanningChat(chat.id, 'Use the current model');
     try {
       expect(chat.busy).toBe(false);
-      expect(() => f.service.updatePlanningChat(chat.id, { model: 'opus' })).toThrow('before changing its provider or model');
+      expect(() => f.service.updatePlanningChat(chat.id, { model: 'opus' })).toThrow('before changing its provider, model, or thinking effort');
       await expect(f.service.sendPlanningChat(chat.id, 'Duplicate turn')).rejects.toMatchObject({ status: 409 });
       await expect(f.service.taskifyPlanningChat(chat.id, { title: 'Too soon' })).rejects.toMatchObject({ status: 409 });
     } finally { release(); }

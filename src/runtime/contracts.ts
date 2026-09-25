@@ -1,6 +1,8 @@
 export type AgentProvider = 'claude' | 'codex';
 export type AgentPhase = 'planning' | 'building' | 'verification' | 'chief' | 'chat' | 'discussion';
 
+export interface ScratchFile { path: string; data: Uint8Array }
+
 export interface AgentRequest {
   provider: AgentProvider;
   phase: AgentPhase;
@@ -8,8 +10,10 @@ export interface AgentRequest {
   cwd: string;
   /** Overrides the configured Claude model for a chief or disposable chat request. */
   model?: string;
-  /** Overrides the configured thinking effort for a disposable chat request, such as a document review. */
+  /** Overrides the configured thinking effort for this run. */
   effort?: string;
+  /** Read-only copies placed in an advisory session's scratch working directory before it starts, by relative path. */
+  files?: ScratchFile[];
   sessionId?: string;
   signal?: AbortSignal;
   /** Reports the provider-confirmed session at most once, without waiting for a final result. */

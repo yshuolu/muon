@@ -7,6 +7,8 @@ import { Markdown, MuonMark } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
 import { ChiefSoulDialog } from './chief-soul-dialog';
+import { EffortSelect } from './effort-select';
+import { MentionTextarea } from './mention-textarea';
 
 const PROVIDER_LABELS: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
 const PROVIDER_SYMBOLS: Record<Provider, string> = { claude: '✳', codex: '⌘' };
@@ -22,6 +24,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
   const [error, setError] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<Provider>(snapshot.settings.chiefProvider ?? 'claude');
   const [selectedModel, setSelectedModel] = useState(snapshot.settings.chiefModel ?? null);
+  const [selectedEffort, setSelectedEffort] = useState(snapshot.settings.chiefEffort ?? null);
   const [modelDraft, setModelDraft] = useState('');
   const [customModel, setCustomModel] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
@@ -40,20 +43,22 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
   });
   useEffect(() => { setSelectedModel(snapshot.settings.chiefModel ?? null); }, [snapshot.settings.chiefModel]);
   useEffect(() => { setSelectedProvider(snapshot.settings.chiefProvider ?? 'claude'); }, [snapshot.settings.chiefProvider]);
+  useEffect(() => { setSelectedEffort(snapshot.settings.chiefEffort ?? null); }, [snapshot.settings.chiefEffort]);
   function closeModelEdit() {
     setCustomModel(false);
     requestAnimationFrame(() => {
       if (document.activeElement === document.body) modelSelect.current?.focus();
     });
   }
-  async function saveSelection(patch: { chiefProvider?: Provider; chiefModel?: string | null }) {
+  async function saveSelection(patch: { chiefProvider?: Provider; chiefModel?: string | null; chiefEffort?: string | null }) {
     if (modelDisabled) return;
     setSavingModel(true);
     setModelError(null);
     try {
       await api('/settings', 'PATCH', patch);
-      if (patch.chiefProvider !== undefined) { setSelectedProvider(patch.chiefProvider); setSelectedModel(null); }
+      if (patch.chiefProvider !== undefined) { setSelectedProvider(patch.chiefProvider); setSelectedModel(null); setSelectedEffort(null); }
       if (patch.chiefModel !== undefined) setSelectedModel(patch.chiefModel);
+      if (patch.chiefEffort !== undefined) setSelectedEffort(patch.chiefEffort);
       closeModelEdit();
       onRefresh();
     } catch (cause) {
@@ -88,7 +93,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
       {error && <p className="form-error" role="alert">{error}</p>}
       <form className="chief-composer" onSubmit={send}>
         <label htmlFor="chief-message" className="sr-only">Message your chief of staff</label>
-        <textarea id="chief-message" maxLength={30000} rows={2} placeholder="What should we work on?" value={content} onChange={e => setContent(e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
+        <MentionTextarea id="chief-message" maxLength={30000} rows={2} placeholder="What should we work on? @ mentions a Library document" value={content} onChange={setContent} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
         <div className="composer-bottom chief-composer-bottom">
           <div className="chief-runtime-meta">
             <span><span className="provider-symbol" aria-hidden="true">{PROVIDER_SYMBOLS[selectedProvider]}</span><select className="chief-model-control" aria-label="Chief of staff agent" value={selectedProvider} disabled={modelDisabled || customModel} onChange={event => { setModelError(null); void saveSelection({ chiefProvider: event.target.value as Provider }); }}>
@@ -102,7 +107,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
               {modelOptions.map(option => <option key={option} value={option}>{option}{option === chiefConfig.model ? ' (default)' : ''}</option>)}
               <option value="">Enter model ID…</option>
             </select>}
-            <span>Thinking: {chiefConfig.thinking}</span>
+            <span>Thinking:<EffortSelect provider={selectedProvider} value={selectedEffort} defaultLevel={chiefConfig.thinking} disabled={modelDisabled || customModel} label="Chief of staff thinking effort" onChange={chiefEffort => { setModelError(null); void saveSelection({ chiefEffort }); }} /></span>
             <button type="button" className="chief-soul-trigger" onClick={() => setSoulOpen(true)} disabled={modelDisabled}><Sparkles size={12} />{snapshot.settings.chiefSoul?.trim() ? 'SOUL configured' : 'Configure SOUL'}</button>
           </div>
           <Button size="icon" aria-label="Send message" type="submit" disabled={!content.trim() || modelDisabled || customModel}><ArrowUp size={17} /></Button>

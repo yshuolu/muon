@@ -7,6 +7,7 @@ import { useConversationScroll } from '../lib/conversation-scroll';
 import { Markdown } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
+import { MentionTextarea } from './mention-textarea';
 
 export function PlanDiscussion({ task, viewedPlan, userId, dispatcherEnabled, active, busy, error, onComment, onApprove, onViewLatest, onViewVersion }: {
   task: Task; viewedPlan: Plan; userId: string; dispatcherEnabled: boolean; active: boolean; busy: boolean; error: string | null;
@@ -56,7 +57,7 @@ export function PlanDiscussion({ task, viewedPlan, userId, dispatcherEnabled, ac
       {state.discussing && <p className="plan-discussion-hint">A task comment is awaiting a reply. Open Comments to follow its progress before reviewing this RFC.</p>}
       <form className="plan-comment-form" onSubmit={send}>
         <label htmlFor={`plan-comment-${task.id}`}>Comment on the plan</label>
-        <textarea id={`plan-comment-${task.id}`} placeholder={placeholder} rows={3} maxLength={20000} value={draft} disabled={!state.canComment} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
+        <MentionTextarea id={`plan-comment-${task.id}`} placeholder={placeholder} rows={3} maxLength={20000} value={draft} disabled={!state.canComment} onChange={setDraft} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event); } }} />
         <div className="plan-composer-bottom"><span>{state.revising ? 'Waiting for the next version' : 'A comment requests a revised RFC'}</span><Button type="submit" size="icon" aria-label="Send comment" disabled={!state.canComment || !draft.trim()}>{sending ? <Loader2 size={16} className="spin" /> : <ArrowUp size={16} />}</Button></div>
       </form>
       <div className="plan-discussion-approval"><div><strong>{state.latest?.status === 'approved' ? `Version ${state.latest.version} approved` : state.revising ? 'Building waits for your approval' : `Ready to build version ${state.latest?.version ?? viewedPlan.version}?`}</strong><p>{draft.trim() ? 'Send your comment before approving a revision.' : state.latest?.status === 'approved' ? 'Your decision is saved with this RFC.' : 'Approve the latest plan when the discussion is resolved.'}</p></div><Button disabled={!state.canApprove} onClick={async () => { if (!state.latest || !state.canApprove) return; setApproving(true); try { await onApprove(state.latest.id); } finally { setApproving(false); } }}><Check size={14} />{approving ? 'Approving…' : 'Approve plan'}</Button></div>

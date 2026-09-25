@@ -88,6 +88,30 @@ describe('HTTP validation and local boundary', () => {
     expect((await repository.settings(scope)).chiefModel).toBeNull();
   });
 
+  it('persists a chief thinking effort, applies it to chief runs, and resets it with the agent', async () => {
+    expect((await request('/api/settings', 'PATCH', { chiefEffort: 'turbo' })).status).toBe(400);
+    expect((await request('/api/settings', 'PATCH', { chiefEffort: 'high' })).status).toBe(200);
+    expect(await (await request('/api/settings')).json()).toMatchObject({ chiefEffort: 'high' });
+    expect((await request('/api/chief/messages', 'POST', { content: 'What is next?' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    expect(claude.calls[0].request).toMatchObject({ phase: 'chief', effort: 'high' });
+    expect((await request('/api/settings', 'PATCH', { chiefEffort: 'low' })).status).toBe(409);
+    claude.calls[0].resolve({ text: 'Ship the next task.' });
+    await eventually(async () => !(await (await request('/api/state')).json()).runtime.chiefRunning);
+    expect((await request('/api/settings', 'PATCH', { chiefProvider: 'codex' })).status).toBe(200);
+    expect(await repository.settings(scope)).toMatchObject({ chiefProvider: 'codex', chiefModel: null, chiefEffort: null });
+    // A level the new agent does not accept is not stored.
+    expect((await request('/api/settings', 'PATCH', { chiefEffort: 'max' })).status).toBe(200);
+    expect((await repository.settings(scope)).chiefEffort).toBeNull();
+  });
+
+  it('creates a task with a thinking effort and lets the owner change it', async () => {
+    const created = await (await request('/api/tasks', 'POST', { title: 'Effortful', effort: 'medium' })).json();
+    expect(created.effort).toBe('medium');
+    expect((await request('/api/tasks', 'POST', { title: 'Bad effort', effort: 'turbo' })).status).toBe(400);
+    expect(await (await request(`/api/tasks/${created.id}`, 'PATCH', { effort: null })).json()).toMatchObject({ effort: null });
+  });
+
   it('persists and validates the owner-configured Chief SOUL', async () => {
     const soul = 'Be concise.\n\nAsk before expanding scope.';
     expect((await request('/api/settings', 'PATCH', { chiefSoul: `  ${soul}  ` })).status).toBe(200);
@@ -314,6 +338,23 @@ describe('REST record resources', () => {
       await withAssets.stop();
       await rm(storage, { recursive: true, force: true });
     }
+  });
+
+  it('saves a planning chat thinking effort, passes it to the run, and resets it with the provider', async () => {
+    const chat = await (await request('/api/planning-chats', 'POST', {})).json();
+    expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { effort: 'turbo' })).status).toBe(400);
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { effort: 'low' })).json()).toMatchObject({ effort: 'low' });
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Think briefly.' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    expect(claude.calls[0].request).toMatchObject({ phase: 'chat', effort: 'low' });
+    claude.calls[0].resolve({ text: 'Brief thoughts.' });
+    await eventually(async () => !(await (await request(`/api/planning-chats/${chat.id}`)).json()).busy);
+    expect((await (await request('/api/planning-chats')).json())[0]).toMatchObject({ id: chat.id, effort: 'low' });
+    // A Codex-only level saved on a Claude chat is dropped; switching providers clears the effort.
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { effort: 'ultra' })).json()).toMatchObject({ effort: null });
+    await request(`/api/planning-chats/${chat.id}`, 'PATCH', { effort: 'high' });
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'codex' })).json()).toMatchObject({ provider: 'codex', model: null, effort: null });
+    expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { effort: null })).json()).toMatchObject({ effort: null });
   });
 
   it('creates tasks from task blocks in planning replies, links them, and lists saved threads', async () => {

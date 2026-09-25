@@ -1330,3 +1330,16 @@ mark.doc-comment.pulse { background: color-mix(in oklch, var(--warning) 60%, tra
   .library-document-body.with-comments { grid-template-columns: minmax(0, 1fr); }
   .doc-comments { position: static; max-height: none; }
 }
+
+/* @ mentions of Library documents in composers */
+.mention-field { position: relative; display: flex; flex-direction: column; width: 100%; min-width: 0; }
+.mention-field textarea { width: 100%; }
+.mention-menu { position: absolute; left: 0; z-index: 40; min-width: min(300px, 100%); max-width: 100%; max-height: 240px; overflow: auto; margin: 0; padding: 4px; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); font-size: 12px; }
+.mention-field.above .mention-menu { bottom: calc(100% + 6px); }
+.mention-field.below .mention-menu { top: calc(100% + 6px); }
+.mention-menu li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); color: var(--foreground); cursor: pointer; }
+.mention-menu li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-menu li small { color: var(--muted-foreground); white-space: nowrap; }
+.mention-menu li.active { background: var(--accent); }
+.mention-menu li svg { flex-shrink: 0; color: var(--muted-foreground); }
+.mention-empty { padding: 8px 10px; color: var(--muted-foreground); }

@@ -1,13 +1,16 @@
 import { z } from 'zod';
+import { ALL_EFFORT_LEVELS } from './effort';
 
 /** Request validation shared by the REST server, browser client, and CLI. */
 export const prioritySchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 export const taskReferenceSchema = z.string().trim().min(1).max(240);
 export const taskStatusSchema = z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled']);
 export const modelIdentifierSchema = z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]*$/, 'Enter a model alias or identifier without spaces.');
+/** A thinking effort level; null restores the agent's configured default. Levels belong to one agent (see EFFORT_LEVELS). */
+export const effortSchema = z.enum(ALL_EFFORT_LEVELS);
 export const createTaskSchema = z.strictObject({
   title: z.string().trim().min(1).max(240), description: z.string().max(30_000).optional(),
-  provider: z.enum(['claude', 'codex']).optional(), priority: prioritySchema.optional(),
+  provider: z.enum(['claude', 'codex']).optional(), effort: effortSchema.nullable().optional(), priority: prioritySchema.optional(),
   status: z.enum(['backlog', 'todo']).optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   parentId: taskReferenceSchema.nullable().optional(), blockedByIds: z.array(taskReferenceSchema).max(100).optional(),
   kind: z.enum(['coding', 'group']).optional(),
@@ -18,6 +21,7 @@ export const settingsSchema = z.strictObject({
   defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
   chiefProvider: z.enum(['claude', 'codex']).nullable().optional(),
   chiefModel: modelIdentifierSchema.nullable().optional(),
+  chiefEffort: effortSchema.nullable().optional(),
   chiefSoul: z.string().trim().max(20_000).nullable().optional(),
 });
 export const assetCommentAnchorSchema = z.strictObject({
@@ -45,8 +49,8 @@ export const taskCommentSchema = z.strictObject({
 export const chiefMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const planningChatMessageSchema = z.strictObject({ content: z.string().trim().min(1).max(30_000) });
 export const updatePlanningChatSchema = z.strictObject({
-  model: modelIdentifierSchema.nullable().optional(), provider: z.enum(['claude', 'codex']).optional(),
-}).refine(value => value.model !== undefined || value.provider !== undefined, 'Choose a provider or a model.');
+  model: modelIdentifierSchema.nullable().optional(), provider: z.enum(['claude', 'codex']).optional(), effort: effortSchema.nullable().optional(),
+}).refine(value => value.model !== undefined || value.provider !== undefined || value.effort !== undefined, 'Choose a provider, a model, or a thinking effort.');
 export const emptyMutationSchema = z.strictObject({});
 export const importAssetSchema = z.strictObject({ path: z.string().min(1).max(2000) });
 export const attachAssetSchema = z.strictObject({ assetId: z.string().min(1).max(200) });

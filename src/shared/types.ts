@@ -74,6 +74,8 @@ export interface Task {
   id: string; identifier: string; workspaceId: string; projectId: string; ownerUserId: string;
   title: string; description: string; status: TaskStatus; phase: TaskPhase;
   priority: Priority; provider: Provider; labels: string[]; parentId: string | null;
+  /** A thinking effort for this task's agent runs, or null for the provider's configured default. */
+  effort?: string | null;
   blockedByIds: string[]; plans: Plan[]; evidence: Evidence[]; changedFiles: ChangedFile[];
   activity: Activity[]; summary: string; createdAt: string; updatedAt: string;
   completedAt?: string; version: number; runId?: string; sessionId?: string;
@@ -103,13 +105,15 @@ export interface Settings {
   chiefProvider?: Provider | null;
   /** A model override for the chief agent, or null for that agent's configured default. */
   chiefModel?: string | null;
+  /** A thinking effort for the chief agent, or null for its configured default. */
+  chiefEffort?: string | null;
   chiefSoul?: string | null;
 }
 export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[]; provider?: Provider }
 export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
 /** A listing entry for resuming saved planning chats without loading every message. */
 export interface PlanningChatSummary {
-  id: string; provider: Provider; model: string | null; createdAt: string; updatedAt: string; busy: boolean;
+  id: string; provider: Provider; model: string | null; effort?: string | null; createdAt: string; updatedAt: string; busy: boolean;
   messageCount: number; title: string; preview: string; taskIds: string[]; error?: string;
 }
 export interface PlanningChat {
@@ -118,6 +122,8 @@ export interface PlanningChat {
   provider: Provider;
   /** A model override for the provider, or null for the configured default. */
   model: string | null;
+  /** A thinking effort for the provider, or null for the configured default. Reset when the provider changes. */
+  effort?: string | null;
   messages: PlanningChatMessage[]; createdAt: string; updatedAt: string; busy: boolean; activity?: string | null; error?: string;
 }
 export interface AgentRuntimeConfig { model: string; thinking: string; bypassPermissions: boolean }
@@ -129,7 +135,7 @@ export interface AppSnapshot {
   runtime: { activeRuns: number; chiefRunning: boolean; chiefActivity?: string | null; providers: Record<Provider, boolean>; config?: Record<Provider, AgentRuntimeConfig>; demo: boolean };
 }
 export interface CreateTaskInput {
-  title: string; description?: string; provider?: Provider; priority?: Priority;
+  title: string; description?: string; provider?: Provider; effort?: string | null; priority?: Priority;
   status?: 'backlog' | 'todo'; labels?: string[]; parentId?: string | null; blockedByIds?: string[];
   kind?: 'coding' | 'group';
 }

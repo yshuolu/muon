@@ -431,6 +431,31 @@ describe('library resources', () => {
     expect(await service.listAssets()).toHaveLength(1);
   });
 
+  it('hands planning chats and the chief read-only copies of the current Library documents', async () => {
+    const note = await (await request('/api/assets/notes', 'POST', { name: 'API discussion', content: '# API\n\nFirst draft.' })).json() as Asset;
+    const revision = await assets.createNote(scope, { name: 'API discussion', content: '# API\n\nSecond draft.', origin: 'generated', previousVersionId: note.id });
+    const other = await (await request('/api/assets/notes', 'POST', { name: 'API discussion', content: 'A different note with the same name.' })).json() as Asset;
+    await assets.upload(scope, { name: 'diagram.png', mediaType: 'image/png', data: new Uint8Array([137, 80, 78, 71]) });
+    const chat = await (await request('/api/planning-chats', 'POST', {})).json() as { id: string };
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: `Compare [API discussion](asset://${revision.id}) with the folder note.` })).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    const { request: run } = claude.calls[0];
+    // Superseded versions and non-text files are left out; a duplicate name gets an ID suffix.
+    expect(run.files?.map(file => [file.path, Buffer.from(file.data).toString('utf8')])).toEqual([
+      ['library/API-discussion.md', 'A different note with the same name.\n'],
+      [`library/API-discussion-${revision.id.slice(0, 8)}.md`, '# API\n\nSecond draft.\n'],
+    ]);
+    expect(run.prompt).toContain('read-only copies of the project\'s Library documents are in the "library" folder');
+    expect(run.prompt).toContain(`- library/API-discussion-${revision.id.slice(0, 8)}.md — API discussion.md (asset://${revision.id}`);
+    expect(run.prompt).not.toContain(note.id);
+    claude.calls[0].resolve({ text: 'Compared.' });
+    expect((await request('/api/chief/messages', 'POST', { content: 'Summarize the API discussion.' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 2);
+    expect(claude.calls[1].request.files?.map(file => file.path)).toEqual(['library/API-discussion.md', `library/API-discussion-${revision.id.slice(0, 8)}.md`]);
+    expect(claude.calls[1].request.prompt).toContain('Documents available:');
+    claude.calls[1].resolve({ text: 'Done.' });
+  });
+
   it('lets chief credentials read the library but not write notes', async () => {
     const note = await (await request('/api/assets/notes', 'POST', { name: 'Context', content: 'Read me.' })).json() as Asset;
     const session = await commands.open(scope, new AbortController().signal);

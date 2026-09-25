@@ -7,6 +7,7 @@ import { useConversationScroll } from '../lib/conversation-scroll';
 import { Markdown } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
+import { MentionTextarea } from './mention-textarea';
 
 export function TaskComments({ task, userId, dispatcherEnabled, active, busy, error, onComment, onRetry }: {
   task: Task;
@@ -93,7 +94,7 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
             <option value="replan">Revise RFC</option>
           </select>
         </div>
-        <textarea id={`task-comment-${task.id}`} aria-describedby={`task-comment-hint-${task.id}`} placeholder={mode === 'replan' ? 'Describe what should change in the RFC…' : 'Ask a question or add context…'} rows={3} maxLength={20000} value={draft} disabled={!state.canComment} onChange={event => setDraft(event.target.value)} onKeyDown={event => {
+        <MentionTextarea id={`task-comment-${task.id}`} aria-describedby={`task-comment-hint-${task.id}`} placeholder={mode === 'replan' ? 'Describe what should change in the RFC…' : 'Ask a question or add context… @ mentions a Library document'} rows={3} maxLength={20000} value={draft} disabled={!state.canComment} onChange={setDraft} onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             void send(event);

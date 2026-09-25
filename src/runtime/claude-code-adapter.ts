@@ -1,6 +1,7 @@
 import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { record, text } from './protocol-values.js';
+import { writeScratchFiles } from './scratch-files.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
@@ -82,8 +83,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     // they may read it and write temporary files to a scratch directory, and nothing else.
     const advisory = chief || chat;
     const model = advisory ? request.model ?? this.model : this.model;
-    // Disposable chats (document reviews) may ask for a lighter effort than the configured task effort.
-    const effort = chat ? request.effort ?? this.effort : this.effort;
+    // A run may carry its own thinking effort (a task, chat, or chief setting); otherwise the configured one applies.
+    const effort = request.effort ?? this.effort;
     const readonly = request.phase === 'planning' || discussion;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
@@ -92,11 +93,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     const api = chief ? new URL(cli!.apiUrl) : undefined;
     if (api && (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password)) throw new Error('The local chief requires a loopback API endpoint.');
     if (this.bypassPermissions && !advisory && !discussion) {
-      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(model ? ['--model', model] : []), ...(this.effort ? ['--effort', this.effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--strict-mcp-config', '--permission-prompts', 'none', '--tools', 'Read,Glob,Grep,Edit,Write,Bash', ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : []), '--disallowedTools', 'mcp__*', '--settings', JSON.stringify({ disableAllHooks: true, sandbox: { enabled: false, allowUnsandboxedCommands: true } }), ...(request.sessionId ? ['--resume', request.sessionId] : [])];
       return this.runProcess(request, args);
     }
     const scratch = advisory ? await realpath(await mkdtemp(join(tmpdir(), 'muon-claude-scratch-'))) : undefined;
     try {
+      if (scratch) await writeScratchFiles(scratch, request.files);
       const settings = {
         disableAllHooks: true,
         // Advisory sessions start in the scratch directory so the CLI's own state files never land in the

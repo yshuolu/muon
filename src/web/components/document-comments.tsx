@@ -8,6 +8,7 @@ import { deliverNotification } from '../lib/notifications';
 import { relativeTime } from '../lib/utils';
 import { Markdown } from './common';
 import { Button } from './ui/button';
+import { MentionTextarea } from './mention-textarea';
 
 const PROVIDER_LABELS: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
 const REPLY_LABELS: Record<NonNullable<AssetComment['reply']>['kind'], string> = { answered: 'Answered', changed: 'Changed', declined: 'Declined' };
@@ -166,7 +167,7 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
     {(error || actionError) && <p className="form-error" role="alert">{actionError ?? error}</p>}
     {draft && <form className="doc-comment-composer" onSubmit={event => { event.preventDefault(); void submitDraft(); }}>
       <div className="doc-comment-quote">{draft.anchor ? <q>{draft.anchor.quote.length > 120 ? `${draft.anchor.quote.slice(0, 119)}…` : draft.anchor.quote}</q> : <span>Whole document</span>}</div>
-      <textarea value={draft.content} onChange={event => setDraft({ ...draft, content: event.target.value })} maxLength={4000} rows={3} autoFocus placeholder="Ask a question, or tell the agent what to change or remove… Enter to add, Shift+Enter for a new line" aria-label="New comment" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.content.trim()) void submitDraft(); } }} />
+      <MentionTextarea value={draft.content} onChange={content => setDraft(current => current ? { ...current, content } : current)} maxLength={4000} rows={3} autoFocus placeholder="Ask a question, or tell the agent what to change or remove… Enter to add, Shift+Enter for a new line, @ mentions a document" aria-label="New comment" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.content.trim()) void submitDraft(); } }} />
       <div><Button type="button" size="sm" variant="ghost" onClick={() => setDraft(null)}><X size={13} />Cancel</Button><Button type="submit" size="sm" disabled={busy || !draft.content.trim()}>{busy ? 'Adding…' : 'Add comment'}</Button></div>
     </form>}
     {!thread && !error && <p className="asset-loading" role="status">Loading comments…</p>}

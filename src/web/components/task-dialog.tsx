@@ -5,6 +5,8 @@ import { PRIORITY_LABELS } from '../../shared/types';
 import { api } from '../lib/api';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
+import { EffortSelect } from './effort-select';
+import { MentionTextarea } from './mention-textarea';
 import { TaskRelations } from './task-relations';
 
 export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle, initialDescription, planningChatId, onCreated }: {
@@ -14,6 +16,7 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle,
   const [kind, setKind] = useState<'coding' | 'group'>('coding');
   const [description, setDescription] = useState(initialDescription ?? '');
   const [provider, setProvider] = useState<Provider>(parent?.provider ?? snapshot.settings.defaultProvider);
+  const [effort, setEffort] = useState<string | null>(parent?.effort ?? null);
   const [priority, setPriority] = useState<Priority>(parent?.priority ?? 0);
   const [status, setStatus] = useState<'backlog' | 'todo'>('todo');
   const [labels, setLabels] = useState('');
@@ -24,7 +27,7 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle,
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (!title.trim()) return;
     setBusy(true); setError(null);
-    const input: CreateTaskInput = { title: title.trim(), kind, description, provider, priority, status, labels: [...new Set(labels.split(',').map(v => v.trim()).filter(Boolean))], parentId, blockedByIds };
+    const input: CreateTaskInput = { title: title.trim(), kind, description, provider, effort, priority, status, labels: [...new Set(labels.split(',').map(v => v.trim()).filter(Boolean))], parentId, blockedByIds };
     try { const task = await api<Task>(planningChatId ? `/planning-chats/${planningChatId}/taskify` : '/tasks', 'POST', input); onCreated(task); onOpenChange(false); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create task.'); }
     finally { setBusy(false); }
@@ -35,11 +38,12 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle,
       <label className="sr-only" htmlFor="task-title">Task title</label>
       <input id="task-title" className="task-title-input" placeholder="What needs to be done?" value={title} onChange={e => setTitle(e.target.value)} required maxLength={240} autoFocus />
       <label className="sr-only" htmlFor="task-description">Description</label>
-      <textarea maxLength={30000} id="task-description" className="task-description-input" placeholder="Add context, requirements, and what success looks like…" value={description} onChange={e => setDescription(e.target.value)} rows={6} />
+      <MentionTextarea maxLength={30000} id="task-description" className="task-description-input" placeholder="Add context, requirements, and what success looks like… @ mentions a Library document" value={description} onChange={setDescription} rows={6} placement="below" />
       <div className="form-grid">
         <label>Task type<select value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="coding">Coding task</option><option value="group">Task group</option></select></label>
         <label>Status<select value={status} onChange={e => setStatus(e.target.value as 'backlog' | 'todo')}><option value="todo">{kind === 'group' ? 'Todo — track subtasks' : 'Todo — ready to dispatch'}</option><option value="backlog">Backlog — save for later</option></select></label>
-        {kind === 'coding' && <label>Agent<select value={provider} onChange={e => setProvider(e.target.value as Provider)}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>}
+        {kind === 'coding' && <label>Agent<select value={provider} onChange={e => { setProvider(e.target.value as Provider); setEffort(null); }}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>}
+        {kind === 'coding' && <label>Thinking<EffortSelect className="" provider={provider} value={effort} defaultLevel={snapshot.runtime.config?.[provider]?.thinking ?? (provider === 'claude' ? 'max' : 'ultra')} label="Thinking effort" onChange={setEffort} /></label>}
         <label>Priority<select value={priority} onChange={e => setPriority(Number(e.target.value) as Priority)}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
       <TaskRelations tasks={snapshot.tasks} parentId={parentId} onParentChange={parent ? undefined : setParentId} blockedByIds={blockedByIds} onDependenciesChange={setBlockedByIds} />

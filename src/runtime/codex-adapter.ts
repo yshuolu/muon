@@ -1,6 +1,7 @@
 import type { AgentAdapter, AgentRequest, AgentResult } from './contracts.js';
 import { JsonProcess, executableAvailable, validateWorkingDirectory } from './json-process.js';
 import { errorMessage, record, text } from './protocol-values.js';
+import { writeScratchFiles } from './scratch-files.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -50,6 +51,7 @@ export class CodexAdapter implements AgentAdapter {
     // Codex sandboxes by working directory: an empty scratch directory keeps the repository read-only while the
     // launcher still reaches the loopback API. The prompt names the repository so the chief can inspect it.
     const scratch = advisory ? await mkdtemp(join(tmpdir(), chief ? 'muon-codex-chief-' : 'muon-codex-chat-')) : undefined;
+    if (scratch) await writeScratchFiles(scratch, request.files).catch(async error => { await rm(scratch, { recursive: true, force: true }); throw error; });
     const workingDirectory = scratch ?? request.cwd;
     const prompt = advisory ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder for temporary files.\n${request.prompt}` : request.prompt;
     const pending = new Map<number, PendingRequest>();
@@ -168,7 +170,7 @@ export class CodexAdapter implements AgentAdapter {
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
       // Quick chats and the chief may pick their own model; task phases keep the configured one.
       const model = request.phase === 'chat' || chief ? request.model ?? this.model : this.model;
-      const reasoningEffort = chat ? request.effort ?? this.reasoningEffort : this.reasoningEffort;
+      const reasoningEffort = request.effort ?? this.reasoningEffort;
       const config = { mcp_servers: mcpServers, features: isolatedFeatures,
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
