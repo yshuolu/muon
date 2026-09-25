@@ -51,6 +51,11 @@ export function LibraryView({ snapshot, selectedId, onSelect, onOpenTask }: {
     });
     return () => { active = false; };
   }, [referencedKey, reloads]);
+  // Agents publish documents from chats that no task references yet; a slow poll picks those up.
+  useEffect(() => {
+    const timer = setInterval(() => setReloads(value => value + 1), 6000);
+    return () => clearInterval(timer);
+  }, []);
   const visible = useMemo(() => assets ? filterLibrary(assets, filter, referrers) : [], [assets, filter, referrers]);
   const selected = assets?.find(asset => asset.id === selectedId);
   const filtering = filter.query.trim() !== '' || filter.kind !== 'all' || filter.origin !== 'all';

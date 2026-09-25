@@ -1,4 +1,9 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
+import { AssetService } from './asset-service';
+import { LocalAssetStorage } from './local-assets';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
 import { AgentProcessUnreapedError } from '../runtime';
@@ -280,6 +285,35 @@ describe('REST record resources', () => {
     await eventually(() => !service.getPlanningChat(chat.id).busy);
     expect(service.getPlanningChat(chat.id).messages.map(message => message.role)).toEqual(['user', 'assistant']);
     expect(await (await request(`/api/planning-chats/${chat.id}`, 'PATCH', { provider: 'claude' })).json()).toMatchObject({ provider: 'claude', model: null });
+  });
+
+  it('publishes note blocks from planning replies as generated Library documents and links them', async () => {
+    await service.stop();
+    const storage = await mkdtemp(join(tmpdir(), 'muon-notes-'));
+    const assets = new AssetService({ repository, storage: new LocalAssetStorage(storage), legacyArtifacts: artifacts });
+    const withAssets = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands, assets });
+    await withAssets.initialize();
+    try {
+      const chat = withAssets.createPlanningChat();
+      await withAssets.sendPlanningChat(chat.id, 'Create two docs');
+      await eventually(() => claude.calls.length === 1);
+      claude.calls[0].resolve({ text: 'Both docs are ready.\n\n```note: folder-structure.md\n# Folder structure\n\nWhat lives where.\n```\n\n````note: api-discussion.md\n# API\n\n```ts\ntype Route = string;\n```\n````\n\n```note: ../escape.md\nnope\n```\nPress Taskify when ready.' });
+      await eventually(() => !withAssets.getPlanningChat(chat.id).busy);
+      const reply = withAssets.getPlanningChat(chat.id).messages.at(-1)!;
+      const published = await withAssets.listAssets();
+      expect(published.map(asset => [asset.name, asset.origin])).toEqual([['folder-structure.md', 'generated'], ['api-discussion.md', 'generated']]);
+      const [structure, api] = published;
+      expect(reply.content).toContain(`Saved to the Library: [folder-structure.md](asset://${structure.id})`);
+      expect(reply.content).toContain(`Saved to the Library: [api-discussion.md](asset://${api.id})`);
+      expect(reply.content).toContain('Could not save ../escape.md');
+      expect(reply.content).toContain('Press Taskify when ready.');
+      expect(new TextDecoder().decode((await withAssets.readAsset(api.id)).data)).toBe('# API\n\n```ts\ntype Route = string;\n```\n');
+      const task = await withAssets.taskifyPlanningChat(chat.id, { title: 'Bootstrap', status: 'backlog' });
+      expect((await withAssets.listTaskAssets(task.id)).map(asset => asset.id)).toEqual([structure.id, api.id]);
+    } finally {
+      await withAssets.stop();
+      await rm(storage, { recursive: true, force: true });
+    }
   });
 
   it('keeps planning chats across a restart and reports a reply that was in flight as interrupted', async () => {

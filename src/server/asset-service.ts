@@ -94,12 +94,12 @@ export class AssetService {
   }
 
   /** A reference note is an owner-written Markdown asset; revisions are new assets. */
-  async createNote(scope: Scope, input: { name: string; content: string }) {
+  async createNote(scope: Scope, input: { name: string; content: string; origin?: 'upload' | 'generated' }) {
     const trimmed = input.name.trim();
     const name = validName(/\.(md|markdown)$/i.test(trimmed) ? trimmed : `${trimmed}.md`);
     if (!input.content.trim()) throw new DomainError('Write something in the note.');
     const data = Buffer.from(`${input.content.trim()}\n`, 'utf8');
-    return this.store(scope, { name, mediaType: 'text/markdown', data, origin: 'upload' });
+    return this.store(scope, { name, mediaType: 'text/markdown', data, origin: input.origin ?? 'upload' });
   }
 
   async importFile(scope: Scope, input: ImportFileInput) {
