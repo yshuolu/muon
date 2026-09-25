@@ -226,6 +226,7 @@ function projectRoutes(projects: ProjectResolver) {
     emptyMutationSchema.parse(await c.req.json());
     return c.json(c.get('service').createPlanningChat(), 201);
   });
+  app.get('/planning-chats', async c => c.json(c.get('service').listPlanningChats()));
   app.get('/planning-chats/:id', async c => c.json(c.get('service').getPlanningChat(c.req.param('id'))));
   app.patch('/planning-chats/:id', async c => {
     const patch = updatePlanningChatSchema.parse(await c.req.json());

@@ -316,6 +316,31 @@ describe('REST record resources', () => {
     }
   });
 
+  it('creates tasks from task blocks in planning replies, links them, and lists saved threads', async () => {
+    const parent = await service.createTask({ title: 'Existing group', kind: 'group', status: 'backlog' });
+    const chat = service.createPlanningChat();
+    expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Create the tasks for this plan' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    expect(claude.calls[0].request.prompt).toContain(`${parent.identifier} [backlog, group] Existing group`);
+    claude.calls[0].resolve({ text: 'Creating them now.\n\n```task\n{"title":"Bootstrap the monorepo","description":"Set up pnpm and turbo.\\n- pnpm install works","priority":2,"labels":["infra"],"parentId":"' + parent.identifier + '"}\n```\n```task\n{"title":"Add the TypeSpec package","status":"todo","blockedByIds":["' + parent.identifier.replace(/\d+$/, digits => String(Number(digits) + 1)) + '"]}\n```\n```task\n{"title":"","status":"done"}\n```\n```task\nnot json\n```\nDone.' });
+    await eventually(() => !service.getPlanningChat(chat.id).busy);
+    const reply = service.getPlanningChat(chat.id).messages.at(-1)!;
+    const tasks = (await service.snapshot()).tasks.filter(task => task.id !== parent.id);
+    expect(tasks.map(task => [task.title, task.status, task.parentId, task.blockedByIds])).toEqual([
+      ['Bootstrap the monorepo', 'backlog', parent.id, []],
+      ['Add the TypeSpec package', 'todo', null, [tasks[0].id]],
+    ]);
+    expect(reply.taskIds).toEqual(tasks.map(task => task.id));
+    expect(reply.content).toContain(`Created task **${tasks[0].identifier}** · Bootstrap the monorepo`);
+    expect(reply.content).toContain('Could not create the task:');
+    expect(reply.content).toContain('not json');
+    expect(reply.content).toContain('Done.');
+    const listed = await (await request('/api/planning-chats')).json() as Array<{ id: string; title: string; messageCount: number; taskIds: string[]; preview: string }>;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: chat.id, title: 'Create the tasks for this plan', messageCount: 2, taskIds: tasks.map(task => task.id) });
+    expect(listed[0].preview).toContain('Creating them now.');
+  });
+
   it('keeps planning chats across a restart and reports a reply that was in flight as interrupted', async () => {
     const chat = service.createPlanningChat();
     await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet' });

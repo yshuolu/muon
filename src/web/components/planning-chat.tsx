@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUp, Check, CheckCircle2, ChevronRight, FileText, Loader2, PanelLeft, X } from 'lucide-react';
-import type { AppSnapshot, PlanningChat, PlanningChatMessage, Provider, Task } from '../../shared/types';
+import { ArrowLeft, ArrowRight, ArrowUp, Check, CheckCircle2, ChevronRight, FileText, History, Loader2, PanelLeft, Trash2, X } from 'lucide-react';
+import type { AppSnapshot, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, Task } from '../../shared/types';
 import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
 import { useConversationScroll } from '../lib/conversation-scroll';
 import { deliverNotification } from '../lib/notifications';
 import { proposedTaskFromReply } from '../lib/planning-task';
+import { relativeTime } from '../lib/utils';
 import { Markdown, MuonMark } from './common';
 import { ConversationUnreadBoundary, ConversationViewport } from './conversation-viewport';
 import { Button } from './ui/button';
@@ -19,11 +20,45 @@ const FALLBACK_CONFIG: Record<Provider, { model: string; thinking: string }> = {
 /** Claude Code accepts short aliases; Codex chats use the configured model or an explicit identifier. */
 const MODEL_ALIASES: Record<Provider, string[]> = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };
 
-export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNewChat, creatingChat, onOpenNavigation }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void; onNewChat: () => Promise<void>; creatingChat: boolean; onOpenNavigation: () => void }) {
+/** Saved threads for this project, newest first; unfolds from the History control in the toolbar. */
+function PlanningChatHistory({ currentId, onOpen, onClose }: { currentId: string; onOpen: (id: string) => void; onClose: () => void }) {
+  const [chats, setChats] = useState<PlanningChatSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState<string | null>(null);
+  const load = async () => {
+    try { setChats(await api<PlanningChatSummary[]>('/planning-chats')); setError(null); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load planning threads.'); }
+  };
+  useEffect(() => { void load(); }, []);
+  async function discard(id: string) {
+    setDiscarding(id);
+    try { await api(`/planning-chats/${id}`, 'DELETE', {}); await load(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not discard this thread.'); }
+    finally { setDiscarding(null); }
+  }
+  const others = (chats ?? []).filter(chat => chat.id !== currentId);
+  return <div className="planning-history" role="dialog" aria-label="Past planning threads">
+    <div className="planning-history-heading"><History size={14} /><strong>Past planning threads</strong><Button variant="ghost" size="icon" aria-label="Close history" onClick={onClose}><X size={15} /></Button></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {!chats ? <p className="planning-history-empty"><Loader2 size={14} className="spin" />Loading…</p>
+      : others.length === 0 ? <p className="planning-history-empty">No other saved threads. Threads stay here until you discard them or turn them into a task.</p>
+      : <ul>{others.map(chat => <li key={chat.id}>
+        <button className="planning-history-item" onClick={() => onOpen(chat.id)}>
+          <strong>{chat.title}</strong>
+          <small>{chat.preview || 'No messages yet'}</small>
+          <span>{PROVIDER_LABELS[chat.provider]} · {chat.messageCount} {chat.messageCount === 1 ? 'message' : 'messages'} · {relativeTime(chat.updatedAt)}{chat.busy ? ' · replying' : ''}{chat.taskIds.length ? ` · ${chat.taskIds.length} ${chat.taskIds.length === 1 ? 'task' : 'tasks'} created` : ''}</span>
+        </button>
+        <Button variant="ghost" size="icon" aria-label={`Discard thread ${chat.title}`} title="Discard thread" disabled={discarding === chat.id} onClick={() => void discard(chat.id)}><Trash2 size={14} /></Button>
+      </li>)}</ul>}
+  </div>;
+}
+
+export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNewChat, creatingChat, onOpenNavigation, onOpenChat, onOpenTask }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void; onNewChat: () => Promise<void>; creatingChat: boolean; onOpenNavigation: () => void; onOpenChat: (id: string) => void; onOpenTask: (task: Task) => void }) {
   const [chat, setChat] = useState<PlanningChat | null>(null);
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [taskify, setTaskify] = useState(false);
+  const [history, setHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [missingChat, setMissingChat] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -117,6 +152,12 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     catch (cause) { setSendError(cause instanceof Error ? cause.message : 'Could not send your message.'); }
     finally { setBusy(false); }
   }
+  async function discard() {
+    if (chat?.messages.length && !window.confirm('Discard this planning thread? Its messages are deleted; documents and tasks it created stay.')) return;
+    try { await api(`/planning-chats/${chatId}`, 'DELETE', {}); }
+    catch (cause) { if (!(cause instanceof ApiError) || cause.status !== 404) { setSendError(cause instanceof Error ? cause.message : 'Could not discard this thread.'); return; } }
+    onClose();
+  }
   const firstQuestion = chat?.messages.find(message => message.role === 'user')?.content ?? '';
   // The partner's latest proposal prefills Taskify; the first question is the fallback title.
   const proposal = proposedTaskFromReply(chat?.messages.findLast(message => message.role === 'assistant')?.content);
@@ -127,13 +168,16 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
       <Button variant="ghost" size="icon" aria-label="Back to tasks" title="Back to tasks" onClick={onClose}><ArrowLeft size={15} /></Button>
       <div className="planning-chat-title"><span title={snapshot.project.name}>{snapshot.project.name}</span><ChevronRight size={12} aria-hidden="true" /><h1>Planning thread</h1></div>
       {snapshot.runtime.demo && <span className="demo-badge">Demo workspace</span>}
+      <Button variant="ghost" size="icon" aria-label="Discard thread" title="Discard thread" disabled={!chat || chat.busy || busy} onClick={() => void discard()}><Trash2 size={15} /></Button>
+      <Button variant="ghost" size="sm" aria-label="Past planning threads" aria-expanded={history} title="Past planning threads" onClick={() => setHistory(value => !value)}><History size={15} />History</Button>
       <Button size="sm" aria-label="Taskify conversation" onClick={() => setTaskify(true)} disabled={modelDisabled || !chat?.messages.length}><CheckCircle2 size={15} />Taskify</Button>
     </header>
+    {history && <PlanningChatHistory currentId={chatId} onOpen={id => { setHistory(false); onOpenChat(id); }} onClose={() => setHistory(false)} />}
     <ConversationViewport scroll={scroll} className="planning-chat-conversation" label="Planning conversation">
       {!chat && !error && <div className="planning-chat-empty"><Loader2 size={18} className="spin" />Opening planning thread…</div>}
-      {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{missingChat ? 'This planning chat is no longer available.' : error}</strong>{missingChat && <><p>It may have been discarded or lost when the server restarted.</p><Button disabled={creatingChat} onClick={() => void onNewChat()}>{creatingChat ? 'Opening chat…' : 'Start new chat'}</Button></>}<Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
+      {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{missingChat ? 'This planning chat is no longer available.' : error}</strong>{missingChat && <><p>It was discarded or turned into a task. Past threads are under History.</p><Button disabled={creatingChat} onClick={() => void onNewChat()}>{creatingChat ? 'Opening chat…' : 'Start new chat'}</Button></>}<Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
       {chat && !chat.messages.length && <div className="planning-chat-empty"><div className="chief-orb"><MuonMark /></div><h2>What are you thinking about?</h2><p>Explore the problem first. I’ll help turn the conversation into a clear task when you’re ready.</p></div>}
-      {chat?.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>{PROVIDER_LABELS[provider]} · Read-only</span>}</div><Markdown>{message.content}</Markdown></div></article>)}
+      {chat?.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>{PROVIDER_LABELS[provider]} · Read-only</span>}</div><Markdown>{message.content}</Markdown>{Boolean(message.taskIds?.length) && <div className="message-task-links">{message.taskIds?.map(id => { const task = snapshot.tasks.find(item => item.id === id); return task ? <button key={id} onClick={() => onOpenTask(task)}><span>{task.identifier}</span>{task.title}<ArrowRight size={13} /></button> : null; })}</div>}</div></article>)}
       {chat?.error && <p className="form-error" role="alert">{chat.error}</p>}
       {chat?.busy && <div className="chief-working"><span className="working-dots"><i /><i /><i /></span>{chat.activity ?? 'Planning partner is thinking…'}</div>}
     </ConversationViewport>

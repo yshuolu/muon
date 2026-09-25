@@ -1249,3 +1249,16 @@ audio.asset-media { margin: 20px auto; width: calc(100% - 40px); }
 .project-form > label.project-init-row input { width: 30px; height: 17px; flex-shrink: 0; }
 .inline-link { padding: 0; font: inherit; color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 .inline-link:hover { color: var(--primary); }
+.planning-history { position: absolute; top: 48px; right: 16px; z-index: 20; width: min(440px, calc(100vw - 32px)); max-height: min(60dvh, 520px); overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 10%), 0 4px 6px -4px rgb(0 0 0 / 10%); }
+.planning-chat-view { position: relative; }
+.planning-history-heading { display: flex; align-items: center; gap: 8px; padding: 6px 6px 8px; font-size: 13px; }
+.planning-history-heading strong { flex: 1; font-weight: 500; }
+.planning-history-empty { display: flex; align-items: center; gap: 8px; margin: 0; padding: 12px 8px 14px; font-size: 12px; line-height: 1.7; color: var(--muted-foreground); }
+.planning-history ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.planning-history li { display: flex; align-items: flex-start; gap: 4px; }
+.planning-history-item { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; text-align: left; border-radius: var(--radius-sm); }
+.planning-history-item:hover { background: var(--accent); }
+.planning-history-item strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planning-history-item small { font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planning-history-item > span { font-size: 11px; color: var(--muted-foreground); }
+.planning-history li > .button { margin-top: 6px; color: var(--muted-foreground); }

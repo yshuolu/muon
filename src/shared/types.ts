@@ -89,7 +89,12 @@ export interface Settings {
   chiefSoul?: string | null;
 }
 export interface ChiefMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[]; provider?: Provider }
-export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string }
+export interface PlanningChatMessage { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; taskIds?: string[] }
+/** A listing entry for resuming saved planning chats without loading every message. */
+export interface PlanningChatSummary {
+  id: string; provider: Provider; model: string | null; createdAt: string; updatedAt: string; busy: boolean;
+  messageCount: number; title: string; preview: string; taskIds: string[]; error?: string;
+}
 export interface PlanningChat {
   id: string;
   /** The agent that answers this chat; switching it resets the model to that provider's default. */

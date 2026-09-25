@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AppSnapshot, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import type { AgentRun, AppSnapshot, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
 import { AgentProcessUnreapedError, type AgentAdapter, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
 import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema } from './agent-prompts';
 import type { AssetService } from './asset-service';
 import { assetIdsInText, assetReference, taskAssetIds } from '../shared/asset-references';
-import { extractNoteBlocks } from '../shared/note-blocks';
+import { extractAgentBlocks } from '../shared/note-blocks';
+import { createTaskSchema } from '../shared/api-contract';
+import { z } from 'zod';
 
 const now = () => new Date().toISOString();
 const terminal = (task: Task) => task.status === 'done' || task.status === 'canceled';
@@ -582,20 +584,45 @@ export class TaskService implements Dispatcher {
    * Saves every `note:<filename>` block in agent text as a generated Library document and replaces it with a
    * reference. Agents never write to the repository; the Library is the place their documents land.
    */
-  private async publishAgentNotes(text: string): Promise<string> {
-    const segments = extractNoteBlocks(text);
-    if (!this.options.assets || !segments.some(segment => typeof segment !== 'string')) return text;
+  private async publishAgentOutput(text: string): Promise<{ content: string; taskIds: string[] }> {
+    const segments = extractAgentBlocks(text);
+    if (!segments.some(segment => typeof segment !== 'string')) return { content: text, taskIds: [] };
     const output: string[] = [];
+    const taskIds: string[] = [];
+    // Tasks created earlier in the same reply can be referenced by identifier in later blocks.
+    const created: Task[] = [];
+    const failed = (reason: string, body: string) => output.push(`_${reason}_\n\n\`\`\`\`\n${body}\n\`\`\`\``);
     for (const segment of segments) {
       if (typeof segment === 'string') { output.push(segment); continue; }
+      if (segment.kind === 'note') {
+        if (!this.options.assets) { failed(`Could not save ${segment.name} to the Library: asset storage is not configured.`, segment.content); continue; }
+        try {
+          const asset = await this.options.assets.createNote(this.scope, { name: segment.name, content: segment.content, origin: 'generated' });
+          output.push(`Saved to the Library: ${assetReference(asset)}`);
+        } catch (error) {
+          failed(`Could not save ${segment.name} to the Library: ${error instanceof Error ? error.message : String(error)}`, segment.content);
+        }
+        continue;
+      }
       try {
-        const asset = await this.options.assets.createNote(this.scope, { name: segment.name, content: segment.content, origin: 'generated' });
-        output.push(`Saved to the Library: ${assetReference(asset)}`);
+        const parsed: unknown = JSON.parse(segment.content);
+        const input = createTaskSchema.parse(parsed);
+        const tasks = await this.repo.tasks(this.scope);
+        const resolveReference = (reference: string) => {
+          const task = tasks.find(item => item.id === reference) ?? tasks.find(item => item.identifier.toLowerCase() === reference.toLowerCase()) ?? created.find(item => item.identifier.toLowerCase() === reference.toLowerCase());
+          if (!task) throw new DomainError(`Unknown task reference ${reference}.`);
+          return task.id;
+        };
+        // Agent-created tasks start in Backlog unless the block asks for Todo; automatic planning is the owner's call.
+        const task = await this.createTask({ status: 'backlog', ...input, ...(input.parentId ? { parentId: resolveReference(input.parentId) } : {}), ...(input.blockedByIds ? { blockedByIds: input.blockedByIds.map(resolveReference) } : {}) });
+        created.push(task);
+        taskIds.push(task.id);
+        output.push(`Created task **${task.identifier}** · ${task.title}`);
       } catch (error) {
-        output.push(`_Could not save ${segment.name} to the Library: ${error instanceof Error ? error.message : String(error)}_\n\n\`\`\`\`\n${segment.content}\n\`\`\`\``);
+        failed(`Could not create the task: ${error instanceof z.ZodError ? error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') : error instanceof Error ? error.message : String(error)}`, segment.content);
       }
     }
-    return output.join('\n');
+    return { content: output.join('\n'), taskIds };
   }
   /** SQLite writes complete synchronously inside the call; the promise only carries failures to the log. */
   private persistPlanningChat(chat: PlanningChat) {
@@ -607,6 +634,15 @@ export class TaskService implements Dispatcher {
     this.planningChats.set(chat.id, chat);
     this.persistPlanningChat(chat);
     return chat;
+  }
+  /** Saved chats, newest activity first, without their message bodies. */
+  listPlanningChats(): PlanningChatSummary[] {
+    const excerpt = (text: string | undefined, limit: number) => { const flat = (text ?? '').replace(/\s+/g, ' ').trim(); return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat; };
+    return [...this.planningChats.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(chat => ({
+      id: chat.id, provider: chat.provider, model: chat.model, createdAt: chat.createdAt, updatedAt: chat.updatedAt, busy: chat.busy,
+      messageCount: chat.messages.length, title: excerpt(chat.messages.find(message => message.role === 'user')?.content, 80) || 'New planning thread',
+      preview: excerpt(chat.messages.at(-1)?.content, 140), taskIds: chat.messages.flatMap(message => message.taskIds ?? []), ...(chat.error ? { error: chat.error } : {}),
+    }));
   }
   getPlanningChat(id: string): PlanningChat {
     const chat = this.planningChats.get(id);
@@ -644,9 +680,10 @@ export class TaskService implements Dispatcher {
       const done = Promise.resolve().then(async () => {
         const provider = chat.provider;
         if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or switch this chat to another agent.`);
-        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: chat.model ?? undefined, prompt: planningChatPrompt(project, chat.messages), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
+        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: chat.model ?? undefined, prompt: planningChatPrompt(project, chat.messages, await this.repo.tasks(this.scope)), cwd: project.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
-        const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: await this.publishAgentNotes(result.text.trim()), createdAt: now() };
+        const published = await this.publishAgentOutput(result.text.trim());
+        const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: published.content, createdAt: now(), ...(published.taskIds.length ? { taskIds: published.taskIds } : {}) };
         chat.messages = [...chat.messages, reply]; chat.updatedAt = now();
       }).catch(error => {
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
@@ -987,7 +1024,8 @@ export class TaskService implements Dispatcher {
       this.chiefActivity = 'Applying task updates…';
       // Task operations have already gone through CLI -> REST -> TaskService. A
       // model's final text is display-only and never interpreted as commands.
-      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: await this.publishAgentNotes(content), createdAt: now(), taskIds: commands?.taskIds() ?? [], provider });
+      const published = await this.publishAgentOutput(content);
+      await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: published.content, createdAt: now(), taskIds: [...(commands?.taskIds() ?? []), ...published.taskIds], provider });
     }).catch(async error => {
       if (error instanceof AgentProcessUnreapedError) canRelease = false;
       await this.repo.appendMessage(this.scope, { id: randomUUID(), role: 'assistant', content: `I couldn't complete this request. ${error instanceof Error ? error.message : String(error)} Any task changes already saved through the CLI are retained.`, createdAt: now(), taskIds: commands?.taskIds() ?? [] });
