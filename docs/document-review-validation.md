@@ -17,4 +17,6 @@ Live validation used the built app against an isolated data directory on port 43
 - The revised document was created as a new Library version (200 bytes, `Generated`) containing exactly the original text minus the Decision log section. The sidebar offered **Open revised version**, which opened the revision as a second tab showing "Revised from an earlier version · 2 comments resolved", **Open previous version**, and the inherited thread.
 - The repository folder was unchanged throughout.
 
+A later live review of a 4-comment document at the task effort (`max`) took over 15 minutes: the agent spent eight minutes thinking before its first action, listed the repository, and tried to write its draft to a temp file with a heredoc that the sandbox refused. Reviews now run at `MUON_REVIEW_EFFORT` (default `high`, covered by adapter tests for both Claude Code and Codex, which keep task phases at the configured effort), and the prompt tells the reviewer to compose the revision in its reply without exploring the repository or writing files. With the comments sidebar open the reader also drops its centered reading width so the outline, the text, and the 360px sidebar share the window.
+
 This validation concerns commenting, one-pass resolution, and versioning. The reader, tabs, and Library list remain covered by [library-validation.md](library-validation.md).

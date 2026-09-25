@@ -8,6 +8,8 @@ export interface AgentRequest {
   cwd: string;
   /** Overrides the configured Claude model for a chief or disposable chat request. */
   model?: string;
+  /** Overrides the configured thinking effort for a disposable chat request, such as a document review. */
+  effort?: string;
   sessionId?: string;
   signal?: AbortSignal;
   /** Reports the provider-confirmed session at most once, without waiting for a final result. */

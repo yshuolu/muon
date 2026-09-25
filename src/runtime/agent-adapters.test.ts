@@ -156,8 +156,12 @@ describe('ClaudeCodeAdapter', () => {
     await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Use the configured default' });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
-    await adapter.run({ provider: 'claude', phase: 'building', cwd: directory, prompt: 'Implement the approved task', model: 'chat-only-model' });
+    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Review a document', effort: 'high' });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    await adapter.run({ provider: 'claude', phase: 'building', cwd: directory, prompt: 'Implement the approved task', model: 'chat-only-model', effort: 'low' });
+    ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
+    expect(args[args.indexOf('--effort') + 1]).toBe('max');
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
   });
   it('returns only the final result and frames split UTF-8 correctly', async () => {
@@ -318,11 +322,11 @@ describe('CodexAdapter', () => {
   it('runs chats from a scratch directory without network and never with full access', async () => {
     vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
     const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
-    await expect(adapter.run({ provider: 'codex', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'gpt-6-astra-mini' })).resolves.toMatchObject({ text: 'Final result' });
+    await expect(adapter.run({ provider: 'codex', phase: 'chat', cwd: directory, prompt: 'Explore an idea', model: 'gpt-6-astra-mini', effort: 'high' })).resolves.toMatchObject({ text: 'Final result' });
     const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const scratch = requests[3].params.cwd as string;
     expect(scratch).toContain('muon-codex-chat-');
-    expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', config: { model: 'gpt-6-astra-mini' } });
+    expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', config: { model: 'gpt-6-astra-mini', model_reasoning_effort: 'high' } });
     expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: false } });
     expect(requests[4].params.input[0].text).toContain(`The project repository is at ${directory}`);
     await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });

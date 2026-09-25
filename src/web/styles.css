@@ -1282,7 +1282,11 @@ audio.asset-media { margin: 20px auto; width: calc(100% - 40px); }
   .library-tab { max-width: 180px; }
   .library-document-title { flex-wrap: wrap; }
 }
-.library-document-body.with-comments { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 28px; align-items: start; }
+.library-document-body.with-comments { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 32px; align-items: start; }
+/* With the comments sidebar open the reader uses the whole window instead of the centered reading column. */
+.library-document-scroll.comments-open .library-document-heading, .library-document-scroll.comments-open .library-document-body { max-width: none; }
+.library-document-scroll.comments-open .library-document-body .asset-markdown { max-width: none; }
+.library-document-scroll.comments-open .asset-document-layout:has(.asset-outline) { grid-template-columns: 170px minmax(0, 1fr); gap: 24px; }
 .library-document-main { min-width: 0; }
 .library-document-tools { display: flex; justify-content: flex-end; padding-top: 10px; }
 .doc-comments-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--warning); color: var(--background); font-size: 11px; font-weight: 600; }

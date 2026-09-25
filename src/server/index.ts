@@ -42,7 +42,7 @@ const registry: ProjectRegistry = new ProjectRegistry({
   scope: identity, repository, workspaces, adapters,
   defaultSettings: { maxConcurrentAgents: 2, dispatcherEnabled: !demo, defaultProvider: 'claude' },
   seed: { name: demo ? 'Muon' : 'My project', identifier: 'MUO', repositoryPath: demo ? '/demo/project' : process.env.MUON_REPOSITORY_PATH ?? '' },
-  createService: (scope, providerAvailability) => new TaskService({ scope, repository, artifacts, assets, demo, chiefCommands, adapters, workspaces, providerAvailability }),
+  createService: (scope, providerAvailability) => new TaskService({ scope, repository, artifacts, assets, demo, chiefCommands, adapters, workspaces, providerAvailability, reviewEffort: process.env.MUON_REVIEW_EFFORT ?? 'high' }),
 });
 const chiefCommands: LocalChiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope: identity, resolveProjectId: reference => registry.projectIdFor(reference) });
 let ready = false;

@@ -150,7 +150,7 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
   useEffect(() => { if (active && asset) requestAnimationFrame(() => heading.current?.focus()); }, [active, asset]);
   const tasks = referrers.get(assetId) ?? [];
   const kind = asset ? libraryKind(asset) : null;
-  return <div className="detail-scroll library-document-scroll" hidden={!active} role="tabpanel" id={`library-pane-${assetId}`} aria-labelledby={`library-tab-${assetId}`}>
+  return <div className={`detail-scroll library-document-scroll ${reviewable && commentsOpen ? 'comments-open' : ''}`} hidden={!active} role="tabpanel" id={`library-pane-${assetId}`} aria-labelledby={`library-tab-${assetId}`}>
     {error && !asset && <div className="library-placeholder"><File size={26} /><strong>This file is not in your library</strong><p>{error}</p><Button variant="secondary" size="sm" onClick={onClose}>Close tab</Button></div>}
     {!asset && !error && <p className="asset-loading" role="status">Loading document…</p>}
     {asset && kind && <>

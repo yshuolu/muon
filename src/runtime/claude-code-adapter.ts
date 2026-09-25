@@ -82,6 +82,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     // they may read it and write temporary files to a scratch directory, and nothing else.
     const advisory = chief || chat;
     const model = advisory ? request.model ?? this.model : this.model;
+    // Disposable chats (document reviews) may ask for a lighter effort than the configured task effort.
+    const effort = chat ? request.effort ?? this.effort : this.effort;
     const readonly = request.phase === 'planning' || discussion;
     if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
     const cli = request.chiefCli;
@@ -122,7 +124,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         '--permission-prompts', 'none',
         '--tools', readonly ? 'Read,Glob,Grep' : advisory ? 'Read,Glob,Grep,Bash' : 'Read,Glob,Grep,Edit,Write,Bash',
         ...(model ? ['--model', model] : []),
-        ...(this.effort ? ['--effort', this.effort] : []),
+        ...(effort ? ['--effort', effort] : []),
         '--disallowedTools', 'mcp__*',
         '--settings', JSON.stringify(settings),
         ...(request.sessionId ? ['--resume', request.sessionId] : []),

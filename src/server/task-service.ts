@@ -26,6 +26,8 @@ export interface ServiceOptions {
   assets?: AssetService;
   /** Shared probe result when several project services share the same adapters. */
   providerAvailability?: Record<'claude' | 'codex', boolean>;
+  /** Thinking effort for document reviews, which answer from the document rather than exploring the repository. */
+  reviewEffort?: string;
 }
 
 export class TaskService implements Dispatcher {
@@ -788,7 +790,7 @@ export class TaskService implements Dispatcher {
       this.reviews.set(assetId, review);
       const abort = new AbortController();
       const done = Promise.resolve().then(async () => {
-        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: model ?? undefined, prompt: documentReviewPrompt(project, asset, text, pending), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { if (this.reviews.get(assetId) === review) review.activity = activity; } });
+        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: model ?? undefined, effort: this.options.reviewEffort, prompt: documentReviewPrompt(project, asset, text, pending), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { if (this.reviews.get(assetId) === review) review.activity = activity; } });
         // A run aborted by shutdown must not leave a revision or replies behind.
         if (abort.signal.aborted) return;
         const parsed = documentReviewSchema.parse(parseJsonResult(result.text));

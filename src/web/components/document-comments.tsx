@@ -96,7 +96,8 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
       if (!markdown.contains(range.commonAncestorContainer)) { setSelection(null); return; }
       const before = document.createRange(); before.selectNodeContents(markdown); before.setEnd(range.startContainer, range.startOffset);
       const after = document.createRange(); after.selectNodeContents(markdown); after.setStart(range.endContainer, range.endOffset);
-      const anchor = anchorFromSelection(before.toString(), range.toString(), after.toString());
+      // Selection.toString() keeps rendered whitespace between table cells and blocks; Range.toString() does not.
+      const anchor = anchorFromSelection(before.toString(), current.toString(), after.toString());
       if (!anchor) { setSelection(null); return; }
       const rect = range.getBoundingClientRect();
       setSelection({ anchor, x: rect.left + rect.width / 2, y: rect.top });

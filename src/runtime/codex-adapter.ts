@@ -168,9 +168,10 @@ export class CodexAdapter implements AgentAdapter {
       const mcpServers = Object.fromEntries(Object.keys(record(configuration.mcp_servers) ?? {}).map(name => [name, { enabled: false }]));
       // Quick chats and the chief may pick their own model; task phases keep the configured one.
       const model = request.phase === 'chat' || chief ? request.model ?? this.model : this.model;
+      const reasoningEffort = chat ? request.effort ?? this.reasoningEffort : this.reasoningEffort;
       const config = { mcp_servers: mcpServers, features: isolatedFeatures,
         ...(model ? { model } : {}),
-        ...(this.reasoningEffort ? { model_reasoning_effort: this.reasoningEffort } : {}),
+        ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
       };
       const opened = record(await rpc(request.sessionId ? 'thread/resume' : 'thread/start', {
         ...(request.sessionId ? { threadId: request.sessionId } : {}),
