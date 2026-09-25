@@ -403,15 +403,50 @@ export class TaskService implements Dispatcher {
       await this.reconcileProjectCompletion();
       return saved;
     }
-    if (task.kind === 'group' ? task.status === 'canceled' : !['backlog', 'todo'].includes(task.status) || task.phase !== 'idle') throw new DomainError('Only unstarted coding tasks and active task groups can be edited. Use plan feedback or retry for work already underway.');
     if (input.title !== undefined) {
       if (!input.title.trim()) throw new DomainError('Task title cannot be empty.');
       input.title = input.title.trim();
     }
+    const group = task.kind === 'group';
+    const unstarted = ['backlog', 'todo'].includes(task.status) && task.phase === 'idle';
+    // Scope (title and description) feeds the RFC: it can change until the RFC is approved, and a change after
+    // planning started discards the current planning run or pending RFC and queues a fresh one. Metadata can change
+    // until the task ends; the agent and the Backlog/Todo choice only before the task starts.
+    const scopeEdit = (input.title !== undefined && input.title !== task.title) || (input.description !== undefined && input.description !== task.description);
+    if (group) {
+      if (task.status === 'canceled') throw new DomainError('Canceled task groups cannot be edited. Restore work with a new group.');
+    } else {
+      if (terminal(task)) throw new DomainError('Completed and canceled tasks cannot be edited. Create a follow-up task instead.');
+      if (input.status !== undefined && input.status !== task.status && !unstarted) throw new DomainError('Only unstarted tasks move between Backlog and Todo. Cancel or retry work already underway.');
+      if (input.provider !== undefined && input.provider !== task.provider && !unstarted) throw new DomainError('The agent can only change before the task starts. Work already underway keeps its agent.');
+      if (scopeEdit && task.plans.at(-1)?.status === 'approved') throw new DomainError('The approved RFC fixes this task’s scope. Use Revise RFC (a replan comment) or a replan retry to change work already underway.');
+    }
     if (input.labels) input.labels = [...new Set(input.labels.map(label => label.trim()))];
     if (input.description !== undefined) await this.validateInputAssets(assetIdsInText(input.description));
     await this.validateRelations(id, input.parentId === undefined ? task.parentId : input.parentId, input.blockedByIds ?? task.blockedByIds);
-    const saved = await this.change(task, input, 'Task updated.');
+    const replanning = !group && scopeEdit && !unstarted;
+    let saved: Task;
+    if (replanning) {
+      // The running planning agent keeps touching the record (worktree, session), so the edit is applied against
+      // the latest version and the run it stopped is remembered for the abort.
+      let stoppedRunId: string | undefined;
+      saved = await this.mutateTask(id, latest => {
+        if (terminal(latest) || latest.followUp || latest.plans.at(-1)?.status === 'approved') throw new DomainError('This task changed while you were editing it. Refresh and try again.', 409);
+        stoppedRunId = latest.runId;
+        const pendingPlan = latest.plans.at(-1)?.status === 'pending';
+        const plans = pendingPlan ? latest.plans.map((plan, index) => index === latest.plans.length - 1 ? { ...plan, status: 'changes_requested' as const, feedback: 'The task scope was edited; a new RFC is needed.', reviewedAt: now(), reviewedBy: this.scope.userId } : plan) : latest.plans;
+        return {
+          patch: { ...input, plans, status: 'todo', phase: 'planning', runId: undefined, sessionId: undefined, error: undefined, recovery: undefined },
+          activity: latest.runId ? 'Task scope updated. The planning agent was stopped; planning restarts with the new scope.' : pendingPlan ? 'Task scope updated. The pending RFC was set aside; a new RFC will need approval.' : 'Task scope updated. A new RFC will need approval.',
+          ...(latest.runId ? { runStatus: 'canceled' as const } : {}),
+        };
+      });
+      const running = this.active.get(id);
+      if (running && stoppedRunId && running.runId === stoppedRunId) running.abort.abort();
+      await this.repo.removeAttention(this.scope, id);
+    } else {
+      saved = await this.mutateTask(id, latest => terminal(latest) && task.kind !== 'group' ? undefined : { patch: input, activity: 'Task updated.' });
+    }
     await this.reconcileGroups();
     await this.reconcileProjectCompletion();
     void this.tick().catch(console.error);

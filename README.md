@@ -53,7 +53,7 @@ Choose **Task group** for an organizational parent: it never launches an agent a
 
 Coding subtasks have independent RFCs, worktrees, and verification. They run independently unless dependencies connect them. A coding parent waits for children, then runs its own approved integration workflow. Muon exports completed dependency changes into immutable patches attached to the integration RFC, including uncommitted and untracked files. The Plan tab shows these inputs and downloads the exact patches; building uses the snapshots you reviewed. Completion does not merge sibling branches automatically. A canceled dependency or child does not unblock parent coding work until you resolve its scope.
 
-The chief creates groups and coding tasks, edits unstarted metadata and relations, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
+The chief creates groups and coding tasks, edits their scope and metadata, queues, prioritizes, cancels, recovers failures, and summarizes results by running the Muon CLI. A task's title and description can change until its RFC is approved: an edit after planning started stops the running planning agent, or sets a pending RFC aside, and queues a fresh RFC for approval. After approval, scope changes go through **Revise RFC** or a replan retry. Priority, labels, thinking effort, parent, and dependencies can change until the task is done or canceled; the agent and the Backlog/Todo choice only before it starts. Every CLI operation goes through the same REST API and task service as the UI. The final reply is display-only. Short-lived scoped credentials cannot approve RFCs, submit owner reviews, mark coding work verified, change settings, or clear attention.
 
 Chief task descriptions capture the goal in 1-3 short sentences for simple requests, preserving explicit requirements and references. Detailed design and verification plans belong in the task's RFC. Simple task changes receive a brief confirmation; ask for more detail when needed.
 
@@ -174,6 +174,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Chief of staff agent validation](docs/chief-agent-validation.md)
 - [Document review validation](docs/document-review-validation.md)
 - [Library access, @ mentions, and thinking effort validation](docs/library-mentions-validation.md)
+- [Task scope editing validation](docs/task-scope-edit-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh

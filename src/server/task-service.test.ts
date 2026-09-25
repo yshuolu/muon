@@ -858,7 +858,7 @@ describe('TaskService workflow', () => {
     expect(await f.service.getTask(task.id)).toMatchObject({ title: 'Refined task', parentId: null, labels: [], blockedByIds: [], provider: 'codex' });
   });
 
-  it('applies chief cancellation while rejecting edits that would bypass an active RFC', async () => {
+  it('lets the chief change scope during RFC review by setting the RFC aside, then cancel the task', async () => {
     const f = await fixture(2);
     const task = await f.service.createTask({ title: 'Work in review' });
     await dispatch(f);
@@ -866,14 +866,42 @@ describe('TaskService workflow', () => {
     await waitForState(f, task.id, 'in_review');
     await f.service.sendChief('Change the request and cancel the task');
     const chief = await waitForCall(f, 1, 'chief');
-    const rejected = await chiefRequest<{ error: string }>(f, chief, `/tasks/${task.id}`, 'PATCH', { description: 'Scope expansion without review' }, 400);
-    await chiefRequest(f, chief, `/tasks/${task.id}/cancel`, 'POST', {});
-    chief.finish(`Canceled the task. The attempted edit was rejected: ${rejected.error}`);
-    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief cancellation');
-    expect(await f.service.getTask(task.id)).toMatchObject({ status: 'canceled', description: '' });
-    expect((await f.repo.messages(scope)).at(-1)?.content).toContain('Only unstarted coding tasks');
+    const edited = await chiefRequest<Task>(f, chief, `/tasks/${task.id}`, 'PATCH', { description: 'Scope changed during review' });
+    // The pending RFC never becomes approved silently: it is set aside and planning is queued again.
+    expect(edited).toMatchObject({ description: 'Scope changed during review', phase: 'planning', plans: [{ status: 'changes_requested', feedback: 'The task scope was edited; a new RFC is needed.' }] });
+    expect(edited.status === 'todo' || edited.status === 'in_progress').toBe(true);
     expect(await f.repo.attention(scope)).toEqual([]);
+    await chiefRequest(f, chief, `/tasks/${task.id}/cancel`, 'POST', {});
+    chief.finish('Updated the scope, then canceled the task as requested.');
+    await eventually(async () => (await f.repo.pendingChief(scope)) === null, 'chief cancellation');
+    expect(await f.service.getTask(task.id)).toMatchObject({ status: 'canceled', description: 'Scope changed during review' });
     expect(f.claude.calls.some(call => call.request.phase === 'building')).toBe(false);
+  });
+
+  it('restarts a running planning run when the scope changes and freezes scope once the RFC is approved', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Evolving task', description: 'First idea.' });
+    await dispatch(f);
+    const first = await waitForCall(f, 0, 'planning');
+    expect(first.request.prompt).toContain('First idea.');
+    const edited = await f.service.editTask(task.id, { description: 'Second idea.', priority: 2 });
+    // The dispatcher may already have re-claimed the task, so only the scope, phase, and stopped run are asserted.
+    expect(edited).toMatchObject({ description: 'Second idea.', priority: 2, phase: 'planning' });
+    expect(first.request.signal?.aborted).toBe(true);
+    expect(edited.activity.some(entry => entry.text.includes('planning restarts with the new scope'))).toBe(true);
+    const second = await waitForCall(f, 1, 'planning');
+    expect(second.request.prompt).toContain('Second idea.');
+    expect(second.request.prompt).not.toContain('First idea.');
+    second.finish('# RFC\nPlan for the second idea.');
+    const review = await waitForState(f, task.id, 'in_review', 'plan_review');
+    expect(review.plans).toHaveLength(1);
+    await expect(f.service.editTask(task.id, { provider: 'codex' })).rejects.toThrow('before the task starts');
+    await expect(f.service.editTask(task.id, { status: 'backlog' })).rejects.toThrow('Only unstarted tasks move');
+    await f.service.approve(task.id, review.plans[0].id);
+    await expect(f.service.editTask(task.id, { description: 'Third idea.' })).rejects.toThrow('approved RFC fixes');
+    // Metadata still changes while the approved work runs.
+    expect(await f.service.editTask(task.id, { labels: ['api'], effort: 'low' })).toMatchObject({ labels: ['api'], effort: 'low' });
+    expect((await f.service.editTask(task.id, { title: 'Evolving task' })).title).toBe('Evolving task');
   });
 
   it('rolls up nested task groups after verified subtasks without dispatching a group agent', async () => {
@@ -917,7 +945,7 @@ describe('TaskService workflow', () => {
     await f.service.editTask(canceled.id, { parentId: null });
     expect(await f.service.getTask(canceled.id)).toMatchObject({ status: 'canceled', parentId: null });
     expect((await f.service.getTask(group.id)).summary).toBe('0 of 0 subtasks complete.');
-    await expect(f.service.editTask(canceled.id, { status: 'todo' })).rejects.toThrow('Only unstarted coding tasks');
+    await expect(f.service.editTask(canceled.id, { status: 'todo' })).rejects.toThrow('Completed and canceled tasks cannot be edited');
   });
 
   it('reopens a completed group when another child is attached and preserves verified child outcomes', async () => {
