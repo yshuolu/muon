@@ -5,6 +5,7 @@ import { taskAssetIds } from '../../shared/asset-references';
 import { api } from '../lib/api';
 import { assetContentUrl, assetPreviewKind, formatAssetSize } from '../lib/asset-preview';
 import { LIBRARY_KIND_FILTERS, LIBRARY_KIND_LABELS, LIBRARY_KINDS, ORIGIN_LABELS, assetReferrers, filterLibrary, libraryKind, type LibraryFilter, type LibraryKind } from '../lib/library';
+import { closeTab, loadTabs, openTab, saveTabs } from '../lib/library-tabs';
 import { relativeTime } from '../lib/utils';
 import { AssetPreview } from './asset-preview';
 import { EmptyState, Markdown, StatusIcon } from './common';
@@ -113,54 +114,92 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
   </div>;
 }
 
-/** A full-screen reader for one file, layered over the workspace the way a task opens. */
-export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTask }: { assetId: string; snapshot: AppSnapshot; onClose: () => void; onSelect: (assetId: string) => void; onOpenTask: (task: Task) => void }) {
+/** One open document: metadata, referencing tasks, and the reader. Stays mounted while hidden so its scroll survives tab switches. */
+function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void }) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const [preparingRevision, setPreparingRevision] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const referrers = useMemo(() => assetReferrers(snapshot.tasks), [snapshot.tasks]);
   useEffect(() => {
-    let active = true;
-    setAsset(null); setError(null);
+    let live = true;
     void api<Asset>(`/assets/${encodeURIComponent(assetId)}`).then(value => {
-      if (active) { setAsset(value); requestAnimationFrame(() => heading.current?.focus()); }
+      if (live) { setAsset(value); onLoaded(value); }
     }).catch(cause => {
-      if (active) setError(cause instanceof Error ? cause.message : 'This file is not in your library.');
+      if (live) setError(cause instanceof Error ? cause.message : 'This file is not in your library.');
     });
-    return () => { active = false; };
+    return () => { live = false; };
   }, [assetId]);
+  useEffect(() => { if (active && asset) requestAnimationFrame(() => heading.current?.focus()); }, [active, asset]);
+  const tasks = referrers.get(assetId) ?? [];
+  const kind = asset ? libraryKind(asset) : null;
+  return <div className="detail-scroll library-document-scroll" hidden={!active} role="tabpanel" id={`library-pane-${assetId}`} aria-labelledby={`library-tab-${assetId}`}>
+    {error && !asset && <div className="library-placeholder"><File size={26} /><strong>This file is not in your library</strong><p>{error}</p><Button variant="secondary" size="sm" onClick={onClose}>Close tab</Button></div>}
+    {!asset && !error && <p className="asset-loading" role="status">Loading document…</p>}
+    {asset && kind && <>
+      <header className="library-document-heading">
+        <div className="library-document-title"><span className="library-document-icon"><LibraryIcon kind={kind} size={20} /></span><h1 ref={heading} tabIndex={-1}>{asset.name}</h1>{assetPreviewKind(asset) === 'markdown' && <Button size="sm" variant="secondary" disabled={asset.sizeBytes > MAX_REVISABLE_BYTES} title={asset.sizeBytes > MAX_REVISABLE_BYTES ? 'Notes larger than 2 MB cannot be revised in the browser' : 'Start a new note from this document'} onClick={() => onRevise(asset)}><PenLine size={13} />Revise as new note</Button>}</div>
+        <div className="library-document-meta">
+          <span className="status-pill">{LIBRARY_KIND_LABELS[kind]} · {asset.mediaType}</span>
+          <span className="status-pill">{ORIGIN_LABELS[asset.origin]}{asset.sourcePath && <> from <code>{asset.sourcePath}</code></>}</span>
+          <span className="status-pill">{formatAssetSize(asset.sizeBytes)}</span>
+          <span className="status-pill">{asset.visibility === 'project' ? 'Project' : asset.ownerUserId === snapshot.scope.userId ? 'Private to you' : 'Private'}</span>
+          <span className="detail-updated" title={new Date(asset.createdAt).toLocaleString()}>Added {relativeTime(asset.createdAt).toLowerCase()}</span>
+        </div>
+        {tasks.length > 0 && <div className="library-document-refs"><span>Referenced by</span>{tasks.map(task => <button key={task.id} onClick={() => onOpenTask(task)}><StatusIcon status={task.status} size={13} /><span className="task-identifier">{task.identifier}</span>{task.title}<ChevronRight size={12} /></button>)}</div>}
+      </header>
+      <div className="library-document-body"><AssetPreview key={asset.id} asset={asset} /></div>
+    </>}
+  </div>;
+}
+
+/**
+ * A full-screen reader layered over the workspace the way a task opens. Every document opened becomes a tab;
+ * tabs are remembered per project in this browser and stay open while the reader is closed.
+ */
+export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTask }: { assetId: string; snapshot: AppSnapshot; onClose: () => void; onSelect: (assetId: string) => void; onOpenTask: (task: Task) => void }) {
+  const projectId = snapshot.project.id;
+  const [tabs, setTabs] = useState<string[]>(() => openTab(loadTabs(projectId), assetId));
+  const [names, setNames] = useState<Record<string, Asset>>({});
+  const [draft, setDraft] = useState<NoteDraft | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [preparingRevision, setPreparingRevision] = useState(false);
+  useEffect(() => { setTabs(current => openTab(current, assetId)); }, [assetId]);
+  useEffect(() => { saveTabs(projectId, tabs); }, [projectId, tabs]);
+  function close(id: string) {
+    const next = closeTab(tabs, id, assetId);
+    setTabs(next.tabs);
+    saveTabs(projectId, next.tabs);
+    if (next.active === null) onClose();
+    else if (next.active !== assetId) onSelect(next.active);
+  }
   async function revise(current: Asset) {
     setPreparingRevision(true); setError(null);
     try { setDraft(await revisionDraft(current)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open this note for revision.'); }
     finally { setPreparingRevision(false); }
   }
-  const tasks = referrers.get(assetId) ?? [];
-  const kind = asset ? libraryKind(asset) : null;
-  const revisable = asset && assetPreviewKind(asset) === 'markdown';
-  return <section className="task-detail library-document" aria-label={asset ? `Document ${asset.name}` : 'Library document'}>
-    <div className="detail-breadcrumb"><button onClick={onClose}><ArrowLeft size={15} />Library</button><ChevronRight size={13} /><span className="library-document-crumb">{asset?.name ?? 'Document'}</span><span className="detail-breadcrumb-spacer" />{revisable && <Button size="sm" variant="secondary" disabled={preparingRevision || asset.sizeBytes > MAX_REVISABLE_BYTES} title={asset.sizeBytes > MAX_REVISABLE_BYTES ? 'Notes larger than 2 MB cannot be revised in the browser' : 'Start a new note from this document'} onClick={() => void revise(asset)}><PenLine size={13} />{preparingRevision ? 'Opening…' : 'Revise as new note'}</Button>}<Button variant="ghost" size="icon" aria-label="Close document" onClick={onClose}><X size={17} /></Button></div>
-    <div className="detail-scroll library-document-scroll">
-      {error && !asset && <div className="library-placeholder"><File size={26} /><strong>This file is not in your library</strong><p>{error}</p><Button variant="secondary" size="sm" onClick={onClose}>Back to library</Button></div>}
-      {!asset && !error && <p className="asset-loading" role="status">Loading document…</p>}
-      {asset && kind && <>
-        <header className="library-document-heading">
-          <div className="library-document-title"><span className="library-document-icon"><LibraryIcon kind={kind} size={20} /></span><h1 ref={heading} tabIndex={-1}>{asset.name}</h1></div>
-          <div className="library-document-meta">
-            <span className="status-pill">{LIBRARY_KIND_LABELS[kind]} · {asset.mediaType}</span>
-            <span className="status-pill">{ORIGIN_LABELS[asset.origin]}{asset.sourcePath && <> from <code>{asset.sourcePath}</code></>}</span>
-            <span className="status-pill">{formatAssetSize(asset.sizeBytes)}</span>
-            <span className="status-pill">{asset.visibility === 'project' ? 'Project' : asset.ownerUserId === snapshot.scope.userId ? 'Private to you' : 'Private'}</span>
-            <span className="detail-updated" title={new Date(asset.createdAt).toLocaleString()}>Added {relativeTime(asset.createdAt).toLowerCase()}</span>
-          </div>
-          {tasks.length > 0 && <div className="library-document-refs"><span>Referenced by</span>{tasks.map(task => <button key={task.id} onClick={() => onOpenTask(task)}><StatusIcon status={task.status} size={13} /><span className="task-identifier">{task.identifier}</span>{task.title}<ChevronRight size={12} /></button>)}</div>}
-          {error && <p className="form-error" role="alert">{error}</p>}
-        </header>
-        <div className="library-document-body"><AssetPreview key={asset.id} asset={asset} /></div>
-      </>}
+  const current = names[assetId];
+  return <section className="task-detail library-document" aria-label={current ? `Document ${current.name}` : 'Library documents'} aria-busy={preparingRevision}>
+    <div className="detail-breadcrumb"><button onClick={onClose}><ArrowLeft size={15} />Library</button><ChevronRight size={13} /><span className="library-document-crumb">{current?.name ?? 'Document'}</span><span className="detail-breadcrumb-spacer" /><span className="library-tab-count">{tabs.length} {tabs.length === 1 ? 'tab' : 'tabs'}</span><Button variant="ghost" size="icon" aria-label="Close reader" title="Back to the library (tabs stay open)" onClick={onClose}><X size={17} /></Button></div>
+    <div className="library-tabs" role="tablist" aria-label="Open documents" onKeyDown={event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const index = tabs.indexOf(assetId);
+      if (index < 0) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      onSelect(tabs[next]);
+    }}>
+      {tabs.map(id => {
+        const asset = names[id];
+        const active = id === assetId;
+        return <div key={id} className={`library-tab ${active ? 'active' : ''}`}>
+          <button role="tab" id={`library-tab-${id}`} aria-selected={active} aria-controls={`library-pane-${id}`} tabIndex={active ? 0 : -1} title={asset?.name} onClick={() => onSelect(id)}>{asset ? <LibraryIcon kind={libraryKind(asset)} size={13} /> : <File size={13} aria-hidden="true" />}<span>{asset?.name ?? 'Loading…'}</span></button>
+          <button className="library-tab-close" aria-label={`Close ${asset?.name ?? 'document'}`} title="Close tab" onClick={() => close(id)}><X size={12} /></button>
+        </div>;
+      })}
     </div>
+    {error && <p className="form-error library-error" role="alert">{error}</p>}
+    {tabs.map(id => <DocumentPane key={id} assetId={id} snapshot={snapshot} active={id === assetId} onOpenTask={onOpenTask} onClose={() => close(id)} onLoaded={asset => setNames(current => current[asset.id] ? current : { ...current, [asset.id]: asset })} onRevise={asset => void revise(asset)} />)}
     {draft && <NoteDialog key={draft.revisionOf?.id ?? 'new'} draft={draft} onOpenChange={open => { if (!open) setDraft(null); }} onCreated={created => { setDraft(null); onSelect(created.id); }} />}
   </section>;
 }
