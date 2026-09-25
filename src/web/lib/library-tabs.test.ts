@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeTab, openTab } from './library-tabs';
+import { closeTab, openTab, replaceTab } from './library-tabs';
 
 describe('library tabs', () => {
   it('opens each document once and caps the strip at twelve tabs', () => {
@@ -15,5 +15,12 @@ describe('library tabs', () => {
     expect(closeTab(['a'], 'a', 'a')).toEqual({ tabs: [], active: null });
     expect(closeTab(['a', 'b'], 'a', 'b')).toEqual({ tabs: ['b'], active: 'b' });
     expect(closeTab(['a'], 'missing', 'a')).toEqual({ tabs: ['a'], active: 'a' });
+  });
+
+  it('replaces a superseded document with its newest version in place', () => {
+    expect(replaceTab(['a', 'b', 'c'], 'b', 'b2')).toEqual(['a', 'b2', 'c']);
+    expect(replaceTab(['a', 'b', 'b2'], 'b', 'b2')).toEqual(['a', 'b2']);
+    expect(replaceTab(['a'], 'missing', 'x')).toEqual(['a']);
+    expect(replaceTab(['a'], 'a', 'a')).toEqual(['a']);
   });
 });

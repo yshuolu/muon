@@ -21,6 +21,12 @@ export function openTab(tabs: string[], id: string): string[] {
   return [...tabs, id].slice(-MAX_TABS);
 }
 
+/** Swaps a superseded document for its newest version in place; if that version is already open, its tab wins. */
+export function replaceTab(tabs: string[], id: string, next: string): string[] {
+  if (id === next || !tabs.includes(id)) return tabs;
+  return tabs.includes(next) ? tabs.filter(tab => tab !== id) : tabs.map(tab => tab === id ? next : tab);
+}
+
 /** Removes a tab and names the tab to show next: the neighbor to the right, else the left, else none. */
 export function closeTab(tabs: string[], id: string, active: string | null): { tabs: string[]; active: string | null } {
   const index = tabs.indexOf(id);

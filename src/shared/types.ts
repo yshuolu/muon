@@ -12,6 +12,8 @@ export interface Asset {
   ownerUserId: string; visibility: 'private' | 'project'; sourcePath?: string;
   /** The version this document was revised from when an agent resolved review comments. */
   previousVersionId?: string;
+  /** Set on a superseded version: the newest readable version in its lineage, which readers show instead. */
+  latestVersionId?: string;
 }
 /** Where a comment points in a document: the selected text plus context to pick the right occurrence. */
 export interface AssetCommentAnchor { quote: string; prefix: string; suffix: string; start: number }

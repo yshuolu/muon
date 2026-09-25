@@ -61,18 +61,41 @@ export function canReadAsset(scope: Scope, asset: Asset) {
     (asset.ownerUserId === scope.userId || asset.visibility === 'project');
 }
 
+/**
+ * Marks a superseded document with the newest version in its lineage. Revisions link back through
+ * `previousVersionId`; when a version was revised more than once, the newest revision continues the chain.
+ */
+function withLatestVersion(asset: Asset, readable: Asset[]): Asset {
+  const next = new Map<string, Asset>();
+  for (const candidate of readable) {
+    if (!candidate.previousVersionId) continue;
+    const current = next.get(candidate.previousVersionId);
+    if (!current || candidate.createdAt > current.createdAt) next.set(candidate.previousVersionId, candidate);
+  }
+  const seen = new Set<string>();
+  let latest = asset.id;
+  while (next.has(latest) && !seen.has(latest)) { seen.add(latest); latest = next.get(latest)!.id; }
+  return latest === asset.id ? asset : { ...asset, latestVersionId: latest };
+}
+
 export class AssetService {
   constructor(private options: AssetServiceOptions) {}
 
   async get(scope: Scope, id: string) {
     const asset = await this.options.repository.asset(scope, id);
-    return asset && canReadAsset(scope, asset) ? asset : undefined;
+    if (!asset || !canReadAsset(scope, asset)) return undefined;
+    return withLatestVersion(asset, await this.readable(scope));
   }
 
   async list(scope: Scope, ids?: string[]) {
-    if (!ids) return (await this.options.repository.assets(scope)).filter(asset => canReadAsset(scope, asset));
+    const readable = await this.readable(scope);
+    if (!ids) return readable.map(asset => withLatestVersion(asset, readable));
     const assets = await Promise.all([...new Set(ids)].map(id => this.get(scope, id)));
     return assets.filter((asset): asset is Asset => asset !== undefined);
+  }
+
+  private async readable(scope: Scope) {
+    return (await this.options.repository.assets(scope)).filter(asset => canReadAsset(scope, asset));
   }
 
   async read(scope: Scope, id: string) {

@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import { assetContentUrl, assetPreviewKind, formatAssetSize } from '../lib/asset-preview';
 import { rehypeCommentMarks } from '../lib/document-comments';
 import { LIBRARY_KIND_FILTERS, LIBRARY_KIND_LABELS, LIBRARY_KINDS, ORIGIN_LABELS, assetReferrers, filterLibrary, libraryKind, type LibraryFilter, type LibraryKind } from '../lib/library';
-import { closeTab, loadTabs, openTab, saveTabs } from '../lib/library-tabs';
+import { closeTab, loadTabs, openTab, replaceTab, saveTabs } from '../lib/library-tabs';
 import { relativeTime } from '../lib/utils';
 import { AssetPreview, type RehypeExtras } from './asset-preview';
 import { DocumentComments, useAssetComments } from './document-comments';
@@ -62,7 +62,8 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
     const timer = setInterval(() => setReloads(value => value + 1), 6000);
     return () => clearInterval(timer);
   }, []);
-  const visible = useMemo(() => assets ? filterLibrary(assets, filter, referrers) : [], [assets, filter, referrers]);
+  // Superseded versions stay readable by ID but the catalog shows only the newest version of each document.
+  const visible = useMemo(() => assets ? filterLibrary(assets.filter(asset => !asset.latestVersionId), filter, referrers) : [], [assets, filter, referrers]);
   const filtering = filter.query.trim() !== '' || filter.kind !== 'all' || filter.origin !== 'all';
   const counts = useMemo(() => {
     const totals = { document: 0, image: 0, media: 0, data: 0, other: 0 } satisfies Record<LibraryKind, number>;
@@ -118,7 +119,7 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
 }
 
 /** One open document: metadata, referencing tasks, and the reader. Stays mounted while hidden so its scroll survives tab switches. */
-function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise, onOpenAsset }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void; onOpenAsset: (assetId: string) => void }) {
+function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise, onReplace }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void; onReplace: (assetId: string, latestAssetId: string) => void }) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The sidebar only takes space when there is something in it: it opens on the first comment or on request.
@@ -141,7 +142,10 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
   useEffect(() => {
     let live = true;
     void api<Asset>(`/assets/${encodeURIComponent(assetId)}`).then(value => {
-      if (live) { setAsset(value); onLoaded(value); }
+      if (!live) return;
+      // A superseded version is never shown: the reader swaps in the newest version of the document.
+      if (value.latestVersionId) { onReplace(assetId, value.latestVersionId); return; }
+      setAsset(value); onLoaded(value);
     }).catch(cause => {
       if (live) setError(cause instanceof Error ? cause.message : 'This file is not in your library.');
     });
@@ -170,7 +174,7 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
           {reviewable && <div className="library-document-tools"><Button size="sm" variant={commentsOpen ? 'secondary' : 'ghost'} aria-pressed={commentsOpen} onClick={() => setCommentsOpen(value => !value)}><MessageSquareText size={14} />Comments{pendingCount > 0 && <span className="doc-comments-count">{pendingCount}</span>}</Button></div>}
           <AssetPreview key={asset.id} asset={asset} rehypeExtras={rehypeExtras} />
         </div>
-        {reviewable && <DocumentComments asset={asset} thread={comments.thread} error={comments.error} reload={comments.reload} containerRef={body} active={active} open={commentsOpen} onOpen={() => setCommentsOpen(true)} onOpenAsset={onOpenAsset} />}
+        {reviewable && <DocumentComments asset={asset} thread={comments.thread} error={comments.error} reload={comments.reload} containerRef={body} active={active} open={commentsOpen} onOpen={() => setCommentsOpen(true)} onRevised={revisionAssetId => onReplace(assetId, revisionAssetId)} />}
       </div>
     </>}
   </div>;
@@ -195,6 +199,13 @@ export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTa
     saveTabs(projectId, next.tabs);
     if (next.active === null) onClose();
     else if (next.active !== assetId) onSelect(next.active);
+  }
+  /** A document's newest version takes over its tab, whether it arrived from a review or the tab pointed at an old version. */
+  function replace(id: string, latest: string) {
+    const next = replaceTab(tabs, id, latest);
+    setTabs(next);
+    saveTabs(projectId, next);
+    if (id === assetId) onSelect(latest);
   }
   async function revise(current: Asset) {
     setPreparingRevision(true); setError(null);
@@ -223,7 +234,7 @@ export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTa
       })}
     </div>
     {error && <p className="form-error library-error" role="alert">{error}</p>}
-    {tabs.map(id => <DocumentPane key={id} assetId={id} snapshot={snapshot} active={id === assetId} onOpenTask={onOpenTask} onClose={() => close(id)} onLoaded={asset => setNames(current => current[asset.id] ? current : { ...current, [asset.id]: asset })} onRevise={asset => void revise(asset)} onOpenAsset={onSelect} />)}
+    {tabs.map(id => <DocumentPane key={id} assetId={id} snapshot={snapshot} active={id === assetId} onOpenTask={onOpenTask} onClose={() => close(id)} onLoaded={asset => setNames(current => current[asset.id] ? current : { ...current, [asset.id]: asset })} onRevise={asset => void revise(asset)} onReplace={replace} />)}
     {draft && <NoteDialog key={draft.revisionOf?.id ?? 'new'} draft={draft} onOpenChange={open => { if (!open) setDraft(null); }} onCreated={created => { setDraft(null); onSelect(created.id); }} />}
   </section>;
 }

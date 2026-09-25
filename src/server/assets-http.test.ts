@@ -391,6 +391,10 @@ describe('library resources', () => {
     expect(thread.review.error).toBeUndefined();
     const revision = await (await request(`/api/assets/${thread.review.revisionAssetId}`)).json() as Asset;
     expect(revision).toMatchObject({ name: 'Design.md', origin: 'generated', previousVersionId: note.id });
+    expect(revision.latestVersionId).toBeUndefined();
+    // The reviewed version is superseded: reads and the library listing point at the newest version.
+    expect((await (await request(`/api/assets/${note.id}`)).json() as Asset).latestVersionId).toBe(revision.id);
+    expect((await (await request('/api/assets')).json() as Asset[]).map(item => [item.id, item.latestVersionId])).toEqual(expect.arrayContaining([[note.id, revision.id], [revision.id, undefined]]));
     expect(await (await request(`/api/assets/${revision.id}/content`)).text()).toBe('# Design\n\nFirst paragraph here.\n');
     expect(thread.comments.map(item => [item.status, item.reply?.kind, item.reply?.provider, item.revisionAssetId])).toEqual([['resolved', 'answered', 'codex', revision.id], ['resolved', 'changed', 'codex', revision.id]]);
     expect(thread.comments[0].reply?.content).toBe('Because it introduces the design.');

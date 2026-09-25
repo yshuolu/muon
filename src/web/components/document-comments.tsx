@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { AlertTriangle, ArrowUpRight, Check, Loader2, MessageSquarePlus, MessageSquareText, Pencil, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, MessageSquarePlus, MessageSquareText, Pencil, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
 import type { Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Provider } from '../../shared/types';
 import { api } from '../lib/api';
 import { anchorFromSelection } from '../lib/document-comments';
@@ -66,18 +66,19 @@ function CommentCard({ comment, selected, editable, busy, onSelect, onEdit, onDe
  * the quick chat's agent, and replies beside each comment. Highlights live in the rendered document; this
  * component links cards and highlights both ways.
  */
-export function DocumentComments({ asset, thread, error, reload, containerRef, active, open, onOpen, onOpenAsset }: {
+export function DocumentComments({ asset, thread, error, reload, containerRef, active, open, onOpen, onRevised }: {
   asset: Asset; thread: AssetCommentThread | null; error: string | null; reload: () => Promise<void>;
   containerRef: RefObject<HTMLDivElement | null>; active: boolean;
   /** Whether the sidebar panel is shown; the floating selection control works either way and opens it. */
-  open: boolean; onOpen: () => void; onOpenAsset: (assetId: string) => void;
+  open: boolean; onOpen: () => void;
+  /** A finished review produced a new version: the reader replaces this document with it. */
+  onRevised: (revisionAssetId: string) => void;
 }) {
   const [selection, setSelection] = useState<FloatingSelection | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [revisionBanner, setRevisionBanner] = useState<string | null>(null);
   const announcedRevision = useRef<string | null>(null);
   const review = thread?.review;
   const pending = useMemo(() => orderComments((thread?.comments ?? []).filter(comment => comment.status === 'pending')), [thread]);
@@ -123,13 +124,14 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
     return () => container.removeEventListener('click', handle);
   }, [containerRef]);
 
-  // A finished review that produced a revision opens it once and announces it.
+  // A finished review that produced a revision replaces this document with it once and announces it.
   useEffect(() => {
     if (!review || review.busy || !review.revisionAssetId || announcedRevision.current === review.revisionAssetId) return;
     announcedRevision.current = review.revisionAssetId;
-    setRevisionBanner(review.revisionAssetId);
-    deliverNotification({ kind: 'planning', title: 'Comments resolved', body: `${asset.name} has a revised version.`, tag: `review:${review.revisionAssetId}` }, () => onOpenAsset(review.revisionAssetId!));
-  }, [review, asset.name, onOpenAsset]);
+    const revisionAssetId = review.revisionAssetId;
+    deliverNotification({ kind: 'planning', title: 'Comments resolved', body: `${asset.name} has been revised.`, tag: `review:${revisionAssetId}` }, () => onRevised(revisionAssetId));
+    onRevised(revisionAssetId);
+  }, [review, asset.name, onRevised]);
 
   function focusHighlight(id: string) {
     setSelectedId(id);
@@ -156,8 +158,6 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
       <div><MessageSquareText size={15} /><strong>Comments</strong>{pending.length > 0 && <span className="doc-comments-count">{pending.length}</span>}</div>
       <Button size="sm" variant="ghost" disabled={locked} onClick={() => startDraft()}><MessageSquarePlus size={14} />On document</Button>
     </div>
-    {asset.previousVersionId && <div className="doc-comments-banner"><span>Revised from an earlier version{thread?.inherited.length ? ` · ${thread.inherited.length} ${thread.inherited.length === 1 ? 'comment' : 'comments'} resolved` : ''}.</span><button type="button" onClick={() => onOpenAsset(asset.previousVersionId!)}>Open previous version<ArrowUpRight size={12} /></button></div>}
-    {revisionBanner && <div className="doc-comments-banner revision"><span>A revised version was created from these comments.</span><button type="button" onClick={() => onOpenAsset(revisionBanner)}>Open revised version<ArrowUpRight size={12} /></button></div>}
     <div className="doc-comments-resolve">
       <Button size="sm" disabled={locked || pending.length === 0} onClick={() => void resolve()}>{review?.busy ? <Loader2 size={14} className="spin" /> : <Check size={14} />}{review?.busy ? 'Resolving…' : `Resolve ${pending.length || ''} ${pending.length === 1 ? 'comment' : 'comments'}`.replace(/\s+/g, ' ')}</Button>
       <small>{review?.busy ? review.activity ?? 'The agent is working through your comments…' : `with ${reviewerLabel}, your latest planning chat's agent. Questions get answers; instructions change the document as a new version.`}</small>
@@ -174,7 +174,7 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
     <div className="doc-comments-list">
       {pending.map(comment => <CommentCard key={comment.id} comment={comment} selected={selectedId === comment.id} editable={!locked} busy={locked} onSelect={() => focusHighlight(comment.id)} onEdit={content => run(async () => { await api(`/assets/${encodeURIComponent(asset.id)}/comments/${comment.id}`, 'PATCH', { content }); }, 'Could not save the comment.')} onDelete={() => run(async () => { await api(`/assets/${encodeURIComponent(asset.id)}/comments/${comment.id}`, 'DELETE', {}); }, 'Could not delete the comment.')} />)}
       {resolved.length > 0 && <details className="doc-comments-group" open={pending.length === 0}><summary>Resolved · {resolved.length}</summary>{resolved.map(comment => <CommentCard key={comment.id} comment={comment} selected={selectedId === comment.id} editable={false} busy={locked} onSelect={() => focusHighlight(comment.id)} />)}</details>}
-      {thread && thread.inherited.length > 0 && <details className="doc-comments-group"><summary>Resolved into this version · {thread.inherited.length}</summary>{orderComments(thread.inherited).map(comment => <CommentCard key={comment.id} comment={comment} selected={false} editable={false} busy={true} onSelect={() => undefined} />)}</details>}
+      {thread && thread.inherited.length > 0 && <details className="doc-comments-group" open><summary>Resolved into this version · {thread.inherited.length}</summary>{orderComments(thread.inherited).map(comment => <CommentCard key={comment.id} comment={comment} selected={false} editable={false} busy={true} onSelect={() => undefined} />)}</details>}
     </div>
   </aside>;
 }

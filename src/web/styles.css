@@ -1298,9 +1298,6 @@ mark.doc-comment.pulse { background: color-mix(in oklch, var(--warning) 60%, tra
 .doc-comments { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 12px; max-height: calc(100dvh - 90px); overflow: auto; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
 .doc-comments-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .doc-comments-heading > div { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.doc-comments-banner { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.6; color: var(--muted-foreground); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--muted); }
-.doc-comments-banner.revision { border-color: color-mix(in oklch, var(--success) 40%, var(--border)); }
-.doc-comments-banner button { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; font-size: 12px; color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 .doc-comments-resolve { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .doc-comments-resolve small { font-size: 11px; line-height: 1.6; color: var(--muted-foreground); }
 .doc-comments-empty { margin: 0; font-size: 12px; line-height: 1.7; color: var(--muted-foreground); }
