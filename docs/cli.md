@@ -123,7 +123,7 @@ muon api POST /api/assets/notes --json '{"name":"decisions","content":"# Decisio
 muon artifacts download ARTIFACT-ID --output verification.webm
 ```
 
-`GET /api/assets` lists the whole library: every asset the caller may read in the project, whether or not a task references it. `POST /api/assets/notes` writes a Markdown reference note as a new immutable asset (`.md` is appended when missing) and requires the owner; the chief may list and read library files but cannot create them.
+`GET /api/assets` lists the whole library: every asset the caller may read in the project, whether or not a task references it. `POST /api/assets/notes` writes a Markdown reference note as a new immutable asset (`.md` is appended when missing) and requires the owner; the chief may list and read library files but cannot create them. Review comments on a document live under `/api/assets/ASSET-ID/comments` (see the REST contract); a resolved review that changed the text creates a new asset whose `previousVersionId` names the version it came from.
 
 Plan exports preserve their original Markdown or HTML. Dependency exports download the exact immutable patch recorded with the RFC. Asset downloads preserve binary bytes. `artifacts download` remains available for legacy evidence URLs; new records use `/api/assets/:id/content`. An output path must be new and its parent directory must exist; downloads never overwrite existing files. `--output -` writes raw bytes to stdout for piping, without JSON framing. After file downloads, stdout contains the path, byte length, and content type.
 

@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, WorkspaceProvider } from '../runtime';
-import type { Asset, Task } from '../shared/types';
+import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { Asset, AssetComment, AssetCommentThread, Task } from '../shared/types';
 import { AssetService } from './asset-service';
 import { createHttpApp } from './http-app';
 import { singleProjectResolver } from './project-registry';
@@ -22,6 +22,26 @@ let service: TaskService;
 let workspaces: WorkspaceProvider;
 let commands: LocalChiefCommands;
 let app: ReturnType<typeof createHttpApp>;
+let claude: TestAdapter;
+let codex: TestAdapter;
+
+/** Holds each run until the test resolves it, so agent output can be scripted. */
+class TestAdapter implements AgentAdapter {
+  calls: Array<{ request: AgentRequest; resolve: (result: AgentResult) => void; reject: (error: Error) => void }> = [];
+  constructor(readonly provider: 'claude' | 'codex') {}
+  async available() { return true; }
+  run(request: AgentRequest): Promise<AgentResult> {
+    return new Promise((resolve, reject) => {
+      request.signal?.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true });
+      this.calls.push({ request, resolve, reject });
+    });
+  }
+}
+async function eventually(check: () => boolean | Promise<boolean>) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
+  throw new Error('Expected state did not arrive');
+}
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'muon-assets-http-'));
@@ -36,8 +56,8 @@ beforeEach(async () => {
   };
   const artifacts: ArtifactStore = { importFile: vi.fn(), read: vi.fn(async () => undefined) };
   assets = new AssetService({ repository, storage: new LocalAssetStorage(join(directory, 'assets')), legacyArtifacts: artifacts });
-  const claude: AgentAdapter = { provider: 'claude', available: async () => true, run: vi.fn(async () => ({ text: '# RFC' })) };
-  const codex: AgentAdapter = { ...claude, provider: 'codex' };
+  claude = new TestAdapter('claude');
+  codex = new TestAdapter('codex');
   commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
   service = new TaskService({ scope, repository, artifacts, assets, workspaces, adapters: { claude, codex }, chiefCommands: commands });
   await service.initialize();
@@ -45,6 +65,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const call of [...claude.calls, ...codex.calls]) call.reject(new Error('Test cleanup'));
   await service.stop();
   repository.close();
   await rm(directory, { recursive: true, force: true });
@@ -315,6 +336,95 @@ describe('library resources', () => {
     expect((await request('/api/assets/notes', 'POST', { name: 'Extra', content: 'Body', visibility: 'project' })).status).toBe(400);
     expect((await upload('/api/assets/notes', 'note.md', '# Note', 'text/markdown')).status).toBe(415);
     expect(await repository.assets(scope)).toEqual([]);
+  });
+
+  it('keeps review comments idempotent, owner-only, pending-only editable, and Markdown-only', async () => {
+    const note = await (await request('/api/assets/notes', 'POST', { name: 'Design', content: '# Design\n\nFirst paragraph here.\n\nSecond paragraph to remove.' })).json() as Asset;
+    const binary = await (await upload('/api/assets', 'diagram.png', new Uint8Array([137, 80, 78, 71]), 'image/png')).json() as Asset;
+    const requestId = '3f2c1a9e-6b4d-4c2f-9a1e-1d2c3b4a5f60';
+    const anchor = { quote: 'First paragraph here.', prefix: '# Design ', suffix: ' Second', start: 9 };
+    const created = await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Why first?', requestId, anchor });
+    expect(created.status).toBe(201);
+    const comment = await created.json() as AssetComment;
+    expect(comment).toMatchObject({ assetId: note.id, requestId, content: 'Why first?', anchor, status: 'pending' });
+    expect(await (await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Why first?', requestId, anchor })).json()).toEqual(comment);
+    expect((await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Changed text', requestId, anchor })).status).toBe(409);
+    expect((await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Bad id', requestId: 'nope' })).status).toBe(400);
+    expect((await request(`/api/assets/${binary.id}/comments`, 'POST', { content: 'On an image', requestId: crypto.randomUUID() })).status).toBe(400);
+    const whole = await (await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Remove the second paragraph.', requestId: crypto.randomUUID() })).json() as AssetComment;
+    expect(whole.anchor).toBeUndefined();
+    expect(await (await request(`/api/assets/${note.id}/comments/${whole.id}`, 'PATCH', { content: 'Remove the second paragraph entirely.' })).json()).toMatchObject({ id: whole.id, content: 'Remove the second paragraph entirely.' });
+    const thread = await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread;
+    expect(thread.comments.map(item => item.id)).toEqual([comment.id, whole.id]);
+    expect(thread.review).toMatchObject({ assetId: note.id, busy: false, provider: 'claude', model: null });
+    expect(thread.inherited).toEqual([]);
+    expect(await (await request('/api/assets/comment-counts')).json()).toEqual({ [note.id]: 2 });
+    expect((await request(`/api/assets/${note.id}/comments/${whole.id}`, 'DELETE', {})).status).toBe(200);
+    expect((await request(`/api/assets/${note.id}/comments/missing`, 'DELETE', {})).status).toBe(404);
+    const session = await commands.open(scope, new AbortController().signal);
+    const headers = { authorization: `Bearer ${session.cli.token}` };
+    try {
+      expect((await request(chiefPath(`/api/assets/${note.id}/comments`), 'GET', undefined, headers)).status).toBe(200);
+      expect((await request(chiefPath(`/api/assets/${note.id}/comments`), 'POST', { content: 'Chief comment', requestId: crypto.randomUUID() }, headers)).status).toBe(403);
+      expect((await request(chiefPath(`/api/assets/${note.id}/comments/resolve`), 'POST', {}, headers)).status).toBe(403);
+    } finally { await session.close(); }
+  });
+
+  it('resolves every pending comment in one run and saves edits as a linked new version', async () => {
+    const note = await (await request('/api/assets/notes', 'POST', { name: 'Design', content: '# Design\n\nFirst paragraph here.\n\nSecond paragraph to remove.' })).json() as Asset;
+    const question = await (await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Why first?', requestId: crypto.randomUUID(), anchor: { quote: 'First paragraph here.', prefix: '', suffix: '', start: 9 } })).json() as AssetComment;
+    const removal = await (await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Remove the second paragraph.', requestId: crypto.randomUUID() })).json() as AssetComment;
+    const chat = service.createPlanningChat();
+    service.updatePlanningChat(chat.id, { provider: 'codex', model: 'gpt-6-astra-mini' });
+    expect((await request(`/api/assets/${note.id}/comments/resolve`, 'POST', {})).status).toBe(202);
+    let review = (await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread).review;
+    expect(review).toMatchObject({ busy: true, provider: 'codex', model: 'gpt-6-astra-mini' });
+    expect((await request(`/api/assets/${note.id}/comments/resolve`, 'POST', {})).status).toBe(409);
+    expect((await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Late', requestId: crypto.randomUUID() })).status).toBe(409);
+    await eventually(() => codex.calls.length === 1);
+    expect(codex.calls[0].request).toMatchObject({ provider: 'codex', phase: 'chat', model: 'gpt-6-astra-mini' });
+    expect(codex.calls[0].request.prompt).toContain('Second paragraph to remove.');
+    expect(codex.calls[0].request.prompt).toContain(question.id);
+    codex.calls[0].resolve({ text: JSON.stringify({ replies: [{ id: question.id, kind: 'answered', content: 'Because it introduces the design.' }, { id: removal.id, kind: 'changed', content: 'Removed the second paragraph.' }], document: '# Design\n\nFirst paragraph here.' }) });
+    await eventually(async () => !(await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread).review.busy);
+    const thread = await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread;
+    expect(thread.review.error).toBeUndefined();
+    const revision = await (await request(`/api/assets/${thread.review.revisionAssetId}`)).json() as Asset;
+    expect(revision).toMatchObject({ name: 'Design.md', origin: 'generated', previousVersionId: note.id });
+    expect(await (await request(`/api/assets/${revision.id}/content`)).text()).toBe('# Design\n\nFirst paragraph here.\n');
+    expect(thread.comments.map(item => [item.status, item.reply?.kind, item.reply?.provider, item.revisionAssetId])).toEqual([['resolved', 'answered', 'codex', revision.id], ['resolved', 'changed', 'codex', revision.id]]);
+    expect(thread.comments[0].reply?.content).toBe('Because it introduces the design.');
+    const inherited = await (await request(`/api/assets/${revision.id}/comments`)).json() as AssetCommentThread;
+    expect(inherited.inherited.map(item => item.id)).toEqual([question.id, removal.id]);
+    expect(inherited.comments).toEqual([]);
+    expect((await request(`/api/assets/${note.id}/comments/${question.id}`, 'PATCH', { content: 'Too late' })).status).toBe(409);
+    expect(await (await request('/api/assets/comment-counts')).json()).toEqual({});
+  });
+
+  it('keeps comments pending when the run fails, returns nothing usable, or is interrupted', async () => {
+    const note = await (await request('/api/assets/notes', 'POST', { name: 'Design', content: '# Design\n\nBody.' })).json() as Asset;
+    const comment = await (await request(`/api/assets/${note.id}/comments`, 'POST', { content: 'Rewrite the body.', requestId: crypto.randomUUID() })).json() as AssetComment;
+    expect((await request(`/api/assets/${note.id}/comments/resolve`, 'POST', {})).status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
+    claude.calls[0].resolve({ text: JSON.stringify({ replies: [{ id: comment.id, kind: 'changed', content: 'Rewrote it.' }] }) });
+    await eventually(async () => !(await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread).review.busy);
+    let thread = await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread;
+    expect(thread.review.error).toContain('without returning the revised document');
+    expect(thread.comments[0]).toMatchObject({ status: 'pending', lastError: thread.review.error });
+    expect(await service.listAssets()).toHaveLength(1);
+    expect((await request(`/api/assets/${note.id}/comments/resolve`, 'POST', {})).status).toBe(202);
+    await eventually(() => claude.calls.length === 2);
+    claude.calls[1].resolve({ text: 'not json at all' });
+    await eventually(async () => !(await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread).review.busy);
+    thread = await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread;
+    expect(thread.review.error).toContain('unexpected result');
+    expect((await request(`/api/assets/${note.id}/comments/resolve`, 'POST', {})).status).toBe(202);
+    await eventually(() => claude.calls.length === 3);
+    await service.stop();
+    thread = await (await request(`/api/assets/${note.id}/comments`)).json() as AssetCommentThread;
+    expect(thread.comments[0].status).toBe('pending');
+    expect(thread.comments[0].lastError).toContain('interrupted');
+    expect(await service.listAssets()).toHaveLength(1);
   });
 
   it('lets chief credentials read the library but not write notes', async () => {

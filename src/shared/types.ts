@@ -10,7 +10,22 @@ export interface Asset {
   sizeBytes: number; sha256: string; storageBackendId: string; objectKey: string;
   origin: 'upload' | 'generated' | 'imported'; createdAt: string; createdByUserId: string;
   ownerUserId: string; visibility: 'private' | 'project'; sourcePath?: string;
+  /** The version this document was revised from when an agent resolved review comments. */
+  previousVersionId?: string;
 }
+/** Where a comment points in a document: the selected text plus context to pick the right occurrence. */
+export interface AssetCommentAnchor { quote: string; prefix: string; suffix: string; start: number }
+export interface AssetCommentReply { kind: 'answered' | 'changed' | 'declined'; content: string; createdAt: string; provider: Provider; model?: string | null }
+export interface AssetComment {
+  id: string; assetId: string; requestId: string; content: string; anchor?: AssetCommentAnchor;
+  createdAt: string; updatedAt: string; status: 'pending' | 'resolved';
+  reply?: AssetCommentReply; revisionAssetId?: string; resolvedAt?: string;
+  /** The last failed or interrupted resolution attempt, kept until the next run succeeds. */
+  lastError?: string;
+}
+/** Runtime state of a document review run; comments themselves are persisted. */
+export interface DocumentReview { assetId: string; busy: boolean; activity?: string | null; error?: string; provider: Provider; model: string | null; startedAt?: string; finishedAt?: string; revisionAssetId?: string }
+export interface AssetCommentThread { comments: AssetComment[]; inherited: AssetComment[]; review: DocumentReview }
 export interface DependencyInput {
   taskId: string; identifier: string; title: string; capturedAt: string;
   changes: WorkspaceChanges;

@@ -10,7 +10,7 @@ import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
   listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, createNoteSchema, importAssetSchema, updatePlanningChatSchema,
-  createProjectSchema, updateProjectSchema,
+  createProjectSchema, updateProjectSchema, createAssetCommentSchema, updateAssetCommentSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
@@ -136,7 +136,21 @@ function projectRoutes(projects: ProjectResolver) {
     const { path } = importAssetSchema.parse(await c.req.json());
     return c.json(await service.importTaskAsset((await taskByReference(service, c.req.param('id'))).id, path), 201);
   });
+  app.get('/assets/comment-counts', async c => c.json(await c.get('service').pendingCommentCounts()));
   app.get('/assets/:id', async c => c.json(await c.get('service').getAsset(c.req.param('id'))));
+  app.get('/assets/:id/comments', async c => c.json(await c.get('service').listAssetComments(c.req.param('id'))));
+  app.post('/assets/:id/comments', async c => c.json(await c.get('service').addAssetComment(c.req.param('id'), createAssetCommentSchema.parse(await c.req.json())), 201));
+  app.post('/assets/:id/comments/resolve', async c => {
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(await c.get('service').resolveAssetComments(c.req.param('id')), 202);
+  });
+  app.patch('/assets/:id/comments/:commentId', async c => {
+    const { content } = updateAssetCommentSchema.parse(await c.req.json());
+    return c.json(await c.get('service').editAssetComment(c.req.param('id'), c.req.param('commentId'), content));
+  });
+  app.delete('/assets/:id/comments/:commentId', async c => {
+    await c.get('service').removeAssetComment(c.req.param('id'), c.req.param('commentId')); return c.json({ ok: true });
+  });
   app.get('/assets/:id/content', async c => {
     const { asset, data } = await c.get('service').readAsset(c.req.param('id'));
     return assetResponse(data, asset.mediaType, asset.name, c.req.header('range'), c.req.query('download') === '1');

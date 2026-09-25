@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AppSnapshot, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, DocumentReview, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import { assetPreviewKind } from '../shared/asset-kinds';
 import { AgentProcessUnreapedError, type AgentAdapter, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
-import { chiefPrompt, codingPrompt, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema } from './agent-prompts';
+import { chiefPrompt, codingPrompt, documentReviewPrompt, documentReviewSchema, hasPendingPlanDiscussion, parseJsonResult, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema } from './agent-prompts';
 import type { AssetService } from './asset-service';
 import { assetIdsInText, assetReference, taskAssetIds } from '../shared/asset-references';
 import { extractAgentBlocks } from '../shared/note-blocks';
@@ -39,7 +40,8 @@ export class TaskService implements Dispatcher {
   private chiefActive = false;
   private chiefActivity: string | null = null;
   private planningChats = new Map<string, PlanningChat>();
-  private planningChatReservations = new Set<string>();
+  // Agent slots reserved before a run is admitted, keyed planning-chat:<id> or document-review:<assetId>.
+  private reservations = new Set<string>();
   private timer?: ReturnType<typeof setInterval>;
   private availability = { claude: false, codex: false };
   private get repo() { return this.options.repository; }
@@ -651,7 +653,7 @@ export class TaskService implements Dispatcher {
   }
   updatePlanningChat(id: string, patch: { model?: string | null; provider?: Provider }): PlanningChat {
     const chat = this.getPlanningChat(id);
-    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before changing its provider or model.', 409);
+    if (chat.busy || this.reservations.has(`planning-chat:${id}`)) throw new DomainError('Wait for the planning reply before changing its provider or model.', 409);
     if (patch.provider !== undefined && patch.provider !== chat.provider) {
       // Model identifiers belong to one provider; a switch starts from that provider's default.
       chat.provider = patch.provider; chat.model = null;
@@ -663,14 +665,14 @@ export class TaskService implements Dispatcher {
   }
   async sendPlanningChat(id: string, content: string) {
     const chat = this.getPlanningChat(id);
-    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('The planning chat is still waiting for a reply.', 409);
+    if (chat.busy || this.reservations.has(`planning-chat:${id}`)) throw new DomainError('The planning chat is still waiting for a reply.', 409);
     // Reserve before loading configuration so a concurrent send or model edit cannot change this turn.
-    this.planningChatReservations.add(id);
+    this.reservations.add(`planning-chat:${id}`);
     try {
       const settings = await this.repo.settings(this.scope);
       const project = await this.repo.project(this.scope);
       if (this.planningChats.get(id) !== chat) throw new DomainError('Planning chat not found or already discarded.', 404);
-      if (this.active.size + this.planningChatReservations.size > settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
+      if (this.active.size + this.reservations.size > settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
       if (!project.repositoryPath) throw new DomainError('Set a repository path before starting a planning chat.');
       const message: PlanningChatMessage = { id: randomUUID(), role: 'user', content, createdAt: now() };
       chat.messages = [...chat.messages, message]; chat.updatedAt = now(); chat.error = undefined; chat.busy = true; chat.activity = 'Thinking through your idea…';
@@ -696,12 +698,12 @@ export class TaskService implements Dispatcher {
       this.active.set(key, { abort, done });
       return message;
     } finally {
-      this.planningChatReservations.delete(id);
+      this.reservations.delete(`planning-chat:${id}`);
     }
   }
   async taskifyPlanningChat(id: string, input: CreateTaskInput) {
     const chat = this.getPlanningChat(id);
-    if (chat.busy || this.planningChatReservations.has(id)) throw new DomainError('Wait for the planning reply before creating the task.', 409);
+    if (chat.busy || this.reservations.has(`planning-chat:${id}`)) throw new DomainError('Wait for the planning reply before creating the task.', 409);
     const transcript = chat.messages.map(message => `**${message.role === 'user' ? 'You' : 'Planning partner'}:**\n${message.content}`).join('\n\n');
     const context = transcript ? `\n\n## Planning conversation\n\n${transcript}` : '';
     const description = `${input.description ?? ''}${context}`.slice(0, 30_000);
@@ -709,6 +711,117 @@ export class TaskService implements Dispatcher {
     this.planningChats.delete(id);
     await this.repo.deletePlanningChat(this.scope, id);
     return task;
+  }
+  // ----- Library document review: owner comments resolved by the quick chat's agent in one pass -----
+  private reviews = new Map<string, DocumentReview>();
+  private reviewState(assetId: string): DocumentReview {
+    const latest = this.listPlanningChats()[0];
+    return this.reviews.get(assetId) ?? { assetId, busy: false, provider: latest?.provider ?? 'claude', model: latest?.model ?? null };
+  }
+  private async reviewableAsset(assetId: string) {
+    const asset = await this.getAsset(assetId);
+    if (assetPreviewKind(asset) !== 'markdown') throw new DomainError('Comments are available on Markdown documents only.');
+    if (asset.sizeBytes > 200_000) throw new DomainError('Documents larger than 200,000 bytes cannot be reviewed.');
+    return asset;
+  }
+  private async ownedPendingComment(assetId: string, commentId: string) {
+    const asset = await this.getAsset(assetId);
+    if (asset.ownerUserId !== this.scope.userId) throw new DomainError('Only the document owner may change its comments.', 403);
+    if (this.reviewState(assetId).busy) throw new DomainError('Wait for the current review to finish before changing comments.', 409);
+    const comment = (await this.repo.assetComments(this.scope, assetId)).find(item => item.id === commentId);
+    if (!comment) throw new DomainError('Comment not found.', 404);
+    if (comment.status !== 'pending') throw new DomainError('Resolved comments cannot be changed.', 409);
+    return comment;
+  }
+  pendingCommentCounts() {
+    return this.repo.pendingCommentCounts(this.scope);
+  }
+  async listAssetComments(assetId: string): Promise<AssetCommentThread> {
+    const asset = await this.getAsset(assetId);
+    const comments = await this.repo.assetComments(this.scope, assetId);
+    // The thread that produced this version stays readable from the version it created.
+    const inherited = asset.previousVersionId ? (await this.repo.assetComments(this.scope, asset.previousVersionId)).filter(item => item.revisionAssetId === assetId) : [];
+    return { comments, inherited, review: this.reviewState(assetId) };
+  }
+  async addAssetComment(assetId: string, input: { content: string; requestId: string; anchor?: AssetCommentAnchor }) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) throw new DomainError('requestId must be a UUID.');
+    const asset = await this.reviewableAsset(assetId);
+    if (asset.ownerUserId !== this.scope.userId) throw new DomainError('Only the document owner may comment.', 403);
+    if (this.reviewState(assetId).busy) throw new DomainError('Wait for the current review to finish before adding comments.', 409);
+    const comments = await this.repo.assetComments(this.scope, assetId);
+    const existing = comments.find(item => item.requestId === input.requestId);
+    if (existing) {
+      if (existing.content === input.content && JSON.stringify(existing.anchor ?? null) === JSON.stringify(input.anchor ?? null)) return existing;
+      throw new DomainError('This requestId was already used for a different comment.', 409);
+    }
+    if (comments.filter(item => item.status === 'pending').length >= 50) throw new DomainError('Resolve the pending comments before adding more; a document holds at most 50.', 409);
+    const timestamp = now();
+    const comment: AssetComment = { id: randomUUID(), assetId, requestId: input.requestId, content: input.content, ...(input.anchor ? { anchor: input.anchor } : {}), createdAt: timestamp, updatedAt: timestamp, status: 'pending' };
+    return this.repo.saveAssetComment(this.scope, comment);
+  }
+  async editAssetComment(assetId: string, commentId: string, content: string) {
+    const comment = await this.ownedPendingComment(assetId, commentId);
+    return this.repo.saveAssetComment(this.scope, { ...comment, content, updatedAt: now() });
+  }
+  async removeAssetComment(assetId: string, commentId: string) {
+    await this.ownedPendingComment(assetId, commentId);
+    await this.repo.deleteAssetComment(this.scope, commentId);
+  }
+  /** Sends every pending comment to the quick chat's agent; edits come back as a new document version. */
+  async resolveAssetComments(assetId: string): Promise<DocumentReview> {
+    const asset = await this.reviewableAsset(assetId);
+    if (asset.ownerUserId !== this.scope.userId) throw new DomainError('Only the document owner may resolve its comments.', 403);
+    const key = `document-review:${assetId}`;
+    if (this.reviews.get(assetId)?.busy || this.reservations.has(key)) throw new DomainError('This document is already being reviewed.', 409);
+    this.reservations.add(key);
+    try {
+      const settings = await this.repo.settings(this.scope);
+      const project = await this.repo.project(this.scope);
+      const pending = (await this.repo.assetComments(this.scope, assetId)).filter(item => item.status === 'pending');
+      if (!pending.length) throw new DomainError('Add a comment before asking for a review.', 409);
+      if (this.active.size + this.reservations.size > settings.maxConcurrentAgents) throw new DomainError('All agent slots are busy. Wait for one to become available.', 409);
+      if (!project.repositoryPath) throw new DomainError('Set a repository path before reviewing documents.');
+      const text = Buffer.from((await this.readAsset(assetId)).data).toString('utf8');
+      const { provider, model } = this.reviewState(assetId);
+      if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or switch your latest planning chat to another agent.`);
+      const review: DocumentReview = { assetId, busy: true, activity: 'Reading your comments…', provider, model, startedAt: now() };
+      this.reviews.set(assetId, review);
+      const abort = new AbortController();
+      const done = Promise.resolve().then(async () => {
+        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: model ?? undefined, prompt: documentReviewPrompt(project, asset, text, pending), cwd: project.repositoryPath, signal: abort.signal, onProgress: activity => { if (this.reviews.get(assetId) === review) review.activity = activity; } });
+        // A run aborted by shutdown must not leave a revision or replies behind.
+        if (abort.signal.aborted) return;
+        const parsed = documentReviewSchema.parse(parseJsonResult(result.text));
+        const replies = new Map(parsed.replies.map(reply => [reply.id, reply]));
+        let revision: Asset | undefined;
+        if (pending.some(comment => replies.get(comment.id)?.kind === 'changed')) {
+          const document = parsed.document?.trim();
+          if (!document) throw new DomainError('The agent reported changes without returning the revised document. Resolve again to retry.');
+          if (document === text.trim()) throw new DomainError('The agent reported changes but returned the document unchanged. Resolve again to retry.');
+          if (!this.options.assets) throw new DomainError('Asset storage is not configured.', 503);
+          revision = await this.options.assets.createNote(this.scope, { name: asset.name, content: document, origin: 'generated', previousVersionId: assetId });
+        }
+        const resolvedAt = now();
+        for (const comment of pending) {
+          const reply = replies.get(comment.id);
+          const { lastError: _lastError, ...rest } = comment;
+          await this.repo.saveAssetComment(this.scope, { ...rest, status: 'resolved', resolvedAt, updatedAt: resolvedAt, reply: { kind: reply?.kind ?? 'declined', content: reply?.content ?? 'The agent did not address this comment. Add it again to retry.', createdAt: resolvedAt, provider, model }, ...(revision ? { revisionAssetId: revision.id } : {}) });
+        }
+        review.revisionAssetId = revision?.id;
+      }).catch(async error => {
+        review.error = abort.signal.aborted ? 'The review was interrupted. Resolve again to retry.'
+          : error instanceof z.ZodError || error instanceof SyntaxError ? 'The agent returned an unexpected result. Resolve again to retry.'
+          : error instanceof Error ? error.message : String(error);
+        for (const comment of pending) await this.repo.saveAssetComment(this.scope, { ...comment, lastError: review.error }).catch(() => undefined);
+      }).finally(() => {
+        review.busy = false; review.activity = null; review.finishedAt = now(); this.active.delete(key);
+        void this.tick().catch(console.error);
+      });
+      this.active.set(key, { abort, done });
+      return review;
+    } finally {
+      this.reservations.delete(key);
+    }
   }
   discardPlanningChat(id: string) {
     this.getPlanningChat(id);

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronRight, Eye, File, FileImage, FileText, Film, NotebookPen, PenLine, RefreshCw, Search, SlidersHorizontal, Upload, X } from 'lucide-react';
+import { ArrowLeft, BookOpen, ChevronRight, Eye, File, FileImage, FileText, Film, MessageSquareText, NotebookPen, PenLine, RefreshCw, Search, SlidersHorizontal, Upload, X } from 'lucide-react';
 import type { AppSnapshot, Asset, Task } from '../../shared/types';
 import { taskAssetIds } from '../../shared/asset-references';
 import { api } from '../lib/api';
 import { assetContentUrl, assetPreviewKind, formatAssetSize } from '../lib/asset-preview';
+import { rehypeCommentMarks } from '../lib/document-comments';
 import { LIBRARY_KIND_FILTERS, LIBRARY_KIND_LABELS, LIBRARY_KINDS, ORIGIN_LABELS, assetReferrers, filterLibrary, libraryKind, type LibraryFilter, type LibraryKind } from '../lib/library';
 import { closeTab, loadTabs, openTab, saveTabs } from '../lib/library-tabs';
 import { relativeTime } from '../lib/utils';
-import { AssetPreview } from './asset-preview';
+import { AssetPreview, type RehypeExtras } from './asset-preview';
+import { DocumentComments, useAssetComments } from './document-comments';
 import { EmptyState, Markdown, StatusIcon } from './common';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
@@ -45,10 +47,11 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
   const referrers = useMemo(() => assetReferrers(snapshot.tasks), [snapshot.tasks]);
   // Agents publish generated files through task references; reload when that set changes.
   const referencedKey = JSON.stringify([...new Set(snapshot.tasks.flatMap(taskAssetIds))].sort());
+  const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     let active = true;
-    void api<Asset[]>('/assets').then(value => {
-      if (active) { setAssets(value); setError(null); }
+    void Promise.all([api<Asset[]>('/assets'), api<Record<string, number>>('/assets/comment-counts').catch(() => ({}))]).then(([value, counts]) => {
+      if (active) { setAssets(value); setPendingCounts(counts); setError(null); }
     }).catch(cause => {
       if (active) setError(cause instanceof Error ? cause.message : 'Could not load the library.');
     });
@@ -105,7 +108,7 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
         return <button key={asset.id} role="listitem" className="library-row" onClick={() => onSelect(asset.id)}>
           <span className="library-row-icon"><LibraryIcon kind={kind} size={17} /></span>
           <span className="library-row-name"><strong>{asset.name}</strong><small>{LIBRARY_KIND_LABELS[kind]} · {asset.mediaType}</small></span>
-          <span className="library-row-refs">{tasks.slice(0, 3).map(task => <span key={task.id} className="label-badge"><StatusIcon status={task.status} size={11} />{task.identifier}</span>)}{tasks.length > 3 && <span className="label-badge">+{tasks.length - 3}</span>}</span>
+          <span className="library-row-refs">{pendingCounts[asset.id] > 0 && <span className="label-badge doc-comments-badge" title={`${pendingCounts[asset.id]} pending ${pendingCounts[asset.id] === 1 ? 'comment' : 'comments'}`}><MessageSquareText size={11} />{pendingCounts[asset.id]}</span>}{tasks.slice(0, 3).map(task => <span key={task.id} className="label-badge"><StatusIcon status={task.status} size={11} />{task.identifier}</span>)}{tasks.length > 3 && <span className="label-badge">+{tasks.length - 3}</span>}</span>
           <span className="library-row-meta"><span>{ORIGIN_LABELS[asset.origin]}</span><span>{formatAssetSize(asset.sizeBytes)}</span><span className="task-date">{relativeTime(asset.createdAt)}</span></span>
           <ChevronRight size={15} aria-hidden="true" />
         </button>;
@@ -115,11 +118,23 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
 }
 
 /** One open document: metadata, referencing tasks, and the reader. Stays mounted while hidden so its scroll survives tab switches. */
-function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void }) {
+function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise, onOpenAsset }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void; onOpenAsset: (assetId: string) => void }) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [commentsOpen, setCommentsOpen] = useState(true);
   const heading = useRef<HTMLHeadingElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const referrers = useMemo(() => assetReferrers(snapshot.tasks), [snapshot.tasks]);
+  const reviewable = Boolean(asset && assetPreviewKind(asset) === 'markdown');
+  const comments = useAssetComments(assetId, reviewable);
+  // Highlights are rendered by a rehype plugin keyed on the anchors, so the array only changes when a comment does.
+  const highlightKey = JSON.stringify((comments.thread?.comments ?? []).map(comment => [comment.id, comment.status, comment.anchor]));
+  const rehypeExtras = useMemo<RehypeExtras | undefined>(() => {
+    const anchored = (comments.thread?.comments ?? []).filter(comment => comment.anchor).map(comment => ({ id: comment.id, status: comment.status, anchor: comment.anchor }));
+    return anchored.length ? [[rehypeCommentMarks, { comments: anchored }]] : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey]);
+  const pendingCount = (comments.thread?.comments ?? []).filter(comment => comment.status === 'pending').length;
   useEffect(() => {
     let live = true;
     void api<Asset>(`/assets/${encodeURIComponent(assetId)}`).then(value => {
@@ -147,7 +162,13 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
         </div>
         {tasks.length > 0 && <div className="library-document-refs"><span>Referenced by</span>{tasks.map(task => <button key={task.id} onClick={() => onOpenTask(task)}><StatusIcon status={task.status} size={13} /><span className="task-identifier">{task.identifier}</span>{task.title}<ChevronRight size={12} /></button>)}</div>}
       </header>
-      <div className="library-document-body"><AssetPreview key={asset.id} asset={asset} /></div>
+      <div className={`library-document-body ${reviewable && commentsOpen ? 'with-comments' : ''}`}>
+        <div className="library-document-main" ref={body}>
+          {reviewable && <div className="library-document-tools"><Button size="sm" variant={commentsOpen ? 'secondary' : 'ghost'} aria-pressed={commentsOpen} onClick={() => setCommentsOpen(value => !value)}><MessageSquareText size={14} />Comments{pendingCount > 0 && <span className="doc-comments-count">{pendingCount}</span>}</Button></div>}
+          <AssetPreview key={asset.id} asset={asset} rehypeExtras={rehypeExtras} />
+        </div>
+        {reviewable && commentsOpen && <DocumentComments asset={asset} thread={comments.thread} error={comments.error} reload={comments.reload} containerRef={body} active={active} onOpenAsset={onOpenAsset} />}
+      </div>
     </>}
   </div>;
 }
@@ -199,7 +220,7 @@ export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTa
       })}
     </div>
     {error && <p className="form-error library-error" role="alert">{error}</p>}
-    {tabs.map(id => <DocumentPane key={id} assetId={id} snapshot={snapshot} active={id === assetId} onOpenTask={onOpenTask} onClose={() => close(id)} onLoaded={asset => setNames(current => current[asset.id] ? current : { ...current, [asset.id]: asset })} onRevise={asset => void revise(asset)} />)}
+    {tabs.map(id => <DocumentPane key={id} assetId={id} snapshot={snapshot} active={id === assetId} onOpenTask={onOpenTask} onClose={() => close(id)} onLoaded={asset => setNames(current => current[asset.id] ? current : { ...current, [asset.id]: asset })} onRevise={asset => void revise(asset)} onOpenAsset={onSelect} />)}
     {draft && <NoteDialog key={draft.revisionOf?.id ?? 'new'} draft={draft} onOpenChange={open => { if (!open) setDraft(null); }} onCreated={created => { setDraft(null); onSelect(created.id); }} />}
   </section>;
 }

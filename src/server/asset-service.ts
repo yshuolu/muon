@@ -94,12 +94,12 @@ export class AssetService {
   }
 
   /** A reference note is an owner-written Markdown asset; revisions are new assets. */
-  async createNote(scope: Scope, input: { name: string; content: string; origin?: 'upload' | 'generated' }) {
+  async createNote(scope: Scope, input: { name: string; content: string; origin?: 'upload' | 'generated'; previousVersionId?: string }) {
     const trimmed = input.name.trim();
     const name = validName(/\.(md|markdown)$/i.test(trimmed) ? trimmed : `${trimmed}.md`);
     if (!input.content.trim()) throw new DomainError('Write something in the note.');
     const data = Buffer.from(`${input.content.trim()}\n`, 'utf8');
-    return this.store(scope, { name, mediaType: 'text/markdown', data, origin: input.origin ?? 'upload' });
+    return this.store(scope, { name, mediaType: 'text/markdown', data, origin: input.origin ?? 'upload', previousVersionId: input.previousVersionId });
   }
 
   async importFile(scope: Scope, input: ImportFileInput) {
@@ -155,7 +155,7 @@ export class AssetService {
   }
 
   private async store(scope: Scope, input: AssetProvenance & {
-    id?: string; name: string; mediaType?: string; data: Uint8Array; origin: Asset['origin']; visibility?: Asset['visibility'];
+    id?: string; name: string; mediaType?: string; data: Uint8Array; origin: Asset['origin']; visibility?: Asset['visibility']; previousVersionId?: string;
   }): Promise<Asset> {
     if (input.data.byteLength > MAX_ASSET_BYTES) throw new DomainError('Assets must be no larger than 100 MiB.', 413);
     if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'project') {
@@ -171,6 +171,7 @@ export class AssetService {
       createdAt: new Date().toISOString(), createdByUserId: scope.userId,
       ownerUserId: scope.userId, visibility: input.visibility ?? 'private',
       sourcePath: input.sourcePath,
+      ...(input.previousVersionId ? { previousVersionId: input.previousVersionId } : {}),
     };
     await this.options.storage.write(scope, asset.objectKey, data);
     try {

@@ -1,9 +1,9 @@
 import { assetIdFromUrl, assetIdsInText, assetReference } from '../../shared/asset-references';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { Check, Copy, Download, File, FileText, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import type { Components } from 'react-markdown';
+import type { Components, Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Asset } from '../../shared/types';
 import { api } from '../lib/api';
@@ -56,7 +56,10 @@ export function AssetReferenceImage({ assetId, alt }: { assetId: string; alt?: s
   return <><button className="markdown-asset-image" onClick={() => setOpen(true)} aria-label={`Expand ${alt || asset.name}`}><img src={assetContentUrl(asset.id)} alt={alt || asset.name} loading="lazy" onError={() => setFailed(true)} /><span><Maximize2 size={13} />Expand image</span></button><Dialog open={open} onOpenChange={setOpen} title={asset.name} description="Referenced image" className="asset-reader-dialog"><AssetPreview asset={asset} /></Dialog></>;
 }
 
-export function AssetPreview({ asset, assetId }: { asset?: Asset; assetId?: string }) {
+/** Extra rehype plugins for the Markdown reader, such as review-comment highlights. Keep the array referentially stable. */
+export type RehypeExtras = NonNullable<Options['rehypePlugins']>;
+
+export function AssetPreview({ asset, assetId, rehypeExtras }: { asset?: Asset; assetId?: string; rehypeExtras?: RehypeExtras }) {
   const [loaded, setLoaded] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -74,10 +77,10 @@ export function AssetPreview({ asset, assetId }: { asset?: Asset; assetId?: stri
   const current = asset ?? (loaded?.id === assetId ? loaded : null);
   if (error && !current) return <p className="form-error" role="alert">{error}</p>;
   if (!current) return <p className="asset-loading" role="status">Loading asset…</p>;
-  return <AssetReader key={current.id} asset={current} />;
+  return <AssetReader key={current.id} asset={current} rehypeExtras={rehypeExtras} />;
 }
 
-function AssetReader({ asset }: { asset: Asset }) {
+function AssetReader({ asset, rehypeExtras }: { asset: Asset; rehypeExtras?: RehypeExtras }) {
   const kind = assetPreviewKind(asset);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -128,7 +131,7 @@ function AssetReader({ asset }: { asset: Asset }) {
       : kind === 'audio' ? <audio className="asset-media" controls preload="metadata" src={url} aria-label={asset.name} onError={() => setError('This audio format could not be played. Download the original to open it.')} />
       : kind === 'download' || tooLarge ? <div className="asset-unavailable"><File size={28} /><strong>{tooLarge && kind !== 'download' ? 'This file is too large to preview' : 'Download to open this file'}</strong><p>{tooLarge && kind !== 'download' ? 'Text previews support files up to 2 MB. The complete original is available above.' : 'A preview is not available for this format. Your original file is retained.'}</p></div>
       : text === null ? <p className="asset-loading" role="status">Loading preview…</p>
-      : kind === 'markdown' && !source ? <AssetMarkdown>{text}</AssetMarkdown>
+      : kind === 'markdown' && !source ? <AssetMarkdown rehypeExtras={rehypeExtras}>{text}</AssetMarkdown>
       : <pre className="asset-text" tabIndex={0} aria-label={`${asset.name} source`}><code>{text}</code></pre>}
     <Dialog open={expanded} onOpenChange={value => { setExpanded(value); setZoomed(false); }} title={asset.name} description="Image preview" className="asset-image-dialog">
       <div className="asset-image-toolbar"><Button size="sm" variant="secondary" onClick={() => setZoomed(!zoomed)}>{zoomed ? <ZoomOut size={14} /> : <ZoomIn size={14} />}{zoomed ? 'Fit to window' : 'Actual size'}</Button><a className="button button-ghost button-sm" href={assetContentUrl(asset.id, true)} download={asset.name}><Download size={14} />Download</a></div>
@@ -143,11 +146,13 @@ interface Heading {
   level: number;
 }
 
-export function AssetMarkdown({ children }: { children: string }) {
+/** Memoized: react-markdown reruns its whole pipeline per render, and the workspace poll re-renders readers every 2 seconds. */
+export const AssetMarkdown = memo(function AssetMarkdown({ children, rehypeExtras }: { children: string; rehypeExtras?: RehypeExtras }) {
   const instance = useId();
   const prefix = `asset-${instance.replace(/[^a-zA-Z0-9_-]/g, '')}-`;
   const document = useRef<HTMLDivElement>(null);
   const [headings, setHeadings] = useState<Heading[]>([]);
+  const rehypePlugins = useMemo<RehypeExtras>(() => [[rehypeAssetHeadings, { prefix }], ...(rehypeExtras ?? [])], [prefix, rehypeExtras]);
   useEffect(() => {
     setHeadings(Array.from(document.current?.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6') ?? []).map(heading => ({
       id: heading.id, label: heading.textContent ?? '', level: Number(heading.tagName.slice(1)),
@@ -181,6 +186,6 @@ export function AssetMarkdown({ children }: { children: string }) {
   }), [prefix, jump]);
   return <div className="asset-document-layout">
     {headings.length > 2 && <nav className="asset-outline" aria-label="Document contents"><details open><summary>On this page</summary><ol>{headings.map(heading => <li key={heading.id} className={`asset-outline-level-${heading.level}`}><a href={`#${heading.id}`} onClick={event => jump(event, heading.id)}>{heading.label}</a></li>)}</ol></details></nav>}
-    <div className="markdown asset-markdown" ref={document}><ReactMarkdown skipHtml urlTransform={assetMarkdownUrl} remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeAssetHeadings, { prefix }]]} components={components}>{children}</ReactMarkdown></div>
+    <div className="markdown asset-markdown" ref={document}><ReactMarkdown skipHtml urlTransform={assetMarkdownUrl} remarkPlugins={[remarkGfm]} rehypePlugins={rehypePlugins} components={components}>{children}</ReactMarkdown></div>
   </div>;
-}
+});

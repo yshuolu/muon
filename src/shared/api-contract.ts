@@ -20,6 +20,13 @@ export const settingsSchema = z.strictObject({
   chiefModel: modelIdentifierSchema.nullable().optional(),
   chiefSoul: z.string().trim().max(20_000).nullable().optional(),
 });
+export const assetCommentAnchorSchema = z.strictObject({
+  quote: z.string().min(1).max(2000), prefix: z.string().max(64), suffix: z.string().max(64), start: z.number().int().min(0),
+});
+export const createAssetCommentSchema = z.strictObject({
+  content: z.string().trim().min(1).max(4000), requestId: z.uuid(), anchor: assetCommentAnchorSchema.optional(),
+});
+export const updateAssetCommentSchema = z.strictObject({ content: z.string().trim().min(1).max(4000) });
 export const projectIdentifierSchema = z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9]{1,4}$/, 'Identifiers are 2 to 5 letters or digits, starting with a letter.');
 export const createProjectSchema = z.strictObject({
   name: z.string().trim().min(1).max(100), repositoryPath: z.string().trim().min(1).max(2000),
