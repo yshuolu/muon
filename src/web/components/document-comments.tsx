@@ -66,9 +66,11 @@ function CommentCard({ comment, selected, editable, busy, onSelect, onEdit, onDe
  * the quick chat's agent, and replies beside each comment. Highlights live in the rendered document; this
  * component links cards and highlights both ways.
  */
-export function DocumentComments({ asset, thread, error, reload, containerRef, active, onOpenAsset }: {
+export function DocumentComments({ asset, thread, error, reload, containerRef, active, open, onOpen, onOpenAsset }: {
   asset: Asset; thread: AssetCommentThread | null; error: string | null; reload: () => Promise<void>;
-  containerRef: RefObject<HTMLDivElement | null>; active: boolean; onOpenAsset: (assetId: string) => void;
+  containerRef: RefObject<HTMLDivElement | null>; active: boolean;
+  /** Whether the sidebar panel is shown; the floating selection control works either way and opens it. */
+  open: boolean; onOpen: () => void; onOpenAsset: (assetId: string) => void;
 }) {
   const [selection, setSelection] = useState<FloatingSelection | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -141,12 +143,14 @@ export function DocumentComments({ asset, thread, error, reload, containerRef, a
     catch (cause) { setActionError(cause instanceof Error ? cause.message : failure); }
     finally { setBusy(false); }
   }
-  const startDraft = (anchor?: AssetCommentAnchor) => { setDraft({ anchor, content: '', requestId: crypto.randomUUID() }); setSelection(null); window.getSelection()?.removeAllRanges(); };
+  const startDraft = (anchor?: AssetCommentAnchor) => { onOpen(); setDraft({ anchor, content: '', requestId: crypto.randomUUID() }); setSelection(null); window.getSelection()?.removeAllRanges(); };
   const submitDraft = () => draft && run(async () => { await api(`/assets/${encodeURIComponent(asset.id)}/comments`, 'POST', { content: draft.content.trim(), requestId: draft.requestId, ...(draft.anchor ? { anchor: draft.anchor } : {}) }); setDraft(null); }, 'Could not add the comment.');
   const resolve = () => run(async () => { await api(`/assets/${encodeURIComponent(asset.id)}/comments/resolve`, 'POST', {}); }, 'Could not start the review.');
   const reviewerLabel = review ? `${PROVIDER_LABELS[review.provider]}${review.model ? ` · ${review.model}` : ''}` : '';
+  const floating = selection && active ? <button type="button" className="doc-comment-float" style={{ left: selection.x, top: selection.y }} onMouseDown={event => event.preventDefault()} onClick={() => startDraft(selection.anchor)}><MessageSquarePlus size={14} />Comment</button> : null;
+  if (!open) return floating;
   return <aside className="doc-comments" aria-label="Document comments">
-    {selection && active && <button type="button" className="doc-comment-float" style={{ left: selection.x, top: selection.y }} onMouseDown={event => event.preventDefault()} onClick={() => startDraft(selection.anchor)}><MessageSquarePlus size={14} />Comment</button>}
+    {floating}
     <div className="doc-comments-heading">
       <div><MessageSquareText size={15} /><strong>Comments</strong>{pending.length > 0 && <span className="doc-comments-count">{pending.length}</span>}</div>
       <Button size="sm" variant="ghost" disabled={locked} onClick={() => startDraft()}><MessageSquarePlus size={14} />On document</Button>

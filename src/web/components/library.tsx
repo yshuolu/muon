@@ -121,7 +121,8 @@ export function LibraryView({ snapshot, onSelect }: { snapshot: AppSnapshot; onS
 function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded, onRevise, onOpenAsset }: { assetId: string; snapshot: AppSnapshot; active: boolean; onOpenTask: (task: Task) => void; onClose: () => void; onLoaded: (asset: Asset) => void; onRevise: (asset: Asset) => void; onOpenAsset: (assetId: string) => void }) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [commentsOpen, setCommentsOpen] = useState(true);
+  // The sidebar only takes space when there is something in it: it opens on the first comment or on request.
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const referrers = useMemo(() => assetReferrers(snapshot.tasks), [snapshot.tasks]);
@@ -135,6 +136,8 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightKey]);
   const pendingCount = (comments.thread?.comments ?? []).filter(comment => comment.status === 'pending').length;
+  const hasThread = Boolean(comments.thread && (comments.thread.comments.length > 0 || comments.thread.inherited.length > 0 || comments.thread.review.busy));
+  useEffect(() => { if (hasThread) setCommentsOpen(true); }, [hasThread]);
   useEffect(() => {
     let live = true;
     void api<Asset>(`/assets/${encodeURIComponent(assetId)}`).then(value => {
@@ -167,7 +170,7 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
           {reviewable && <div className="library-document-tools"><Button size="sm" variant={commentsOpen ? 'secondary' : 'ghost'} aria-pressed={commentsOpen} onClick={() => setCommentsOpen(value => !value)}><MessageSquareText size={14} />Comments{pendingCount > 0 && <span className="doc-comments-count">{pendingCount}</span>}</Button></div>}
           <AssetPreview key={asset.id} asset={asset} rehypeExtras={rehypeExtras} />
         </div>
-        {reviewable && commentsOpen && <DocumentComments asset={asset} thread={comments.thread} error={comments.error} reload={comments.reload} containerRef={body} active={active} onOpenAsset={onOpenAsset} />}
+        {reviewable && <DocumentComments asset={asset} thread={comments.thread} error={comments.error} reload={comments.reload} containerRef={body} active={active} open={commentsOpen} onOpen={() => setCommentsOpen(true)} onOpenAsset={onOpenAsset} />}
       </div>
     </>}
   </div>;
