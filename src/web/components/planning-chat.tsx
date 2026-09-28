@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, ArrowUp, Check, CheckCircle2, ChevronRight, FileText, History, Loader2, PanelLeft, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowRight, ArrowUp, Check, CheckCircle2, FileText, History, Loader2, Trash2, X } from 'lucide-react';
 import type { AppSnapshot, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, Task } from '../../shared/types';
 import { ApiError } from '../../shared/api-client';
 import { api } from '../lib/api';
@@ -55,7 +56,7 @@ function PlanningChatHistory({ currentId, onOpen, onClose }: { currentId: string
   </div>;
 }
 
-export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNewChat, creatingChat, onOpenNavigation, onOpenChat, onOpenTask }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void; onNewChat: () => Promise<void>; creatingChat: boolean; onOpenNavigation: () => void; onOpenChat: (id: string) => void; onOpenTask: (task: Task) => void }) {
+export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNewChat, creatingChat, actionsSlot, onOpenChat, onOpenTask }: { chatId: string; snapshot: AppSnapshot; onClose: () => void; onTaskified: (task: Task) => void; onNewChat: () => Promise<void>; creatingChat: boolean; /** The page heading's action area, where History, Discard, and Taskify render. */ actionsSlot: HTMLElement | null; onOpenChat: (id: string) => void; onOpenTask: (task: Task) => void }) {
   const [chat, setChat] = useState<PlanningChat | null>(null);
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
@@ -164,26 +165,24 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
   // The partner's latest proposal prefills Taskify; the first question is the fallback title.
   const proposal = proposedTaskFromReply(chat?.messages.findLast(message => message.role === 'assistant')?.content);
   const initialTitle = proposal?.title ?? (firstQuestion.replace(/\s+/g, ' ').trim().slice(0, 80) || 'New task');
+  // The thread's controls sit in the page heading's action slot, where the chief view shows New task.
+  const actions = <>
+    <Button variant="ghost" size="icon" aria-label="Discard thread" title="Discard thread" disabled={!chat || chat.busy || busy} onClick={() => void discard()}><Trash2 size={15} /></Button>
+    <Button variant="secondary" aria-label="Past planning threads" aria-expanded={history} title="Past planning threads" onClick={() => setHistory(value => !value)}><History size={15} />History</Button>
+    <Button aria-label="Taskify conversation" onClick={() => setTaskify(true)} disabled={modelDisabled || !chat?.messages.length}><CheckCircle2 size={15} />Taskify</Button>
+  </>;
   return <div className="planning-chat-view">
-    <header className="planning-chat-toolbar">
-      <Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={onOpenNavigation}><PanelLeft size={17} /></Button>
-      <Button variant="ghost" size="icon" aria-label="Back to tasks" title="Back to tasks" onClick={onClose}><ArrowLeft size={15} /></Button>
-      <div className="planning-chat-title"><span title={snapshot.workspace.name}>{snapshot.workspace.name}</span><ChevronRight size={12} aria-hidden="true" /><h1>Planning thread</h1></div>
-      {snapshot.runtime.demo && <span className="demo-badge">Demo workspace</span>}
-      <Button variant="ghost" size="icon" aria-label="Discard thread" title="Discard thread" disabled={!chat || chat.busy || busy} onClick={() => void discard()}><Trash2 size={15} /></Button>
-      <Button variant="ghost" size="sm" aria-label="Past planning threads" aria-expanded={history} title="Past planning threads" onClick={() => setHistory(value => !value)}><History size={15} />History</Button>
-      <Button size="sm" aria-label="Taskify conversation" onClick={() => setTaskify(true)} disabled={modelDisabled || !chat?.messages.length}><CheckCircle2 size={15} />Taskify</Button>
-    </header>
+    {actionsSlot && createPortal(actions, actionsSlot)}
     {history && <PlanningChatHistory currentId={chatId} onOpen={id => { setHistory(false); onOpenChat(id); }} onClose={() => setHistory(false)} />}
-    <ConversationViewport scroll={scroll} className="planning-chat-conversation" label="Planning conversation">
+    <ConversationViewport scroll={scroll} className="chief-conversation planning-chat-conversation" label="Planning conversation">
       {!chat && !error && <div className="planning-chat-empty"><Loader2 size={18} className="spin" />Opening planning thread…</div>}
       {error && <div className="planning-chat-empty"><FileText size={20} /><strong>{missingChat ? 'This planning chat is no longer available.' : error}</strong>{missingChat && <><p>It was discarded or turned into a task. Past threads are under History.</p><Button disabled={creatingChat} onClick={() => void onNewChat()}>{creatingChat ? 'Opening chat…' : 'Start new chat'}</Button></>}<Button variant="secondary" onClick={onClose}>Return to tasks</Button></div>}
-      {chat && !chat.messages.length && <div className="planning-chat-empty"><div className="chief-orb"><MuonMark /></div><h2>What are you thinking about?</h2><p>Explore the problem first. I’ll help turn the conversation into a clear task when you’re ready.</p></div>}
-      {chat?.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>{PROVIDER_LABELS[provider]} · Read-only</span>}</div><Markdown>{message.content}</Markdown>{Boolean(message.taskIds?.length) && <div className="message-task-links">{message.taskIds?.map(id => { const task = snapshot.tasks.find(item => item.id === id); return task ? <button key={id} onClick={() => onOpenTask(task)}><span>{task.identifier}</span>{task.title}<ArrowRight size={13} /></button> : null; })}</div>}</div></article>)}
+      {chat && !chat.messages.length && <div className="chief-welcome"><div className="chief-orb"><MuonMark /></div><span className="eyebrow">YOUR PLANNING PARTNER</span><h2>What are you thinking about?</h2><p>Explore the problem first, read-only.<br />When it is clear, Taskify turns the conversation into a task.</p></div>}
+      {chat && chat.messages.length > 0 && <div className="chief-messages">{chat.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Planning partner' : 'You'}{message.role === 'assistant' && <span>{PROVIDER_LABELS[provider]} · Read-only</span>}</div><Markdown>{message.content}</Markdown>{Boolean(message.taskIds?.length) && <div className="message-task-links">{message.taskIds?.map(id => { const task = snapshot.tasks.find(item => item.id === id); return task ? <button key={id} onClick={() => onOpenTask(task)}><span>{task.identifier}</span>{task.title}<ArrowRight size={13} /></button> : null; })}</div>}</div></article>)}</div>}
       {chat?.error && <p className="form-error" role="alert">{chat.error}</p>}
       {chat?.busy && <div className="chief-working"><span className="working-dots"><i /><i /><i /></span>{chat.activity ?? 'Planning partner is thinking…'}</div>}
     </ConversationViewport>
-    <div className="planning-chat-composer-wrap">
+    <div className="chief-composer-wrap">
       {!providerDetected && <p className="form-notice">{PROVIDER_LABELS[provider]} is not detected. Install it, sign in, and restart the local server, or choose another agent below.</p>}
       {sendError && <p className="form-error" role="alert">{sendError}</p>}
       {error === null && <form className="chief-composer" onSubmit={send}>
@@ -217,6 +216,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
         {modelError && <p id="planning-chat-model-error" className="form-error chief-model-error" role="alert">{modelError}</p>}
         {savingModel && <span className="sr-only" role="status">Saving selection…</span>}
       </form>}
+      {error === null && <p className="composer-hint">Read-only in your repository; documents and tasks it creates land in the workspace.<span>Enter to send · Shift + Enter for a new line</span></p>}
     </div>
     <TaskDialog key={chatId} open={taskify} onOpenChange={setTaskify} snapshot={snapshot} initialTitle={initialTitle} initialDescription={proposal?.description ?? ''} planningChatId={chatId} onCreated={onTaskified} />
   </div>;
