@@ -3,7 +3,7 @@ import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, As
 import { assetPreviewKind } from '../shared/asset-kinds';
 import { AgentProcessUnreapedError, type AgentAdapter, type ScratchFile, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
-import { chiefPrompt, codingPrompt, documentReviewPrompt, documentReviewSchema, hasPendingPlanDiscussion, libraryContextPrompt, parseJsonResult, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema, type LibraryCopy } from './agent-prompts';
+import { chiefPrompt, codingPrompt, documentReviewPrompt, documentReviewSchema, hasPendingPlanDiscussion, libraryContextPrompt, parseJsonResult, pendingPlanComments, planningChatPrompt, planRevisionSchema, taskDiscussionPrompt, verificationSchema, type LibraryCopy } from './agent-prompts';
 import { effortFor } from '../shared/effort';
 import type { AssetService } from './asset-service';
 import { assetIdsInText, assetReference, taskAssetIds } from '../shared/asset-references';
@@ -549,16 +549,27 @@ export class TaskService implements Dispatcher {
     void this.tick().catch(console.error);
     return saved;
   }
-  async commentOnPlan(id: string, planId: string, content: string) {
+  /** The task must be waiting on the given RFC for the owner to comment on it; returns the task and that RFC. */
+  private async reviewablePlan(id: string, planId: string) {
     const task = await this.getTask(id);
     if (task.followUp) throw new DomainError('Wait for the pending agent reply before revising the RFC.', 409);
     if (task.ownerUserId !== this.scope.userId) throw new DomainError('Only the task owner may review its RFC.', 403);
-    const feedback = content.trim();
-    if (!feedback || feedback.length > 20_000) throw new DomainError('Plan comments must contain between 1 and 20,000 characters.');
     const current = task.plans.at(-1);
     if (task.kind === 'group' || task.runId || task.status !== 'in_review' || task.phase !== 'plan_review' || current?.id !== planId || current.status !== 'pending') throw new DomainError('This RFC is no longer awaiting review. Wait for the latest revision before commenting.', 409);
+    return { task, current };
+  }
+  /**
+   * Adds an owner comment on the RFC awaiting review. By default (CLI, API) the comment also requests the revision;
+   * the web reader collects comments with `revise: false` and requests one revision for all of them.
+   */
+  async commentOnPlan(id: string, planId: string, content: string, options: { anchor?: AssetCommentAnchor; revise?: boolean } = {}) {
+    const { task, current } = await this.reviewablePlan(id, planId);
+    const feedback = content.trim();
+    if (!feedback || feedback.length > 20_000) throw new DomainError('Plan comments must contain between 1 and 20,000 characters.');
+    if (pendingPlanComments(task, planId).length >= 50) throw new DomainError('Request a revision before adding more comments; at most 50 can wait on one RFC.');
     const timestamp = now();
-    const message: PlanDiscussionMessage = { id: randomUUID(), role: 'user', content: feedback, createdAt: timestamp, planId, userId: this.scope.userId };
+    const message: PlanDiscussionMessage = { id: randomUUID(), role: 'user', content: feedback, createdAt: timestamp, planId, userId: this.scope.userId, ...(options.anchor ? { anchor: options.anchor } : {}) };
+    if (options.revise === false) return this.change(task, { planDiscussion: [...(task.planDiscussion ?? []), message] });
     const plans = task.plans.map(plan => plan.id === planId ? { ...plan, status: 'changes_requested' as const, feedback, reviewedAt: timestamp, reviewedBy: this.scope.userId } : plan);
     // The comment and revoked review are one versioned write: a concurrent approval
     // or comment can win, but neither can silently overwrite the other.
@@ -566,6 +577,37 @@ export class TaskService implements Dispatcher {
     await this.repo.removeAttention(this.scope, id, 'plan_approval');
     void this.tick().catch(console.error);
     return saved;
+  }
+  /** Sends every collected comment on the RFC to the agent in one planning turn that answers each and revises the RFC. */
+  async requestPlanRevision(id: string, planId: string) {
+    const { task, current } = await this.reviewablePlan(id, planId);
+    const pending = pendingPlanComments(task, planId);
+    if (!pending.length) throw new DomainError('Add a comment on the RFC before requesting a revision.', 409);
+    const timestamp = now();
+    const feedback = pending.map(comment => comment.anchor ? `> ${comment.anchor.quote.replace(/\s+/g, ' ')}\n\n${comment.content}` : comment.content).join('\n\n');
+    const plans = task.plans.map(plan => plan.id === planId ? { ...plan, status: 'changes_requested' as const, feedback, reviewedAt: timestamp, reviewedBy: this.scope.userId } : plan);
+    const saved = await this.change(task, { plans, status: 'todo', phase: 'planning', error: undefined }, `Owner requested a revision of RFC v${current.version} with ${pending.length} ${pending.length === 1 ? 'comment' : 'comments'}.`);
+    await this.repo.removeAttention(this.scope, id, 'plan_approval');
+    void this.tick().catch(console.error);
+    return saved;
+  }
+  private async ownedPendingPlanComment(id: string, messageId: string) {
+    const task = await this.getTask(id);
+    const message = (task.planDiscussion ?? []).find(item => item.id === messageId);
+    if (!message) throw new DomainError('RFC comment not found.', 404);
+    const { task: reviewable } = await this.reviewablePlan(id, message.planId);
+    if (!pendingPlanComments(reviewable, message.planId).some(item => item.id === messageId)) throw new DomainError('This comment has already been answered.', 409);
+    return { task: reviewable, message };
+  }
+  async editPlanComment(id: string, messageId: string, content: string) {
+    const { task, message } = await this.ownedPendingPlanComment(id, messageId);
+    const trimmed = content.trim();
+    if (!trimmed || trimmed.length > 20_000) throw new DomainError('Plan comments must contain between 1 and 20,000 characters.');
+    return this.change(task, { planDiscussion: (task.planDiscussion ?? []).map(item => item.id === message.id ? { ...item, content: trimmed } : item) });
+  }
+  async deletePlanComment(id: string, messageId: string) {
+    const { task, message } = await this.ownedPendingPlanComment(id, messageId);
+    return this.change(task, { planDiscussion: (task.planDiscussion ?? []).filter(item => item.id !== message.id) });
   }
   async retry(id: string, input: RetryTaskInput = {}) {
     if (this.active.has(id)) throw new DomainError('The previous agent has not confirmed shutdown. Inspect and stop it before restarting Muon.');
@@ -1120,7 +1162,7 @@ export class TaskService implements Dispatcher {
     if (!this.runIsCurrent(current, task.runId, signal)) return;
     if (!result.text.trim()) throw new DomainError('The agent returned no final result.');
     if (phase === 'planning') {
-      let revision: { reply: string; content: string } | undefined;
+      let revision: z.infer<typeof planRevisionSchema> | undefined;
       if (hasPendingPlanDiscussion(current)) {
         try { revision = planRevisionSchema.parse(parseJsonResult(result.text)); }
         catch { throw new DomainError('The agent did not return a valid review reply and complete revised RFC. Your comment is saved; retry planning to continue the conversation.'); }
@@ -1140,10 +1182,19 @@ export class TaskService implements Dispatcher {
       const plan = { id: randomUUID(), version: current.plans.length + 1, format: html ? 'html' as const : 'markdown' as const, content, status: 'pending' as const, createdAt: now(), dependencyInputs };
       const saved = await this.mutateTask(task.id, latest => {
         if (!this.runIsCurrent(latest, task.runId, signal)) return undefined;
-        const planDiscussion: PlanDiscussionMessage[] = revision ? [...(latest.planDiscussion ?? []), { id: randomUUID(), role: 'assistant', content: revision.reply, createdAt: plan.createdAt, planId: plan.id }] : latest.planDiscussion ?? [];
+        // Each pending owner comment gets its own reply beside it; a general note stands alone only when nothing was pending.
+        const pendingComments = revision ? pendingPlanComments(latest) : [];
+        const replies = new Map((revision?.replies ?? []).map(reply => [reply.id, reply]));
+        const answers: PlanDiscussionMessage[] = pendingComments.map(comment => {
+          const reply = replies.get(comment.id);
+          return { id: randomUUID(), role: 'assistant', content: reply?.content ?? revision?.reply ?? `Addressed in RFC v${plan.version}.`, createdAt: plan.createdAt, planId: plan.id, replyToIds: [comment.id], kind: reply?.kind ?? 'changed' };
+        });
+        if (revision?.reply && !pendingComments.length) answers.push({ id: randomUUID(), role: 'assistant', content: revision.reply, createdAt: plan.createdAt, planId: plan.id });
+        const planDiscussion: PlanDiscussionMessage[] = [...(latest.planDiscussion ?? []), ...answers];
+        const revisionNote = revision?.reply ?? (revision?.replies?.length ? revision.replies.map(reply => reply.content).join('\n\n') : undefined);
         const answeredIds = new Set((latest.comments ?? []).flatMap(comment => comment.replyToIds ?? []));
         const unanswered = (latest.comments ?? []).filter(comment => comment.role === 'user' && !answeredIds.has(comment.id));
-        const comments = unanswered.length ? [...(latest.comments ?? []), { id: randomUUID(), role: 'assistant' as const, content: (revision?.reply ?? (html ? `RFC v${plan.version} is ready in the Plan tab for your review.` : content)).slice(0, 30_000), createdAt: plan.createdAt, runId: task.runId, replyToIds: unanswered.map(comment => comment.id) }] : latest.comments;
+        const comments = unanswered.length ? [...(latest.comments ?? []), { id: randomUUID(), role: 'assistant' as const, content: (revisionNote ?? (html ? `RFC v${plan.version} is ready in the Plan tab for your review.` : content)).slice(0, 30_000), createdAt: plan.createdAt, runId: task.runId, replyToIds: unanswered.map(comment => comment.id) }] : latest.comments;
         return { patch: { plans: [...latest.plans, plan], planDiscussion, comments, phase: 'plan_review', status: 'in_review', runId: undefined, sessionId: result.sessionId ?? latest.sessionId }, activity: `RFC v${plan.version} is ready for owner review.` };
       });
       if (saved.status === 'in_review' && !saved.runId) await this.notify(saved, 'plan_approval', 'Review and approve the RFC to start implementation.');

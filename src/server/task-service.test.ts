@@ -534,6 +534,46 @@ describe('TaskService workflow', () => {
     expect((await f.service.getTask(task.id)).planDiscussion).toEqual(third.planDiscussion);
   });
 
+  it('collects anchored RFC comments, revises them in one turn, and pairs each reply with its comment', async () => {
+    const f = await fixture();
+    const task = await f.service.createTask({ title: 'Reviewed proposal' });
+    await dispatch(f);
+    (await waitForCall(f, 0, 'planning')).finish('# RFC v1\n\n## Storage\n\nUse SQLite.\n\n## API\n\nExpose REST.');
+    const first = await waitForState(f, task.id, 'in_review', 'plan_review');
+    const planId = first.plans[0].id;
+    const anchor = { quote: 'Use SQLite.', prefix: 'Storage ', suffix: ' API', start: 20 };
+    const collected = await f.service.commentOnPlan(task.id, planId, 'Why SQLite and not Postgres?', { anchor, revise: false });
+    // Collected comments do not request a revision on their own: the RFC still waits for approval.
+    expect(collected).toMatchObject({ status: 'in_review', phase: 'plan_review', plans: [{ status: 'pending' }] });
+    expect(collected.planDiscussion).toMatchObject([{ role: 'user', content: 'Why SQLite and not Postgres?', anchor, planId }]);
+    const second = await f.service.commentOnPlan(task.id, planId, 'Drop the REST section.', { revise: false });
+    const [question, instruction] = second.planDiscussion!;
+    await expect(f.service.editPlanComment(task.id, 'missing', 'x')).rejects.toMatchObject({ status: 404 });
+    expect((await f.service.editPlanComment(task.id, instruction.id, 'Remove the REST section entirely.')).planDiscussion?.[1].content).toBe('Remove the REST section entirely.');
+    const extra = await f.service.commentOnPlan(task.id, planId, 'Never mind this one.', { revise: false });
+    expect((await f.service.deletePlanComment(task.id, extra.planDiscussion!.at(-1)!.id)).planDiscussion).toHaveLength(2);
+    await expect(f.service.requestPlanRevision(task.id, 'missing')).rejects.toMatchObject({ status: 409 });
+    const requested = await f.service.requestPlanRevision(task.id, planId);
+    expect(requested).toMatchObject({ status: 'todo', phase: 'planning', plans: [{ status: 'changes_requested' }] });
+    expect(requested.plans[0].feedback).toContain('> Use SQLite.');
+    expect(requested.plans[0].feedback).toContain('Remove the REST section entirely.');
+    expect(f.claude.calls).toHaveLength(1);
+    const revision = await waitForCall(f, 1, 'planning');
+    expect(revision.request.prompt).toContain('"selectedText":"Use SQLite."');
+    expect(revision.request.prompt).toContain(question.id);
+    await expect(f.service.editPlanComment(task.id, question.id, 'Too late')).rejects.toMatchObject({ status: 409 });
+    revision.finish(JSON.stringify({ replies: [{ id: question.id, kind: 'answered', content: 'SQLite needs no server.' }, { id: instruction.id, kind: 'changed', content: 'Removed the REST section.' }], content: '# RFC v2\n\n## Storage\n\nUse SQLite.' }));
+    const reviewed = await waitForState(f, task.id, 'in_review', 'plan_review');
+    expect(reviewed.plans.map(plan => [plan.version, plan.status])).toEqual([[1, 'changes_requested'], [2, 'pending']]);
+    expect(reviewed.planDiscussion?.slice(2)).toMatchObject([
+      { role: 'assistant', content: 'SQLite needs no server.', replyToIds: [question.id], kind: 'answered', planId: reviewed.plans[1].id },
+      { role: 'assistant', content: 'Removed the REST section.', replyToIds: [instruction.id], kind: 'changed', planId: reviewed.plans[1].id },
+    ]);
+    // Answered comments cannot be edited or deleted, and nothing is pending on the new version.
+    await expect(f.service.deletePlanComment(task.id, question.id)).rejects.toMatchObject({ status: 409 });
+    await expect(f.service.requestPlanRevision(task.id, reviewed.plans[1].id)).rejects.toMatchObject({ status: 409 });
+  });
+
   it('retains an unanswered review comment on malformed agent output and retries with the same context', async () => {
     const f = await fixture();
     const task = await f.service.createTask({ title: 'Recover review discussion' });
@@ -553,7 +593,7 @@ describe('TaskService workflow', () => {
     const retry = await waitForCall(f, 2, 'planning');
     expect(retry.request.prompt).toContain('Explain the focus behavior.');
     expect(retry.request.prompt).toContain('Use a native control.');
-    expect(retry.request.prompt).toContain('exactly {"reply"');
+    expect(retry.request.prompt).toContain('exactly {"replies"');
     retry.finish(JSON.stringify({ reply: 'Focus stays on the triggering control after the value changes.', content: '# Revised RFC\nUse a native control and preserve focus after changes.' }));
     const recovered = await waitForState(f, task.id, 'in_review', 'plan_review');
     expect(recovered.planDiscussion?.[0]).toEqual(failed.planDiscussion?.[0]);

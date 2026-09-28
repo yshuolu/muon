@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, CheckCheck, ChevronRight, Code2, File, FileCheck2, FileText, GitBranch, Layers3, Pencil, Plus, ShieldCheck, X } from 'lucide-react';
 import type { AppSnapshot, Asset, Priority, Provider, Task } from '../../shared/types';
 import { PHASE_LABELS, PRIORITY_LABELS, STATUS_LABELS } from '../../shared/types';
@@ -15,9 +15,10 @@ import { TaskRecovery } from './task-recovery';
 import { VerificationEvidence } from './verification-evidence';
 import { queueReasons } from '../lib/task-state';
 import { displayedPlan } from '../lib/plan-review';
-import { PlanDiscussion } from './plan-discussion';
+import { PlanComments, planComments } from './plan-comments';
+import { rehypeCommentMarks } from '../lib/document-comments';
 import { AssetsPanel } from './assets-panel';
-import { AssetReferenceList } from './asset-preview';
+import { AssetMarkdown, AssetReferenceList, type RehypeExtras } from './asset-preview';
 import { taskAssetIds } from '../../shared/asset-references';
 import { TaskComments } from './task-comments';
 
@@ -54,6 +55,14 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
   const [planVersion, setPlanVersion] = useState<string | null>(cachedView.current?.planVersion ?? null);
   const latestPlan = task.plans.at(-1);
   const plan = displayedPlan(task.plans, planVersion);
+  const planDocument = useRef<HTMLDivElement>(null);
+  // Anchored RFC comments on the viewed version become highlights, keyed on the anchors so the RFC is not re-parsed on every poll.
+  const highlightKey = JSON.stringify(plan ? planComments(task).comments.filter(comment => comment.planId === plan.id && comment.anchor).map(comment => [comment.id, comment.status, comment.anchor]) : []);
+  const planHighlights = useMemo<RehypeExtras | undefined>(() => {
+    const anchored = plan ? planComments(task).comments.filter(comment => comment.planId === plan.id && comment.anchor).map(comment => ({ id: comment.id, status: comment.status, anchor: comment.anchor })) : [];
+    return anchored.length ? [[rehypeCommentMarks, { comments: anchored }]] : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey]);
   const viewPlanVersion = (id: string) => {
     setPlanVersion(id === latestPlan?.id ? null : id);
     if (narrowPlan) setPlanPane('document');
@@ -161,12 +170,14 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
           {plan.feedback && !task.planDiscussion?.some(message => message.role === 'user' && message.planId === plan.id) && <div className="plan-feedback"><strong>Your review comment</strong><p>{plan.feedback}</p></div>}
           <PlanDependencies plan={plan} tasks={snapshot.tasks} onSelect={onSelect} />
           {plan.format === 'html' && <AssetReferenceList text={plan.content} />}
-          <div className="plan-document">{plan.format === 'html' ? <iframe title={`RFC version ${plan.version}`} sandbox="" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">${plan.content}`} className="plan-html" /> : <Markdown>{plan.content}</Markdown>}</div>
+          <div className="plan-document" ref={planDocument}>{plan.format === 'html' ? <iframe title={`RFC version ${plan.version}`} sandbox="" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">${plan.content}`} className="plan-html" /> : <AssetMarkdown rehypeExtras={planHighlights}>{plan.content}</AssetMarkdown>}</div>
           </div></div>
-          <div className="plan-discussion-slot" hidden={narrowPlan && planPane !== 'discussion'}><PlanDiscussion task={task} viewedPlan={plan} userId={snapshot.scope.userId} dispatcherEnabled={snapshot.settings.dispatcherEnabled} active={tab === 'plan' && (!narrowPlan || planPane === 'discussion')} busy={busy} error={error} onComment={async (planId, content) => {
-            const updated = await mutateTask(`/tasks/${task.id}/plan-discussion`, 'POST', { planId, content });
-            return updated?.planDiscussion?.findLast(message => message.role === 'user' && message.planId === planId && message.content === content)?.id ?? false;
-          }} onApprove={planId => mutate(`/tasks/${task.id}/approve`, 'POST', { planId })} onViewLatest={() => setPlanVersion(null)} onViewVersion={viewPlanVersion} /></div>
+          <div className="plan-discussion-slot" hidden={narrowPlan && planPane !== 'discussion'}><PlanComments task={task} viewedPlan={plan} userId={snapshot.scope.userId} dispatcherEnabled={snapshot.settings.dispatcherEnabled} active={tab === 'plan'} busy={busy} error={error} containerRef={planDocument}
+            onComment={(planId, content, anchor) => mutate(`/tasks/${task.id}/plan-discussion`, 'POST', { planId, content, revise: false, ...(anchor ? { anchor } : {}) })}
+            onRevise={planId => mutate(`/tasks/${task.id}/plan-discussion/revise`, 'POST', { planId })}
+            onEditComment={(messageId, content) => mutate(`/tasks/${task.id}/plan-discussion/${messageId}`, 'PATCH', { content })}
+            onDeleteComment={messageId => mutate(`/tasks/${task.id}/plan-discussion/${messageId}`, 'DELETE', {})}
+            onApprove={planId => mutate(`/tasks/${task.id}/approve`, 'POST', { planId })} onViewLatest={() => setPlanVersion(null)} onViewVersion={viewPlanVersion} /></div>
           </div>
         </div>}
         {!isGroup && <div className="task-comments-tab" hidden={tab !== 'comments'}><TaskComments task={task} userId={snapshot.scope.userId} dispatcherEnabled={snapshot.settings.dispatcherEnabled} active={tab === 'comments'} busy={busy} error={error} onComment={async input => {

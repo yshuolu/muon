@@ -43,6 +43,11 @@ export interface PlanDiscussionMessage {
   /** The RFC being discussed by the owner, or the new RFC returned with an agent reply. */
   planId: string;
   userId?: string;
+  /** The RFC passage an owner comment points at; absent for a comment on the whole RFC. */
+  anchor?: AssetCommentAnchor;
+  /** For an agent reply: the owner comments it answers, and how it treated them. */
+  replyToIds?: string[];
+  kind?: 'answered' | 'changed' | 'declined';
 }
 export interface TaskComment {
   id: string; role: 'user' | 'assistant'; content: string; createdAt: string;

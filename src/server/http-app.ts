@@ -9,7 +9,7 @@ import type { ProjectResolver } from './project-registry';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
-  listTasksQuerySchema, planCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, createNoteSchema, importAssetSchema, updatePlanningChatSchema,
+  listTasksQuerySchema, planCommentSchema, updatePlanCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, createNoteSchema, importAssetSchema, updatePlanningChatSchema,
   createProjectSchema, updateProjectSchema, createAssetCommentSchema, updateAssetCommentSchema,
 } from '../shared/api-contract';
 
@@ -214,7 +214,22 @@ function projectRoutes(projects: ProjectResolver) {
   app.post('/tasks/:id/plan-discussion', async c => {
     const service = c.get('service');
     const body = planCommentSchema.parse(await c.req.json());
-    return c.json(await service.commentOnPlan((await taskByReference(service, c.req.param('id'))).id, body.planId, body.content));
+    return c.json(await service.commentOnPlan((await taskByReference(service, c.req.param('id'))).id, body.planId, body.content, { anchor: body.anchor, revise: body.revise }));
+  });
+  app.post('/tasks/:id/plan-discussion/revise', async c => {
+    const service = c.get('service');
+    const body = reviewSchema.parse(await c.req.json());
+    return c.json(await service.requestPlanRevision((await taskByReference(service, c.req.param('id'))).id, body.planId));
+  });
+  app.patch('/tasks/:id/plan-discussion/:messageId', async c => {
+    const service = c.get('service');
+    const body = updatePlanCommentSchema.parse(await c.req.json());
+    return c.json(await service.editPlanComment((await taskByReference(service, c.req.param('id'))).id, c.req.param('messageId'), body.content));
+  });
+  app.delete('/tasks/:id/plan-discussion/:messageId', async c => {
+    const service = c.get('service');
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(await service.deletePlanComment((await taskByReference(service, c.req.param('id'))).id, c.req.param('messageId')));
   });
   app.post('/tasks/:id/comments', async c => {
     const service = c.get('service');

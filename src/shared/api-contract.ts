@@ -46,7 +46,9 @@ export const updateProjectSchema = z.strictObject({
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });
-export const planCommentSchema = reviewSchema.extend({ content: z.string().trim().min(1).max(20_000) });
+/** An RFC comment: optionally anchored to a passage; `revise: false` collects it for a later batched revision request. */
+export const planCommentSchema = reviewSchema.extend({ content: z.string().trim().min(1).max(20_000), anchor: assetCommentAnchorSchema.optional(), revise: z.boolean().optional() });
+export const updatePlanCommentSchema = z.strictObject({ content: z.string().trim().min(1).max(20_000) });
 export const taskCommentSchema = z.strictObject({
   content: z.string().trim().min(1).max(20_000), requestId: z.uuid(), mode: z.enum(['message', 'replan']).optional(),
 });

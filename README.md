@@ -39,7 +39,7 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 1. Create a task yourself or ask the chief of staff to create and prioritize work.
 2. The dispatcher selects eligible Todo tasks by priority, then creation time, up to the configured system limit. The chief consumes one slot too.
 3. Muon creates an isolated Git worktree. The selected agent inspects the code with read-only planning permissions and returns an RFC.
-4. The task pauses in **Needs your approval** (the RFC is written and waits for you) and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
+4. The task pauses in **Needs your approval** (the RFC is written and waits for you) and releases its agent slot. **Attention** points you to the RFC. Review it the way you review a Library document: the RFC opens with an outline of its sections, and selecting a passage offers **Comment**, while **On RFC** comments on the whole plan. Comments collect in the sidebar, where you can edit or delete them until they are sent; **Revise RFC · N comments** sends them all in one planning turn. The agent answers each comment beside it (Answered, Changed, or Declined) and returns the next RFC version, keeping every earlier version and its comments. Repeat as needed, then approve the exact latest revision. Approval waits while comments are unsent.
 5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
 6. Passing verification creates a **Done** task with test steps, final summary, retained output files and screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention; their retained files remain available.
 
@@ -175,6 +175,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Document review validation](docs/document-review-validation.md)
 - [Library access, @ mentions, and thinking effort validation](docs/library-mentions-validation.md)
 - [Task scope editing validation](docs/task-scope-edit-validation.md)
+- [RFC review validation](docs/rfc-review-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh

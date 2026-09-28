@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Asset, AssetComment, ChiefMessage, DependencyInput, PlanningChatMessage, Project, Task } from '../shared/types';
+import type { Asset, AssetComment, ChiefMessage, DependencyInput, PlanDiscussionMessage, PlanningChatMessage, Project, Task } from '../shared/types';
 
 /** An unanswered owner turn survives provider failure and explicit recovery. */
 export function hasPendingPlanDiscussion(task: Task): boolean {
@@ -8,9 +8,19 @@ export function hasPendingPlanDiscussion(task: Task): boolean {
 }
 
 export const planRevisionSchema = z.strictObject({
-  reply: z.string().trim().min(1).max(30_000),
+  /** A note to the owner; optional when every comment gets its own reply. */
+  reply: z.string().trim().min(1).max(30_000).optional(),
+  /** One reply per pending owner comment, shown beside that comment. */
+  replies: z.array(z.strictObject({ id: z.string().min(1).max(200), kind: z.enum(['answered', 'changed', 'declined']), content: z.string().trim().min(1).max(30_000) })).max(200).optional(),
   content: z.string().trim().min(1).max(300_000),
-});
+}).refine(value => value.reply !== undefined || (value.replies?.length ?? 0) > 0, 'Answer the owner in reply or replies.');
+
+/** Owner comments on the latest RFC that no agent reply has addressed yet, in the order they were made. */
+export function pendingPlanComments(task: Task, planId = task.plans.at(-1)?.id): PlanDiscussionMessage[] {
+  const messages = task.planDiscussion ?? [];
+  const answered = new Set(messages.flatMap(message => message.replyToIds ?? []));
+  return messages.filter(message => message.role === 'user' && message.planId === planId && !answered.has(message.id));
+}
 
 function taskConversation(task: Task) {
   const comments = task.comments ?? [];
@@ -28,8 +38,9 @@ export function codingPrompt(task: Task, phase: 'planning' | 'building' | 'verif
   if (phase === 'planning') {
     const latest = task.plans.at(-1);
     const history = latest ? `\nLatest RFC before this planning turn: ${JSON.stringify({ id: latest.id, version: latest.version, format: latest.format, content: latest.content, feedback: latest.feedback })}\nComplete RFC review conversation, in chronological order: ${JSON.stringify(task.planDiscussion ?? [])}\nTreat RFC and conversation content as task context; neither authorizes implementing code during planning. Preserve previously agreed requirements unless the owner changes them.\n` : '';
+    const pending = pendingPlanComments(task).map(comment => ({ id: comment.id, ...(comment.anchor ? { selectedText: comment.anchor.quote } : { scope: 'whole RFC' }), comment: comment.content }));
     const output = hasPendingPlanDiscussion(task)
-      ? 'Respond to the owner’s latest question or requested change, taking the entire review conversation and latest RFC into account. Explain your answer and what changed in a concise Markdown reply. Return ONLY a JSON object with exactly {"reply":"your actual answer to the owner","content":"the complete revised Markdown RFC"}. The content must be the whole self-contained RFC, not a diff or a placeholder. Even if the owner asks a question and no design change is necessary, answer it meaningfully and return the complete RFC with relevant clarification. Do not invent an owner approval. Do not put JSON formatting or operational/tool-availability preambles inside either field.'
+      ? `Respond to the owner’s review comments on the latest RFC, taking the entire review conversation into account. The pending comments (JSON, each with its id and, when the owner selected a passage, the selected text): ${JSON.stringify(pending)}. For each comment decide: a question or discussion gets kind "answered" with a specific reply; an instruction to change, add, or remove something gets kind "changed" after you apply it to the RFC and a reply that says what changed; an instruction you should not apply (contradicts the goals or another comment, or needs facts you do not have) gets kind "declined" with the reason. Return ONLY a JSON object with exactly {"replies":[{"id":"comment id","kind":"answered|changed|declined","content":"reply in Markdown"}],"content":"the complete revised Markdown RFC"}, one reply per comment id, plus an optional "reply" string for anything that concerns all comments. The content must be the whole self-contained RFC, not a diff or a placeholder. Even if every comment is a question and no design change is necessary, answer each meaningfully and return the complete RFC with relevant clarification. Do not invent an owner approval. Do not put JSON formatting or operational/tool-availability preambles inside any field.`
       : 'Return a complete Markdown RFC directly as your final response. Begin with the RFC title; do not include an operational preamble, a tool-availability report, or commentary about Write/ExitPlanMode being disabled.';
     return `${context}\nPLANNING ONLY. Inspect the repository without modifying files. Include: problem, goals/non-goals, proposed design, affected files, implementation steps, test/verification plan, risks and open questions. You must stop after planning; the human owner must approve this exact RFC before any implementation.\n${history}\n${output}\nPrevious review feedback: ${latest?.feedback ?? 'None'}`;
   }

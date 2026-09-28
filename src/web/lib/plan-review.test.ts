@@ -42,6 +42,9 @@ describe('plan conversation review state', () => {
     const state = planReviewState(review, second.id, 'owner', { hasDraft: true });
     expect(state.canComment).toBe(true);
     expect(state.canApprove).toBe(false);
+    const collected = planReviewState(review, second.id, 'owner', { hasPending: true });
+    expect(collected.canComment).toBe(true);
+    expect(collected.canApprove).toBe(false);
   });
   it('waits for pending or failed task replies before permitting RFC decisions', () => {
     for (const status of ['queued', 'interrupting', 'responding', 'failed'] as const) {

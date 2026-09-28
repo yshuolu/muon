@@ -96,7 +96,10 @@ Use Markdown references directly in descriptions, comments, plans, results, or e
 | `POST /tasks/:task/assets/import` | `{ "path": "report.md" }` | 201 retained `Asset`, with a reference appended to the task result and a retained evidence note |
 | `POST /tasks/:task/cancel` | `{}` | 200 canceled `Task` |
 | `POST /tasks/:task/approve` | `{ "planId": "…" }` | 200 `Task` with owner-approved plan queued for building |
-| `POST /tasks/:task/plan-discussion` | `{ "planId": "…", "content": "…" }` | 200 `Task` with the owner comment persisted and revised planning queued |
+| `POST /tasks/:task/plan-discussion` | `{ "planId": "…", "content": "…", "anchor"?: { quote, prefix, suffix, start }, "revise"?: false }` | 200 `Task` with the owner comment persisted; by default revised planning is queued, with `revise: false` the comment waits for a batched revision request |
+| `POST /tasks/:task/plan-discussion/revise` | `{ "planId": "…" }` | 200 `Task` with every pending comment on that RFC sent to the agent in one planning turn (409 when none is pending) |
+| `PATCH /tasks/:task/plan-discussion/:messageId` | `{ "content": "…" }` | 200 `Task`; edits a pending owner comment |
+| `DELETE /tasks/:task/plan-discussion/:messageId` | `{}` | 200 `Task`; removes a pending owner comment |
 | `POST /tasks/:task/comments` | `{ "requestId": "UUID", "content": "…", "mode"?: "message" \| "replan" }` | 200 `Task` with the follow-up persisted for delivery |
 | `POST /tasks/:task/comments/retry` | `{}` | 200 `Task` with failed comment delivery queued again |
 | `POST /tasks/:task/request-changes` | `{ "planId": "…", "feedback": "…" }` | 200 `Task`; compatibility alias that posts feedback to the RFC discussion |

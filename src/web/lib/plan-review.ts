@@ -4,7 +4,7 @@ export function displayedPlan(plans: Plan[], selectedId: string | null) {
   return plans.find(plan => plan.id === selectedId) ?? plans.at(-1);
 }
 
-export function planReviewState(task: Task, viewedPlanId: string, userId: string, options: { busy?: boolean; submittedPlanId?: string | null; hasDraft?: boolean } = {}) {
+export function planReviewState(task: Task, viewedPlanId: string, userId: string, options: { busy?: boolean; submittedPlanId?: string | null; hasDraft?: boolean; hasPending?: boolean } = {}) {
   const latest = task.plans.at(-1);
   const isLatest = latest?.id === viewedPlanId;
   const isOwner = task.ownerUserId === userId;
@@ -16,6 +16,7 @@ export function planReviewState(task: Task, viewedPlanId: string, userId: string
     latest, isLatest, isOwner, discussing, revising: revising || locallyQueued,
     queued: task.status === 'todo' && revising || locallyQueued,
     canComment: Boolean(isOwner && isLatest && reviewable && !options.busy),
-    canApprove: Boolean(isOwner && isLatest && reviewable && !options.busy && !options.hasDraft),
+    // Unsent comments and an open draft would be silently discarded by an approval.
+    canApprove: Boolean(isOwner && isLatest && reviewable && !options.busy && !options.hasDraft && !options.hasPending),
   };
 }

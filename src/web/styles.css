@@ -1343,3 +1343,17 @@ mark.doc-comment.pulse { background: color-mix(in oklch, var(--warning) 60%, tra
 .mention-menu li.active { background: var(--accent); }
 .mention-menu li svg { flex-shrink: 0; color: var(--muted-foreground); }
 .mention-empty { padding: 8px 10px; color: var(--muted-foreground); }
+
+/* RFC review: comments beside the plan, rendered through the Library document reader */
+.plan-document-pane .plan-content { max-width: 1100px; }
+.plan-document .asset-document-layout { padding: 0; }
+.plan-document .asset-markdown { max-width: none; margin: 0; }
+.plan-document .asset-outline { top: 0; }
+.plan-discussion-heading .button { margin-left: auto; flex-shrink: 0; }
+.plan-comments-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 18px; }
+.plan-comments-body .doc-comments-resolve { padding-bottom: 12px; }
+.plan-comments-body .plan-discussion-historical { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; }
+.plan-comment-version { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.plan-version-link { align-self: flex-start; font-size: 11px; color: var(--muted-foreground); text-decoration: underline; text-underline-offset: 3px; }
+.plan-agent-note { cursor: default; }
+.plan-agent-note .markdown { font-size: 13px; line-height: 1.6; }
