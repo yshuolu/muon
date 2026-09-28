@@ -437,7 +437,8 @@ describe('TaskService workflow', () => {
     expect(tasks).toHaveLength(2);
     const parent = tasks.find(task => task.title === 'Feature outcome')!;
     const child = tasks.find(task => task.title === 'Implement the feature')!;
-    expect(parent).toMatchObject({ kind: 'group', status: 'todo', phase: 'idle', parentId: null });
+    // The group is in progress once its child has started; before that it stays Todo.
+    expect(parent).toMatchObject({ kind: 'group', status: child.status === 'todo' && child.phase === 'idle' ? 'todo' : 'in_progress', phase: 'idle', parentId: null });
     expect(child.parentId).toBe(parent.id);
     const planning = await waitForCall(f, 1, 'planning');
     expect(planning.request.cwd).toContain(child.id);
@@ -962,7 +963,7 @@ describe('TaskService workflow', () => {
     await f.service.tick();
     expect(await f.service.getTask(group.id)).toMatchObject({ status: 'done', phase: 'complete' });
     await f.service.createTask({ title: 'Next piece', status: 'backlog', parentId: group.id });
-    expect(await f.service.getTask(group.id)).toMatchObject({ status: 'todo', phase: 'idle', summary: expect.stringContaining('1 of 2 subtasks complete') });
+    expect(await f.service.getTask(group.id)).toMatchObject({ status: 'in_progress', phase: 'idle', summary: expect.stringContaining('1 of 2 subtasks complete') });
     expect((await f.service.getTask(group.id)).completedAt).toBeUndefined();
     expect(await f.service.getTask(first.id)).toEqual(completed);
     expect((await f.repo.attention(scope)).some(item => item.taskId === group.id && item.kind === 'completed')).toBe(false);

@@ -13,6 +13,7 @@ export function SettingsDialog({ snapshot, open, onOpenChange, onSaved, onArchiv
 }) {
   const [name, setName] = useState(snapshot.project.name);
   const [repository, setRepository] = useState(snapshot.project.repositoryPath);
+  const [identifier, setIdentifier] = useState(snapshot.project.identifier);
   const [limit, setLimit] = useState(snapshot.settings.maxConcurrentAgents);
   const [provider, setProvider] = useState<Provider>(snapshot.settings.defaultProvider);
   const [enabled, setEnabled] = useState(snapshot.settings.dispatcherEnabled);
@@ -33,7 +34,7 @@ export function SettingsDialog({ snapshot, open, onOpenChange, onSaved, onArchiv
   async function save(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError(null);
     try {
-      await api(`/projects/${encodeURIComponent(snapshot.project.id)}`, 'PATCH', { name: name.trim(), repositoryPath: repository.trim() });
+      await api(`/projects/${encodeURIComponent(snapshot.project.id)}`, 'PATCH', { name: name.trim(), repositoryPath: repository.trim(), ...(identifier.trim().toUpperCase() !== snapshot.project.identifier ? { identifier: identifier.trim().toUpperCase() } : {}) });
       await api('/settings', 'PATCH', { maxConcurrentAgents: limit, defaultProvider: provider, dispatcherEnabled: enabled });
       onSaved(); onOpenChange(false);
     }
@@ -56,7 +57,8 @@ export function SettingsDialog({ snapshot, open, onOpenChange, onSaved, onArchiv
     <form onSubmit={save} className="settings-form">
       <div className="settings-section-label"><FolderGit2 size={14} />Project</div>
       <label>Project name<input value={name} onChange={e => setName(e.target.value)} required maxLength={100} /></label>
-      <label>Repository path<input value={repository} onChange={e => setRepository(e.target.value)} placeholder="/Users/you/projects/your-repository" /><span className="field-hint">Each coding task works in its own Git worktree. Task identifiers use the {snapshot.project.identifier} prefix.</span></label>
+      <label>Repository path<input value={repository} onChange={e => setRepository(e.target.value)} placeholder="/Users/you/projects/your-repository" /><span className="field-hint">Each coding task works in its own Git worktree.</span></label>
+      <label>Task prefix<input value={identifier} onChange={e => setIdentifier(e.target.value.toUpperCase())} required maxLength={5} pattern="[A-Za-z][A-Za-z0-9]{1,4}" title="2 to 5 letters or digits, starting with a letter" /><span className="field-hint">Task identifiers look like {identifier.trim().toUpperCase() || snapshot.project.identifier}-12. Changing the prefix renames every existing task in this project.</span></label>
       <div className="settings-section-label"><Terminal size={14} />Agent runtime</div>
       <div className="provider-statuses">{(['claude', 'codex'] as const).map(id => {
         const config = snapshot.runtime.config?.[id] ?? (id === 'claude' ? { model: 'claude-fable-5-1[1m]', thinking: 'max' } : { model: 'gpt-6-astra', thinking: 'ultra' });

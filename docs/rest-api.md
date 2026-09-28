@@ -80,7 +80,7 @@ Use Markdown references directly in descriptions, comments, plans, results, or e
 | Method and path | Body | Success response |
 | --- | --- | --- |
 | `POST /projects` | `{ "name": "…", "repositoryPath": "/abs/folder", "identifier"?: "ABC", "initializeRepository"?: true }` | 201 `Project` with its coordinator started (workspace route) |
-| `PATCH /projects/:project` | `{ "name"?: "…", "repositoryPath"?: "…" }` | 200 `Project`; repository changes use the same guards as `/settings` |
+| `PATCH /projects/:project` | `{ "name"?: "…", "repositoryPath"?: "…", "identifier"?: "ABC" }` | 200 `Project`; repository changes use the same guards as `/settings`; a new `identifier` (2 to 5 letters or digits, unique across the workspace) renames every existing task identifier in the project, so old `PREFIX-n` references stop resolving |
 | `POST /projects/:project/archive` | `{}` | 200 archived `Project`; 409 while agents, a chief request, follow-ups, or in-progress tasks are active |
 | `POST /projects/:project/restore` | `{}` | 200 restored `Project` with its coordinator started again |
 | `POST /tasks` | `CreateTaskRequest` | 201 `Task` |

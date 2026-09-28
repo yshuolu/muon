@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, DocumentReview, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, DocumentReview, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, Project, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
 import { assetPreviewKind } from '../shared/asset-kinds';
 import { AgentProcessUnreapedError, type AgentAdapter, type ScratchFile, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
@@ -321,12 +321,14 @@ export class TaskService implements Dispatcher {
       for (const relatedId of [...children.map(child => child.id), ...task.blockedByIds]) await reconcile(relatedId);
       const currentChildren = children.map(child => byId.get(child.id)!);
       const complete = currentChildren.length > 0 && currentChildren.every(child => child.status === 'done') && task.blockedByIds.every(blockerId => byId.get(blockerId)?.status === 'done');
-      const status = complete ? 'done' : task.status === 'done' ? 'todo' : task.status;
+      // A group is in progress as soon as any subtask has started (running, awaiting approval, blocked, or done).
+      const started = currentChildren.some(child => child.status === 'done' || child.status === 'in_progress' || child.status === 'in_review' || child.status === 'blocked' || child.phase !== 'idle');
+      const status = complete ? 'done' : started ? 'in_progress' : task.status === 'backlog' ? 'backlog' : 'todo';
       const summary = `${currentChildren.filter(child => child.status === 'done').length} of ${currentChildren.length} subtasks complete.${currentChildren.length ? '\n\n' + currentChildren.map(child => `${child.identifier}: ${child.title} — ${child.status}${child.summary ? '\n' + child.summary : ''}`).join('\n\n') : ''}`;
       if (task.status === status && task.summary === summary) return;
       let saved: Task;
       try {
-        saved = await this.change(task, { status, phase: complete ? 'complete' : 'idle', summary, completedAt: complete ? task.completedAt ?? now() : undefined }, task.status === status ? undefined : complete ? 'All subtasks completed. Task group completed.' : 'New subtask work reopened this task group.');
+        saved = await this.change(task, { status, phase: complete ? 'complete' : 'idle', summary, completedAt: complete ? task.completedAt ?? now() : undefined }, task.status === status ? undefined : complete ? 'All subtasks completed. Task group completed.' : status === 'in_progress' ? 'Subtask work is underway.' : 'New subtask work reopened this task group.');
       } catch (error) {
         if (!(error instanceof ConflictError)) throw error;
         byId.set(id, await this.getTask(id));
@@ -610,6 +612,15 @@ export class TaskService implements Dispatcher {
       this.mutatingRepository = false;
       throw error;
     }
+  }
+  /** Changes the task prefix and renames every task identifier in this project; uniqueness across projects is the registry's job. */
+  async renameIdentifier(identifier: string): Promise<Project> {
+    const project = await this.repo.project(this.scope);
+    if (project.identifier === identifier) return project;
+    const renamed = { ...project, identifier };
+    await this.repo.saveProject(this.scope, renamed);
+    await this.repo.renameTaskIdentifiers(this.scope, project.identifier, identifier);
+    return renamed;
   }
   async updateSettings(input: Partial<Settings> & { repositoryPath?: string; projectName?: string }) {
     // Serialize settings writes with chief submission so a queued request keeps its selected model.

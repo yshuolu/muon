@@ -13,6 +13,8 @@ export interface ProjectResolver {
   /** Project record by ID or identifier, including archived projects. */
   project(reference: string): Promise<Project>;
   create(input: CreateProjectRequest): Promise<Project>;
+  /** Changes a project's task prefix and renames its existing task identifiers. */
+  renameIdentifier(reference: string, identifier: string): Promise<Project>;
   archive(reference: string): Promise<Project>;
   restore(reference: string): Promise<Project>;
 }
@@ -156,6 +158,20 @@ export class ProjectRegistry implements ProjectResolver {
     });
   }
 
+  renameIdentifier(reference: string, identifier: string) {
+    return this.exclusive(async () => {
+      const project = await this.project(reference);
+      const next = identifier.trim().toUpperCase();
+      if (!IDENTIFIER.test(next)) throw new DomainError('Identifiers are 2 to 5 letters or digits, starting with a letter.');
+      const service = this.services.get(project.id);
+      if (!service) throw new DomainError('Restore the project before changing its task prefix.', 409);
+      if ([...this.records.values()].some(other => other.id !== project.id && other.identifier.toUpperCase() === next)) throw new DomainError(`Identifier ${next} is already used by another project.`, 409);
+      const renamed = await service.renameIdentifier(next);
+      this.records.set(project.id, renamed);
+      return renamed;
+    });
+  }
+
   archive(reference: string) {
     return this.exclusive(async () => {
       const project = await this.project(reference);
@@ -208,6 +224,7 @@ export function singleProjectResolver(service: TaskService): ProjectResolver {
       return service;
     },
     project: matches,
+    renameIdentifier: async (reference, identifier) => { await matches(reference); return service.renameIdentifier(identifier.trim().toUpperCase()); },
     create: unsupported, archive: unsupported, restore: unsupported,
   };
 }

@@ -12,6 +12,8 @@ export interface Repository {
   task(scope: Scope, id: string): Promise<Task | undefined>;
   insertTask(scope: Scope, task: Task): Promise<Task>;
   saveTask(scope: Scope, task: Task, expectedVersion: number): Promise<Task>;
+  /** Rewrites `PREVIOUS-n` identifiers to `NEXT-n` for every task in the project; returns how many changed. */
+  renameTaskIdentifiers(scope: Scope, previous: string, next: string): Promise<number>;
   assets(scope: Scope): Promise<Asset[]>;
   asset(scope: Scope, id: string): Promise<Asset | undefined>;
   insertAsset(scope: Scope, asset: Asset): Promise<Asset>;

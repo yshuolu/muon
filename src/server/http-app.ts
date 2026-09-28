@@ -317,6 +317,7 @@ export function createHttpApp(projects: ProjectResolver, artifacts: ArtifactStor
   app.patch('/api/projects/:project', async c => {
     const input = updateProjectSchema.parse(await c.req.json());
     const service = projects.resolve(c.req.param('project'));
+    if (input.identifier !== undefined) await projects.renameIdentifier(c.req.param('project'), input.identifier);
     await service.updateSettings({ ...(input.name !== undefined ? { projectName: input.name } : {}), ...(input.repositoryPath !== undefined ? { repositoryPath: input.repositoryPath } : {}) });
     return c.json((await service.snapshot()).project);
   });

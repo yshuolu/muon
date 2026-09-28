@@ -153,6 +153,24 @@ export class SqliteRepository implements Repository {
     if (result.changes !== 1) throw new ConflictError();
     return saved;
   }
+  async renameTaskIdentifiers(scope: Scope, previous: string, next: string) {
+    const prefix = `${previous}-`;
+    const rows = this.db.prepare('SELECT id, identifier, payload FROM tasks WHERE workspace_id=? AND project_id=?').all(...this.keys(scope)) as Array<{ id: string; identifier: string; payload: string }>;
+    const update = this.db.prepare('UPDATE tasks SET identifier=?, payload=? WHERE workspace_id=? AND project_id=? AND id=?');
+    let changed = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of rows) {
+        if (!row.identifier.startsWith(prefix)) continue;
+        const identifier = `${next}-${row.identifier.slice(prefix.length)}`;
+        const task = JSON.parse(row.payload) as Task;
+        update.run(identifier, JSON.stringify({ ...task, identifier }), ...this.keys(scope), row.id);
+        changed++;
+      }
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return changed;
+  }
   async assetComments(scope: Scope, assetId: string) {
     return this.db.prepare('SELECT payload FROM asset_comments WHERE workspace_id=? AND project_id=? AND asset_id=? ORDER BY rowid').all(...this.keys(scope), assetId).map(row => decode<AssetComment>(row)!);
   }

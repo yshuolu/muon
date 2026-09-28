@@ -38,7 +38,11 @@ export const createProjectSchema = z.strictObject({
   /** Create a Git repository with an initial commit when the folder is not one yet. */
   initializeRepository: z.boolean().optional(),
 });
-export const updateProjectSchema = z.strictObject({ name: z.string().trim().min(1).max(100).optional(), repositoryPath: z.string().trim().max(2000).optional() });
+export const updateProjectSchema = z.strictObject({
+  name: z.string().trim().min(1).max(100).optional(), repositoryPath: z.string().trim().max(2000).optional(),
+  /** A new task prefix; existing task identifiers are renamed with it. */
+  identifier: projectIdentifierSchema.optional(),
+});
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
 export const requestChangesSchema = reviewSchema.extend({ feedback: z.string().trim().min(1).max(20_000) });

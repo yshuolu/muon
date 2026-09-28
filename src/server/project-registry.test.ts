@@ -149,6 +149,20 @@ describe('project registry', () => {
     expect((await json<{ project: Project }>(await request('/api/state'))).project.name).toBe('Renamed');
   });
 
+  it('changes a project’s task prefix and renames its existing task identifiers', async () => {
+    const task = await json<Task>(await request('/api/projects/local-project/tasks', 'POST', { title: 'First task' }), 201);
+    expect(task.identifier).toBe('MUO-1');
+    const other = await json<Project>(await request('/api/projects', 'POST', { name: 'Other', repositoryPath: '/repos/other', identifier: 'OTH' }), 201);
+    expect((await request('/api/projects/local-project', 'PATCH', { identifier: 'oth' })).status).toBe(409);
+    const renamed = await json<Project>(await request('/api/projects/local-project', 'PATCH', { identifier: 'core' }));
+    expect(renamed.identifier).toBe('CORE');
+    expect((await json<Task>(await request('/api/projects/local-project/tasks/CORE-1'))).id).toBe(task.id);
+    expect((await request('/api/projects/local-project/tasks/MUO-1')).status).toBe(404);
+    expect((await json<Task>(await request('/api/projects/core/tasks', 'POST', { title: 'Second task' }), 201)).identifier).toBe('CORE-2');
+    expect((await json<Project>(await request(`/api/projects/${other.id}`))).identifier).toBe('OTH');
+    expect((await json<Project[]>(await request('/api/projects'))).map(project => project.identifier)).toEqual(['CORE', 'OTH']);
+  });
+
   it('archives only idle projects, hides them from routing, and restores them with their records', async () => {
     const second = await json<Project>(await request('/api/projects', 'POST', { name: 'Second', repositoryPath: '/repos/second' }), 201);
     const task = await json<Task>(await request(`/api/projects/${second.id}/tasks`, 'POST', { title: 'Keep me', status: 'backlog' }), 201);
