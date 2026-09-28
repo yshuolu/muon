@@ -19,7 +19,8 @@ export interface AgentRequest {
   /** Reports the provider-confirmed session at most once, without waiting for a final result. */
   onSessionId?: (sessionId: string) => void;
   onProgress?: (message: string) => void;
-  chiefCli?: { command: string; apiUrl: string; token: string };
+  /** A scoped Muon CLI session for the chief or a planning chat: the only path from an advisory session to the API. */
+  cli?: { command: string; apiUrl: string; token: string };
 }
 
 export interface AgentResult {

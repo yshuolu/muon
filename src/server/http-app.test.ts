@@ -136,7 +136,7 @@ describe('HTTP validation and local boundary', () => {
     await eventually(() => codex.calls.length === 1);
     expect(claude.calls).toHaveLength(0);
     expect(codex.calls[0].request).toMatchObject({ provider: 'codex', phase: 'chief', model: 'gpt-6-astra-mini', cwd: '/test/repo' });
-    expect(codex.calls[0].request.chiefCli?.token).toBeTruthy();
+    expect(codex.calls[0].request.cli?.token).toBeTruthy();
     expect(codex.calls[0].request.prompt).not.toContain('a Claude Code agent');
     expect((await request('/api/settings', 'PATCH', { chiefProvider: 'claude' })).status).toBe(409);
     codex.calls[0].resolve({ text: 'Everything is queued.' });
@@ -150,7 +150,7 @@ describe('HTTP validation and local boundary', () => {
   it('keeps chief model settings owner-only and rejects changing an active request model', async () => {
     await service.sendChief('Organize the workspace');
     await eventually(() => claude.calls.length === 1);
-    const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
+    const headers = { authorization: `Bearer ${claude.calls[0].request.cli!.token}` };
     expect((await request(chiefPath('/api/settings'), 'PATCH', { chiefModel: 'sonnet' }, headers)).status).toBe(403);
     expect((await request('/api/settings', 'PATCH', { chiefModel: 'sonnet' })).status).toBe(409);
     expect((await repository.settings(scope)).chiefModel).toBeUndefined();
@@ -255,12 +255,15 @@ describe('REST record resources', () => {
     expect(await selected.json()).toMatchObject({ id: chat.id, model: 'sonnet[1m]', messages: [] });
     expect((await (await request(`/api/planning-chats/${chat.id}`)).json()).model).toBe('sonnet[1m]');
     expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Explore this idea.' })).status).toBe(202);
+    // The run starts once the chat's CLI session is open, shortly after the request is accepted.
+    await eventually(() => claude.calls.length === 1);
     expect(claude.calls[0].request).toMatchObject({ phase: 'chat', model: 'sonnet[1m]' });
     expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'opus' })).status).toBe(409);
     claude.calls[0].reject(new Error("You've reached your Fable limit."));
     await eventually(() => !service.getPlanningChat(chat.id).busy);
     expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'opus' })).status).toBe(200);
     expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Continue with this model.' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 2);
     expect(claude.calls[1].request.model).toBe('opus');
     expect(claude.calls[1].request.prompt).toContain('Explore this idea.');
     expect(service.getPlanningChat(chat.id).error).toBeUndefined();
@@ -268,6 +271,7 @@ describe('REST record resources', () => {
     await eventually(() => !service.getPlanningChat(chat.id).busy);
     expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: null })).status).toBe(200);
     expect((await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Use the configured default.' })).status).toBe(202);
+    await eventually(() => claude.calls.length === 3);
     expect(claude.calls[2].request.model).toBeUndefined();
     expect(service.createPlanningChat().model).toBeNull();
     expect((await repository.settings(scope)).chiefModel).toBeUndefined();
@@ -286,7 +290,7 @@ describe('REST record resources', () => {
     expect((await request('/api/planning-chats/missing', 'PATCH', { model: 'sonnet' })).status).toBe(404);
     await service.sendChief('Organize the workspace');
     await eventually(() => claude.calls.length === 1);
-    const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
+    const headers = { authorization: `Bearer ${claude.calls[0].request.cli!.token}` };
     expect((await request(chiefPath(`/api/planning-chats/${chat.id}`), 'PATCH', { model: 'sonnet' }, headers)).status).toBe(403);
     expect(service.getPlanningChat(chat.id).model).toBeNull();
   });
@@ -410,6 +414,7 @@ describe('REST record resources', () => {
     const chat = await created.json();
     const sent = await request(`/api/planning-chats/${chat.id}/messages`, 'POST', { content: 'Explore a small API improvement.' });
     expect(sent.status).toBe(202);
+    await eventually(() => claude.calls.length === 1);
     expect(claude.calls[0].request.phase).toBe('chat');
     claude.calls[0].resolve({ text: 'A focused API task with acceptance criteria would be a good next step.' });
     await eventually(async () => (await service.getPlanningChat(chat.id)).messages.length === 2);
@@ -703,7 +708,7 @@ describe('runtime integration regressions', () => {
     expect((await request('/api/chief/messages', 'POST', { content: 'Make this task urgent' })).status).toBe(202);
     await eventually(() => claude.calls.length === 1);
     expect(claude.calls[0].request.phase).toBe('chief');
-    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { priority: 1 }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
+    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { priority: 1 }, { authorization: `Bearer ${claude.calls[0].request.cli!.token}` })).status).toBe(200);
     claude.calls[0].resolve({ text: 'Priority updated.' });
     await eventually(async () => (await repository.messages(scope)).some(message => message.role === 'assistant'));
     expect(await service.getTask(task.id)).toMatchObject({ status: 'backlog', priority: 1 });
@@ -713,7 +718,7 @@ describe('runtime integration regressions', () => {
     const task = await service.createTask({ title: 'Status only', status: 'backlog', priority: 2 });
     await service.sendChief('Queue this task');
     await eventually(() => claude.calls.length === 1);
-    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { status: 'todo' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(200);
+    expect((await request(chiefPath(`/api/tasks/${task.id}`), 'PATCH', { status: 'todo' }, { authorization: `Bearer ${claude.calls[0].request.cli!.token}` })).status).toBe(200);
     claude.calls[0].resolve({ text: 'Task queued.' });
     await eventually(async () => (await repository.messages(scope)).some(message => message.role === 'assistant'));
     expect(await service.getTask(task.id)).toMatchObject({ status: 'todo', priority: 2 });
@@ -758,7 +763,7 @@ describe('runtime integration regressions', () => {
     await eventually(() => claude.calls.length === 1);
     claude.calls[0].resolve({ text: JSON.stringify({ message: 'Created.', actions: [{ type: 'create_task', title: 'Late task', status: 'backlog' }] }) });
     await service.stop();
-    expect((await request(chiefPath('/api/tasks'), 'POST', { title: 'Late task' }, { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` })).status).toBe(401);
+    expect((await request(chiefPath('/api/tasks'), 'POST', { title: 'Late task' }, { authorization: `Bearer ${claude.calls[0].request.cli!.token}` })).status).toBe(401);
     expect(await repository.tasks(scope)).toEqual([]);
   });
 

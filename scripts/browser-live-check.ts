@@ -310,7 +310,7 @@ try {
   await page.getByLabel('Message your chief of staff', { exact: true }).fill('Capture a backlog follow-up for this fixture.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const chief = await call(9, 'chief');
-  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token, MUON_WORKSPACE: scope.workspaceId } });
+  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.cli!.token, MUON_WORKSPACE: scope.workspaceId } });
   chief.finish('Captured the follow-up in the backlog.');
   await expect(page.getByRole('button').filter({ hasText: 'Fixture follow-up' })).toBeVisible();
   await page.getByRole('button').filter({ hasText: 'Fixture follow-up' }).click();

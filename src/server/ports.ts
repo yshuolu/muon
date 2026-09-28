@@ -53,8 +53,10 @@ export interface ChiefCommandSession {
   taskIds(): string[];
   close(): Promise<void>;
 }
+/** How much of the workspace API a scoped CLI session may reach: the chief's task-management subset, or everything the owner can do. */
+export type CommandAccess = 'chief' | 'owner';
 // A local implementation supplies a CLI; a remote implementation can issue API credentials.
-export interface ChiefCommandGateway { open(scope: Scope, signal: AbortSignal): Promise<ChiefCommandSession> }
+export interface ChiefCommandGateway { open(scope: Scope, signal: AbortSignal, access?: CommandAccess): Promise<ChiefCommandSession> }
 export class ConflictError extends Error { constructor() { super('This task changed. Refresh and try again.'); } }
 export class DomainError extends Error {
   constructor(message: string, public status = 400) { super(message); }

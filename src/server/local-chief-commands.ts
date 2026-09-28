@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Scope } from '../shared/types';
-import { DomainError, type ChiefCommandGateway, type ChiefCommandSession } from './ports';
+import { DomainError, type ChiefCommandGateway, type ChiefCommandSession, type CommandAccess } from './ports';
 
-interface Grant { scope: Scope; expiresAt: number; taskIds: Set<string> }
+interface Grant { scope: Scope; access: CommandAccess; expiresAt: number; taskIds: Set<string> }
 interface Workspace { accountId: string; userId: string }
 const sameAccount = (a: Workspace, b: Workspace) => a.accountId === b.accountId && a.userId === b.userId;
 
@@ -32,11 +32,16 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     this.workspace = { accountId: options.scope.accountId, userId: options.scope.userId };
   }
 
-  async open(scope: Scope, signal: AbortSignal): Promise<ChiefCommandSession> {
+  /**
+   * Issues a CLI session for one agent run. `chief` access covers task reads, creation, edits, cancellation, and
+   * recovery; `owner` access, used by planning chats the owner drives directly, covers every workspace action the
+   * owner has except managing planning chats and sending chief requests.
+   */
+  async open(scope: Scope, signal: AbortSignal, access: CommandAccess = 'chief'): Promise<ChiefCommandSession> {
     if (!sameAccount(scope, this.workspace)) throw new DomainError('Chief session scope does not match this workspace.', 403);
     if (signal.aborted) throw new Error('Chief request canceled.');
     const token = randomBytes(32).toString('hex');
-    const grant: Grant = { scope: { ...scope }, expiresAt: Date.now() + (this.options.lifetimeMs ?? 30 * 60_000), taskIds: new Set() };
+    const grant: Grant = { scope: { ...scope }, access, expiresAt: Date.now() + (this.options.lifetimeMs ?? 30 * 60_000), taskIds: new Set() };
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'muon-chief-cli-')));
     const launcher = join(directory, 'muon');
     // Freeze the endpoint, credential, and workspace inside a read-only per-run launcher. Shell
@@ -87,10 +92,16 @@ export class LocalChiefCommands implements ChiefCommandGateway {
     if (!path) throw new DomainError('The chief can only act on its own workspace through /api/workspaces/<workspace>/… routes.', 403);
     const method = request.method;
     const read = ['GET', 'HEAD'].includes(method) && /^\/api\/(health|state|workspace|settings|runtime|tasks|attention|chief\/messages|artifacts|assets)(\/|$)/.test(path);
-    const taskWrite = method === 'POST' && path === '/api/tasks'
-      || method === 'PATCH' && /^\/api\/tasks\/[^/]+$/.test(path)
-      || method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|retry)$/.test(path);
-    if (!read && !taskWrite) throw new DomainError('This action requires the workspace owner. The chief cannot approve RFCs, submit owner reviews or task follow-ups, change settings, or clear attention.', 403);
+    if (grant.access === 'owner') {
+      // The owner's own chat acts with the owner's authority, but never on other chats or the chief.
+      const ownerWrite = /^\/api\/(tasks|attention|settings|assets)(\/|$)/.test(path);
+      if (!read && !ownerWrite) throw new DomainError('A planning chat cannot manage planning chats or send chief requests.', 403);
+    } else {
+      const taskWrite = method === 'POST' && path === '/api/tasks'
+        || method === 'PATCH' && /^\/api\/tasks\/[^/]+$/.test(path)
+        || method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|retry)$/.test(path);
+      if (!read && !taskWrite) throw new DomainError('This action requires the workspace owner. The chief cannot approve RFCs, submit owner reviews or task follow-ups, change settings, or clear attention.', 403);
+    }
     this.admitted.set(request, grant);
   }
 

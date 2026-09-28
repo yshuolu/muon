@@ -818,19 +818,26 @@ export class TaskService implements Dispatcher {
       this.persistPlanningChat(chat);
       const abort = new AbortController();
       const key = `planning-chat:${id}`;
+      let commands: ChiefCommandSession | undefined;
       const done = Promise.resolve().then(async () => {
         const provider = chat.provider;
         if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or switch this chat to another agent.`);
-        const library = await this.libraryCopies();
-        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: chat.model ?? undefined, effort: effortFor(provider, chat.effort), files: library.files, prompt: planningChatPrompt(workspace, chat.messages, await this.repo.tasks(this.scope), libraryContextPrompt(library.copies)), cwd: workspace.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; } });
+        // The owner drives this chat directly, so its CLI session carries the owner's authority; demo mode has no CLI.
+        commands = await this.options.chiefCommands?.open(this.scope, abort.signal, 'owner');
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
+        const library = await this.libraryCopies();
+        const result = await this.options.adapters[provider].run({ provider, phase: 'chat', model: chat.model ?? undefined, effort: effortFor(provider, chat.effort), files: library.files, prompt: planningChatPrompt(workspace, chat.messages, await this.repo.tasks(this.scope), libraryContextPrompt(library.copies), commands?.cli.command), cwd: workspace.repositoryPath || process.cwd(), signal: abort.signal, onProgress: activity => { if (this.planningChats.get(id) === chat) chat.activity = activity; }, cli: commands?.cli });
+        if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
+        // Task operations already went through CLI -> REST -> TaskService; the final text is display-only.
         const published = await this.publishAgentOutput(result.text.trim());
-        const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: published.content, createdAt: now(), ...(published.taskIds.length ? { taskIds: published.taskIds } : {}) };
+        const taskIds = [...new Set([...(commands?.taskIds() ?? []), ...published.taskIds])];
+        const reply: PlanningChatMessage = { id: randomUUID(), role: 'assistant', content: published.content, createdAt: now(), ...(taskIds.length ? { taskIds } : {}) };
         chat.messages = [...chat.messages, reply]; chat.updatedAt = now();
       }).catch(error => {
         if (this.planningChats.get(id) !== chat || abort.signal.aborted) return;
         chat.error = error instanceof Error ? error.message : String(error); chat.updatedAt = now();
-      }).finally(() => {
+      }).finally(async () => {
+        await commands?.close().catch(error => console.error('Planning chat command cleanup failed', error));
         chat.busy = false; chat.activity = null; this.active.delete(key);
         if (this.planningChats.get(id) === chat) this.persistPlanningChat(chat);
         void this.tick().catch(console.error);
@@ -1319,7 +1326,7 @@ export class TaskService implements Dispatcher {
       if (!this.availability[provider] && !this.options.demo) throw new DomainError(`${provider === 'claude' ? 'Claude Code' : 'Codex'} is not detected. Install it, sign in, and restart the local server, or choose another chief agent.`);
       this.chiefActivity = `Running ${provider === 'claude' ? 'Claude Code' : 'Codex'}…`;
       const library = await this.libraryCopies();
-      const result = await this.options.adapters[provider].run({ provider, phase: 'chief', prompt: chiefPrompt(workspace, messages, commands?.cli.command, settings.chiefSoul, libraryContextPrompt(library.copies)), files: library.files, cwd: workspace.repositoryPath, model: settings.chiefModel ?? undefined, effort: effortFor(provider, settings.chiefEffort), signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, chiefCli: commands?.cli });
+      const result = await this.options.adapters[provider].run({ provider, phase: 'chief', prompt: chiefPrompt(workspace, messages, commands?.cli.command, settings.chiefSoul, libraryContextPrompt(library.copies)), files: library.files, cwd: workspace.repositoryPath, model: settings.chiefModel ?? undefined, effort: effortFor(provider, settings.chiefEffort), signal: abort.signal, onProgress: activity => { this.chiefActivity = activity; }, cli: commands?.cli });
       if (this.stopped || abort.signal.aborted) return;
       const content = result.text.trim();
       if (!content || content.length > 30_000) throw new DomainError('The chief returned an empty or oversized final response. Applied task changes are retained.');

@@ -118,10 +118,10 @@ async function waitForState(fixture: Fixture, taskId: string, status: Task['stat
   return fixture.service.getTask(taskId);
 }
 async function chiefRequest<T = Task>(fixture: Fixture, call: ControlledCall, path: string, method: string, body: unknown, status = 200): Promise<T> {
-  expect(call.request.chiefCli?.token).toBeTruthy();
+  expect(call.request.cli?.token).toBeTruthy();
   const response = await fixture.app.request(`http://127.0.0.1:4310/api/workspaces/${fixture.service.scope.workspaceId}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${call.request.chiefCli!.token}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${call.request.cli!.token}` },
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(status);
@@ -307,6 +307,27 @@ describe('TaskService workflow', () => {
     call.finish('The selected model answered.');
     await eventually(() => !chat.busy, 'planning chat finished');
     expect(f.service.updatePlanningChat(chat.id, { model: 'opus' }).model).toBe('opus');
+  });
+
+  it('lets a planning chat act with the owner authority through its CLI session and links the tasks it touched', async () => {
+    const f = await fixture();
+    const waiting = await f.service.createTask({ title: 'Ship the root files', status: 'backlog' });
+    const chat = f.service.createPlanningChat();
+    await f.service.sendPlanningChat(chat.id, 'Execute all unblocked tasks');
+    const call = await waitForCall(f, 0, 'chat');
+    expect(call.request.cli?.token).toBeTruthy();
+    expect(call.request.prompt).toContain(`${call.request.cli!.command} tasks approve TASK_ID`);
+    // Queue the waiting task, turn dispatch on, and add a dependent task: owner actions the chief is refused.
+    await chiefRequest(f, call, `/tasks/${waiting.id}`, 'PATCH', { status: 'todo' });
+    await chiefRequest(f, call, '/settings', 'PATCH', { dispatcherEnabled: true });
+    const created = await chiefRequest(f, call, '/tasks', 'POST', { title: 'Write the OpenAPI spec', status: 'backlog', blockedByIds: [waiting.id] }, 201);
+    await chiefRequest(f, call, '/planning-chats', 'POST', {}, 403);
+    call.finish('Queued the root files task and turned dispatch on.');
+    await eventually(() => !chat.busy, 'planning chat finished');
+    expect(chat.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Queued the root files task and turned dispatch on.', taskIds: [waiting.id, created.id] });
+    // The credential dies with the turn, and dispatch picks the queued task up once the chat releases its slot.
+    await chiefRequest(f, call, '/state', 'GET', undefined, 401);
+    expect((await waitForCall(f, 1, 'planning')).request.cwd).toContain(waiting.id);
   });
 
   it('releases planning-chat reservations when configuration fails so the owner can switch and retry', async () => {

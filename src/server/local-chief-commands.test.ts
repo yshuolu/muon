@@ -44,6 +44,26 @@ describe('Local chief CLI capabilities', () => {
     expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/state', { headers: { authorization: 'Bearer invalid' } }))).toThrow('invalid or expired');
   });
 
+  it('grants an owner session every workspace action except planning-chat management and chief requests', async () => {
+    const commands = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310' });
+    const owner = await commands.open(scope, new AbortController().signal, 'owner'); cleanups.push(() => owner.close());
+    for (const [path, method] of [
+      ['state', 'GET'], ['tasks', 'GET'], ['tasks/MUO-1/plans', 'GET'], ['attention', 'GET'], ['assets', 'GET'], ['chief/messages', 'GET'],
+      ['tasks', 'POST'], ['tasks/MUO-1', 'PATCH'], ['tasks/MUO-1/cancel', 'POST'], ['tasks/MUO-1/retry', 'POST'],
+      ['tasks/MUO-1/approve', 'POST'], ['tasks/MUO-1/request-changes', 'POST'], ['tasks/MUO-1/plan-discussion', 'POST'],
+      ['tasks/MUO-1/comments', 'POST'], ['tasks/MUO-1/comments/retry', 'POST'], ['tasks/MUO-1/integrate', 'POST'],
+      ['settings', 'PATCH'], ['attention/notice/read', 'POST'], ['assets/notes', 'POST'], ['assets/doc/comments', 'POST'],
+    ]) expect(() => commands.authorize(request(owner, path, method))).not.toThrow();
+    for (const [path, method] of [
+      ['planning-chats', 'GET'], ['planning-chats', 'POST'], ['planning-chats/chat/messages', 'POST'], ['planning-chats/chat', 'DELETE'],
+      ['chief/messages', 'POST'], ['unknown', 'POST'],
+    ]) expect(() => commands.authorize(request(owner, path, method))).toThrow('planning chat cannot');
+    expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/workspaces/other-workspace/settings', { method: 'PATCH', headers: { authorization: `Bearer ${owner.cli.token}` } }))).toThrow('own workspace');
+    // The default grant stays the chief's narrower one.
+    const chief = await session(commands);
+    expect(() => commands.authorize(request(chief, 'settings', 'PATCH'))).toThrow('workspace owner');
+  });
+
   it('rejects mismatched scope and revokes credentials on abort, expiration, and close', async () => {
     const commands = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310', lifetimeMs: 1_000 });
     await expect(commands.open({ ...scope, accountId: 'other-workspace' }, new AbortController().signal)).rejects.toThrow('scope');

@@ -90,7 +90,7 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     const command = `'${join(directory, 'muon')}'`;
     const token = 'fixture-only-token';
-    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks through the CLI', chiefCli: { command, apiUrl: 'http://127.0.0.1:4310', token } });
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks through the CLI', cli: { command, apiUrl: 'http://127.0.0.1:4310', token } });
     const invocation = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
     const { args } = invocation;
     const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
@@ -107,23 +107,41 @@ describe('ClaudeCodeAdapter', () => {
     expect(invocation.prompt).not.toContain(token);
   });
 
+  it('opens the loopback API to a planning chat that carries a CLI session while keeping the repository read-only', async () => {
+    const adapter = new ClaudeCodeAdapter(await claudeFixture(), { allowedNetworkDomains: ['registry.npmjs.org'] });
+    const cli = { command: `'${join(directory, 'muon')}'`, apiUrl: 'http://127.0.0.1:4310', token: 'chat-token' };
+    await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Queue the unblocked tasks', cli });
+    const invocation = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
+    const { args } = invocation;
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep,Bash');
+    expect(settings.permissions.allow).toEqual([`Bash(${join(directory, 'muon')} *)`]);
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(['Edit', 'Write']));
+    expect(settings.sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: true, network: { allowedDomains: ['127.0.0.1:4310'], allowLocalBinding: false, strictAllowlist: true } });
+    expect(settings.sandbox.filesystem.denyWrite).toEqual([directory, directory]);
+    expect(invocation.chiefToken).toBe(cli.token);
+    expect(JSON.stringify(args)).not.toContain(cli.token);
+    await expect(adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Queue', cli: { ...cli, command: 'muon; rm -rf /' } })).rejects.toThrow('shell metacharacters');
+    await expect(adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Queue', cli: { ...cli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
+  });
+
   it('requires a chief CLI capability instead of falling back to unrestricted shell access', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     await expect(adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks' })).rejects.toThrow('scoped Muon CLI session');
   });
   it('selects the chief model per request while preserving its scope and defaults for other phases', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture(), { model: 'configured-model', effort: 'max', bypassPermissions: true });
-    const chiefCli = { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' };
-    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', model: 'sonnet[1m]', chiefCli });
+    const cli = { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' };
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', model: 'sonnet[1m]', cli });
     let { args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8'));
     expect(args[args.indexOf('--model') + 1]).toBe('sonnet[1m]');
     expect(args[args.indexOf('--effort') + 1]).toBe('max');
     expect(args).toContain('--restricted');
     expect(args).not.toContain('--dangerously-skip-permissions');
     const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
-    expect(settings.permissions.allow).toEqual([`Bash(${chiefCli.command} *)`]);
+    expect(settings.permissions.allow).toEqual([`Bash(${cli.command} *)`]);
     expect(settings.sandbox).toMatchObject({ enabled: true, allowUnsandboxedCommands: false });
-    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Use the default', chiefCli });
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Use the default', cli });
     ({ args } = JSON.parse(await readFile(join(directory, 'invocation.json'), 'utf8')));
     expect(args[args.indexOf('--model') + 1]).toBe('configured-model');
     await adapter.run({ provider: 'claude', phase: 'planning', cwd: directory, prompt: 'Make a plan', model: 'chief-only-model' });
@@ -187,7 +205,7 @@ describe('ClaudeCodeAdapter', () => {
   it('reports the chief tool action currently being performed', async () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     const progress: string[] = [];
-    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', onProgress: message => progress.push(message), chiefCli: { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' } });
+    await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', onProgress: message => progress.push(message), cli: { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' } });
     expect(progress).toContain('Reading src/workspace.ts');
   });
 
@@ -307,8 +325,8 @@ describe('CodexAdapter', () => {
     // The chief's scratch working directory is deleted after the run, so the fixture logs into the test directory.
     vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
     const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
-    const chiefCli = { command: `'${join(directory, 'muon-launcher')}'`, apiUrl: 'http://127.0.0.1:4310', token: 'chief-token' };
-    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', model: 'gpt-6-astra-mini', chiefCli })).resolves.toMatchObject({ text: 'Final result' });
+    const cli = { command: `'${join(directory, 'muon-launcher')}'`, apiUrl: 'http://127.0.0.1:4310', token: 'chief-token' };
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', model: 'gpt-6-astra-mini', cli })).resolves.toMatchObject({ text: 'Final result' });
     const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const scratch = requests[3].params.cwd as string;
     expect(scratch).not.toBe(directory);
@@ -320,9 +338,22 @@ describe('CodexAdapter', () => {
     expect(requests[4].params.input[0].text).toContain('Organize');
     await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize' })).rejects.toThrow('scoped Muon CLI');
-    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, command: 'muon; rm -rf /' } })).rejects.toThrow('shell metacharacters');
-    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', chiefCli: { ...chiefCli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
-    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'permission', chiefCli })).rejects.toThrow('owner attention');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', cli: { ...cli, command: 'muon; rm -rf /' } })).rejects.toThrow('shell metacharacters');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize', cli: { ...cli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
+    await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'permission', cli })).rejects.toThrow('owner attention');
+  });
+
+  it('gives a chat network access only when it carries a CLI session', async () => {
+    vi.stubEnv('MUON_CODEX_TEST_DIR', directory);
+    const adapter = new CodexAdapter(await codexFixture(), { bypassPermissions: true });
+    const cli = { command: `'${join(directory, 'muon-launcher')}'`, apiUrl: 'http://127.0.0.1:4310', token: 'chat-token' };
+    await expect(adapter.run({ provider: 'codex', phase: 'chat', cwd: directory, prompt: 'Queue the unblocked tasks', cli })).resolves.toMatchObject({ text: 'Final result' });
+    const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const scratch = requests[3].params.cwd as string;
+    expect(scratch).toContain('muon-codex-chat-');
+    expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write' });
+    expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: true } });
+    await expect(adapter.run({ provider: 'codex', phase: 'chat', cwd: directory, prompt: 'Queue', cli: { ...cli, apiUrl: 'http://example.com:4310' } })).rejects.toThrow('loopback');
   });
 
   it('runs chats from a scratch directory without network and never with full access', async () => {

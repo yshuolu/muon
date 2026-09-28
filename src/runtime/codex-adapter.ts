@@ -41,12 +41,12 @@ export class CodexAdapter implements AgentAdapter {
     const advisory = chief || chat;
     const readonly = request.phase === 'planning' || request.phase === 'discussion';
     const bypassPermissions = this.bypassPermissions && request.phase !== 'discussion' && !advisory;
-    if (chief && !request.chiefCli) throw new Error('The chief requires a scoped Muon CLI session.');
-    const cliExecutable = request.chiefCli?.command.replace(/^'|'$/g, '');
-    if (chief && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The chief CLI must be an absolute executable path without shell metacharacters.');
-    if (chief) {
-      const api = new URL(request.chiefCli!.apiUrl);
-      if (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password) throw new Error('The local chief requires a loopback API endpoint.');
+    if (chief && !request.cli) throw new Error('The chief requires a scoped Muon CLI session.');
+    const cliExecutable = request.cli?.command.replace(/^'|'$/g, '');
+    if (request.cli && (!cliExecutable || !isAbsolute(cliExecutable) || !/^[/a-zA-Z0-9._-]+$/.test(cliExecutable))) throw new Error('The Muon CLI must be an absolute executable path without shell metacharacters.');
+    if (request.cli) {
+      const api = new URL(request.cli.apiUrl);
+      if (api.protocol !== 'http:' || api.hostname !== '127.0.0.1' || api.username || api.password) throw new Error('The local Muon CLI requires a loopback API endpoint.');
     }
     // Codex sandboxes by working directory: an empty scratch directory keeps the repository read-only while the
     // launcher still reaches the loopback API. The prompt names the repository so the chief can inspect it.
@@ -195,7 +195,8 @@ export class CodexAdapter implements AgentAdapter {
           ? { type: 'dangerFullAccess' }
           : readonly
           ? { type: 'readOnly' }
-          : { type: 'workspaceWrite', writableRoots: [workingDirectory], networkAccess: !chat },
+          // Advisory sessions reach the network only for their Muon CLI; a chat without one stays offline.
+          : { type: 'workspaceWrite', writableRoots: [workingDirectory], networkAccess: !chat || Boolean(request.cli) },
       }));
       turnId = text(record(started?.turn)?.id) ?? turnId;
       if (!turnId) {
