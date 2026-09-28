@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArchiveRestore, ArrowDownToLine, ArrowUpRight, Bell, BookOpen, Check, ChevronDown, ChevronRight, CircleDot, Command, Folder, FolderGit2, LayoutGrid, List, Loader2, PanelLeft, Pause, Play, Plus, Settings2, Sparkles, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertCircle, ArchiveRestore, ArrowDownToLine, ArrowUpRight, Bell, BookOpen, Check, ChevronRight, CircleDot, Command, FolderGit2, LayoutGrid, List, Loader2, PanelLeft, Pause, Play, Plus, Settings2, Sparkles, X } from 'lucide-react';
 import type { Workspace, Task } from '../shared/types';
 import { ApiError } from '../shared/api-client';
 import { api, useAppState } from './lib/api';
@@ -12,6 +12,7 @@ import { ChiefView } from './components/chief';
 import { MuonMark } from './components/common';
 import { SettingsDialog } from './components/settings-dialog';
 import { WorkspaceDialog } from './components/workspace-dialog';
+import { WorkspaceSwitcher } from './components/workspace-switcher';
 import { TaskDetail } from './components/task-detail';
 import { TaskDialog } from './components/task-dialog';
 import { TaskList } from './components/task-list';
@@ -185,14 +186,9 @@ export function App() {
   return <div className={`app-shell${compactViewport ? ' viewport-compact' : ''}`} style={viewportStyle}>
     {sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
-      <button className="account-selector" onClick={() => setSettings(true)}><MuonMark /><span>Muon<span>Local</span></span><ChevronDown size={14} /></button>
+      <WorkspaceSwitcher current={snapshot.workspace} workspaces={workspaceList} onSwitch={id => switchWorkspace(id)} onAdd={() => setNewWorkspace(true)} onSettings={() => setSettings(true)} />
       <div className="sidebar-create"><Button variant="secondary" onClick={() => void openCreate()} disabled={creatingChat}><Plus size={15} /><span>Create task</span><kbd>C</kbd></Button></div>
       <nav className="primary-nav" aria-label="Main"><button className={view === 'chief' ? 'active' : ''} onClick={() => go('chief')}><Sparkles size={16} /><span>Chief of staff</span>{snapshot.runtime.chiefRunning && <i className="chief-running-dot" />}</button><button className={view === 'attention' ? 'active' : ''} onClick={() => go('attention')}><Bell size={16} /><span>Attention</span>{unread > 0 && <span className="nav-badge">{unread}</span>}</button><button className={view === 'tasks' ? 'active' : ''} onClick={() => go('tasks')}><List size={17} /><span>All tasks</span><span className="nav-count">{snapshot.tasks.length}</span></button><button className={view === 'library' ? 'active' : ''} onClick={() => go('library')}><BookOpen size={16} /><span>Library</span></button></nav>
-      <div className="sidebar-section-heading"><span>Workspaces</span><button aria-label="Add workspace" title="Add workspace" onClick={() => setNewWorkspace(true)}><Plus size={13} /></button></div>
-      <nav className="workspace-nav" aria-label="Workspaces">{workspaceList.map(workspace => <Fragment key={workspace.id}>
-        <button className={workspace.id === snapshot.workspace.id ? 'active' : ''} aria-current={workspace.id === snapshot.workspace.id ? 'true' : undefined} title={workspace.repositoryPath || 'No repository yet'} onClick={() => workspace.id === snapshot.workspace.id ? go('tasks') : switchWorkspace(workspace.id)}>{workspace.id === snapshot.workspace.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<span className="workspace-icon">{workspace.name.slice(0, 1).toUpperCase()}</span><span>{workspace.name}</span></button>
-        {workspace.id === snapshot.workspace.id && <button className="workspace-child" onClick={() => go('tasks')}><Folder size={14} />Tasks<span>{snapshot.tasks.length}</span></button>}
-      </Fragment>)}<button className="workspace-add" onClick={() => setNewWorkspace(true)}><Plus size={13} />Add workspace</button></nav>
       <div className="sidebar-bottom"><div className="dispatcher-card"><div className="dispatcher-card-heading"><span><span className={`runtime-dot ${snapshot.settings.dispatcherEnabled ? 'on' : ''}`} />{snapshot.settings.dispatcherEnabled ? 'Agents in motion' : 'Dispatch paused'}</span><button aria-label={snapshot.settings.dispatcherEnabled ? 'Pause dispatcher' : 'Resume dispatcher'} onClick={() => void toggleDispatcher()} disabled={dispatchBusy}>{snapshot.settings.dispatcherEnabled ? <Pause size={12} /> : <Play size={12} />}</button></div><div className="capacity-meter">{Array.from({ length: snapshot.settings.maxConcurrentAgents }, (_, index) => <i key={index} className={index < snapshot.runtime.activeRuns ? 'filled' : ''} />)}</div><div className="dispatcher-caption"><span>{snapshot.runtime.activeRuns} of {snapshot.settings.maxConcurrentAgents} agents active</span><span>{todo} queued</span></div></div><button className="settings-nav" onClick={() => setSettings(true)}><Settings2 size={15} /><span>Settings</span><span className="local-badge">Local</span></button><div className="sidebar-profile"><span className="profile-avatar">Y</span><span>You<span>Owner</span></span><span className="profile-status" title="Local account" /></div></div>
     </aside>
     <main className="app-main">

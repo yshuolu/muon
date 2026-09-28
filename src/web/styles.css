@@ -1370,3 +1370,20 @@ mark.doc-comment.pulse { background: color-mix(in oklch, var(--warning) 60%, tra
 .commit-stack li code { font-size: 11px; color: var(--muted-foreground); }
 .commit-stack li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .commit-stack li time { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }
+
+/* Workspace switcher in the sidebar header */
+.workspace-switcher { position: relative; margin-bottom: 22px; }
+.workspace-switcher .account-selector { padding: 6px 8px; border-radius: var(--radius-md); }
+.workspace-switcher .account-selector:hover, .workspace-switcher .account-selector[aria-expanded="true"] { background: var(--accent); }
+.workspace-switcher .account-selector > .workspace-icon { width: 30px; height: 30px; font-size: 14px; border-radius: var(--radius-sm); }
+.workspace-switcher .account-selector > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-menu { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 40; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); box-shadow: 0 10px 30px rgb(0 0 0 / 14%); }
+.workspace-menu-heading { padding: 6px 8px 4px; font-size: 11px; font-weight: 500; color: var(--muted-foreground); }
+.workspace-menu > button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--foreground); text-align: left; font-size: 13px; }
+.workspace-menu > button.active { background: var(--accent); }
+.workspace-menu > button > svg:last-child { margin-left: auto; color: var(--muted-foreground); }
+.workspace-menu > button > svg:first-child { color: var(--muted-foreground); width: 18px; }
+.workspace-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-menu-name small { margin-left: 6px; font-size: 11px; color: var(--muted-foreground); }
+.workspace-menu-divider { height: 1px; margin: 6px 4px; background: var(--border); }
+.workspace-menu-footer { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; font-size: 11px; color: var(--muted-foreground); }
