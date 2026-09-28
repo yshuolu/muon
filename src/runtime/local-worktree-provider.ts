@@ -96,7 +96,7 @@ export class LocalWorktreeProvider implements WorktreeProvider {
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (!inside(root, path)) throw new Error(`${purpose} must target a Muon-owned worktree.`);
-    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
     if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error(`${purpose} does not match the saved task worktree.`);
     if ((await git(path, ['symbolic-ref', '--short', 'HEAD'])).trim() !== manifest.branch) throw new Error('Worktree branch changed outside Muon; review it before continuing.');
     return { path, manifest };
@@ -141,7 +141,7 @@ export class LocalWorktreeProvider implements WorktreeProvider {
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (path !== input.path || !inside(root, path)) throw new Error('Dependency export must target a Muon-owned worktree.');
-    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
     if (manifest.path !== path || manifest.branch !== input.branch || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Dependency export does not match the saved task worktree.');
     if ((await git(path, ['symbolic-ref', '--short', 'HEAD'])).trim() !== manifest.branch) throw new Error('Dependency worktree branch changed outside Muon. Review it before integrating.');
     return manifest;
@@ -189,7 +189,7 @@ export class LocalWorktreeProvider implements WorktreeProvider {
     try {
       const path = join(taskDirectory, 'checkout');
       const branch = `muon/${input.taskId}`;
-      const metadataPath = join(taskDirectory, 'worktree.json');
+      const metadataPath = join(taskDirectory, 'workspace.json');
       let manifest: Manifest;
       if (await exists(metadataPath)) {
         manifest = JSON.parse(await readFile(metadataPath, 'utf8')) as Manifest;
@@ -226,7 +226,7 @@ export class LocalWorktreeProvider implements WorktreeProvider {
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (!inside(root, path)) throw new Error('Changed-file inspection must target a Muon-owned worktree.');
-    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
     if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Changed-file inspection does not match the saved task worktree.');
     const [statusOutput, statsOutput, untrackedOutput] = await Promise.all([
       git(path, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z', input.baseCommit, '--']),
