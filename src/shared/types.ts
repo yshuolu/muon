@@ -141,11 +141,11 @@ export interface CreateTaskInput {
 }
 export interface RetryTaskInput { mode?: 'retry' | 'resume' | 'fix' | 'replan'; feedback?: string }
 export const STATUS_LABELS: Record<TaskStatus, string> = {
-  backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'In review',
+  backlog: 'Backlog', todo: 'Todo', in_progress: 'In progress', in_review: 'Needs your approval',
   done: 'Done', blocked: 'Blocked', canceled: 'Canceled',
 };
 export const PHASE_LABELS: Record<TaskPhase, string> = {
-  idle: 'Queued', planning: 'Planning', plan_review: 'Plan review', building: 'Building',
+  idle: 'Queued', planning: 'Planning', plan_review: 'RFC awaiting your approval', building: 'Building',
   verification: 'Verification', complete: 'Complete',
 };
 export const PRIORITY_LABELS: Record<Priority, string> = { 0: 'No priority', 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };

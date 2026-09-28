@@ -39,7 +39,7 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 1. Create a task yourself or ask the chief of staff to create and prioritize work.
 2. The dispatcher selects eligible Todo tasks by priority, then creation time, up to the configured system limit. The chief consumes one slot too.
 3. Muon creates an isolated Git worktree. The selected agent inspects the code with read-only planning permissions and returns an RFC.
-4. The task pauses in **In review** and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
+4. The task pauses in **Needs your approval** (the RFC is written and waits for you) and releases its agent slot. **Attention** points you to the RFC. Discuss the plan with the agent: every comment queues a revised RFC and an answer, retaining the conversation and all earlier versions. Repeat as needed, then approve the exact latest revision.
 5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
 6. Passing verification creates a **Done** task with test steps, final summary, retained output files and screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention; their retained files remain available.
 

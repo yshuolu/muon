@@ -945,7 +945,13 @@ describe('TaskService workflow', () => {
     await f.service.editTask(canceled.id, { parentId: null });
     expect(await f.service.getTask(canceled.id)).toMatchObject({ status: 'canceled', parentId: null });
     expect((await f.service.getTask(group.id)).summary).toBe('0 of 0 subtasks complete.');
-    await expect(f.service.editTask(canceled.id, { status: 'todo' })).rejects.toThrow('Completed and canceled tasks cannot be edited');
+    await expect(f.service.editTask(canceled.id, { priority: 1 })).rejects.toThrow('This task is canceled. Reopen it');
+    // Reopening keeps the identifier and history, can carry a new scope, and needs a fresh RFC.
+    const reopened = await f.service.editTask(canceled.id, { status: 'backlog', description: 'Reopened scope', parentId: group.id });
+    expect(reopened).toMatchObject({ identifier: canceled.identifier, status: 'backlog', phase: 'idle', description: 'Reopened scope', parentId: group.id });
+    expect(reopened.runId).toBeUndefined();
+    expect(reopened.activity.at(-1)?.text).toContain('Task reopened to Backlog');
+    expect(reopened.plans.every(plan => plan.status === 'changes_requested')).toBe(true);
   });
 
   it('reopens a completed group when another child is attached and preserves verified child outcomes', async () => {

@@ -408,15 +408,32 @@ export class TaskService implements Dispatcher {
       input.title = input.title.trim();
     }
     const group = task.kind === 'group';
+    // A canceled task comes back as Backlog or Todo with its history kept; any RFC it had is set aside so the
+    // reopened work is planned afresh, and the same edit may already carry the new scope.
+    if (task.status === 'canceled' && (input.status === 'backlog' || input.status === 'todo')) {
+      if (input.provider !== undefined && input.provider !== task.provider) throw new DomainError('Reopen the task first, then change its agent.');
+      if (input.title !== undefined && !input.title.trim()) throw new DomainError('Task title cannot be empty.');
+      if (input.labels) input.labels = [...new Set(input.labels.map(label => label.trim()))];
+      if (input.description !== undefined) await this.validateInputAssets(assetIdsInText(input.description));
+      await this.validateRelations(id, input.parentId === undefined ? task.parentId : input.parentId, input.blockedByIds ?? task.blockedByIds);
+      const latestPlan = task.plans.at(-1);
+      const plans = latestPlan && latestPlan.status !== 'changes_requested' ? task.plans.map((plan, index) => index === task.plans.length - 1 ? { ...plan, status: 'changes_requested' as const, feedback: 'The task was reopened after cancellation; a new RFC is needed.', reviewedAt: now(), reviewedBy: this.scope.userId } : plan) : task.plans;
+      const reopened = await this.change(task, { ...input, plans, phase: 'idle', error: undefined, runId: undefined, sessionId: undefined, recovery: undefined, followUp: undefined, completedAt: undefined }, `Task reopened to ${input.status === 'todo' ? 'Todo' : 'Backlog'}.${group ? '' : ' A new RFC will need approval before building.'}`);
+      await this.reconcileGroups();
+      await this.reconcileProjectCompletion();
+      void this.tick().catch(console.error);
+      return this.getTask(reopened.id);
+    }
     const unstarted = ['backlog', 'todo'].includes(task.status) && task.phase === 'idle';
     // Scope (title and description) feeds the RFC: it can change until the RFC is approved, and a change after
     // planning started discards the current planning run or pending RFC and queues a fresh one. Metadata can change
     // until the task ends; the agent and the Backlog/Todo choice only before the task starts.
     const scopeEdit = (input.title !== undefined && input.title !== task.title) || (input.description !== undefined && input.description !== task.description);
     if (group) {
-      if (task.status === 'canceled') throw new DomainError('Canceled task groups cannot be edited. Restore work with a new group.');
+      if (task.status === 'canceled') throw new DomainError('This group is canceled. Reopen it (status backlog or todo) before editing it.');
     } else {
-      if (terminal(task)) throw new DomainError('Completed and canceled tasks cannot be edited. Create a follow-up task instead.');
+      if (task.status === 'canceled') throw new DomainError('This task is canceled. Reopen it (status backlog or todo) before editing it.');
+      if (terminal(task)) throw new DomainError('Completed tasks cannot be edited. Create a follow-up task instead.');
       if (input.status !== undefined && input.status !== task.status && !unstarted) throw new DomainError('Only unstarted tasks move between Backlog and Todo. Cancel or retry work already underway.');
       if (input.provider !== undefined && input.provider !== task.provider && !unstarted) throw new DomainError('The agent can only change before the task starts. Work already underway keeps its agent.');
       if (scopeEdit && task.plans.at(-1)?.status === 'approved') throw new DomainError('The approved RFC fixes this task’s scope. Use Revise RFC (a replan comment) or a replan retry to change work already underway.');
