@@ -131,7 +131,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         '--settings', JSON.stringify(settings),
         ...(request.sessionId ? ['--resume', request.sessionId] : []),
       ];
-      const prompt = scratch ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder: write any temporary files only there.\n${request.prompt}` : request.prompt;
+      const prompt = scratch ? `The workspace repository is at ${request.cwd}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder: write any temporary files only there.\n${request.prompt}` : request.prompt;
       return await this.runProcess({ ...request, prompt, cwd: scratch ?? request.cwd }, args, chief ? { MUON_API_URL: cli!.apiUrl, MUON_API_TOKEN: cli!.token, MUON_CLI_SANDBOX_PROXY: '1' } : undefined);
     } finally {
       if (scratch) await rm(scratch, { recursive: true, force: true });

@@ -34,7 +34,7 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle,
   }
   return <Dialog open={open} onOpenChange={onOpenChange} title={parent ? 'Create subtask' : planningChatId ? 'Taskify conversation' : 'Create task'} description={kind === 'group' ? 'Organize related tasks. The group completes when all its subtasks finish successfully.' : planningChatId ? 'Carry this planning conversation into a task. Your agent will prepare an RFC for approval.' : 'Your agent plans first. Building begins after you approve the RFC.'} className="new-task-dialog">
     <form onSubmit={submit}>
-      <div className="dialog-project"><FolderGit2 size={14} />{snapshot.project.name}{parent && <><span>/</span>{parent.identifier}</>}</div>
+      <div className="dialog-workspace"><FolderGit2 size={14} />{snapshot.workspace.name}{parent && <><span>/</span>{parent.identifier}</>}</div>
       <label className="sr-only" htmlFor="task-title">Task title</label>
       <input id="task-title" className="task-title-input" placeholder="What needs to be done?" value={title} onChange={e => setTitle(e.target.value)} required maxLength={240} autoFocus />
       <label className="sr-only" htmlFor="task-description">Description</label>

@@ -3,18 +3,18 @@ import type { AppSnapshot, Task } from '../../shared/types';
 import { snapshotNotifications } from './notifications';
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'identifier'>): Task {
-  return { workspaceId: 'w', projectId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-24T10:00:00Z', updatedAt: '2026-09-24T10:00:00Z', version: 1, ...overrides };
+  return { accountId: 'w', workspaceId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-24T10:00:00Z', updatedAt: '2026-09-24T10:00:00Z', version: 1, ...overrides };
 }
 function snapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
-  return { scope: { workspaceId: 'w', projectId: 'p', userId: 'u' }, project: { id: 'p', workspaceId: 'w', ownerUserId: 'u', name: 'Project', identifier: 'MUO', repositoryPath: '/repo' }, settings: { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 2 }, tasks: [], attention: [], messages: [], runtime: { activeRuns: 0, chiefRunning: false, providers: { claude: true, codex: true }, demo: false }, ...overrides };
+  return { scope: { accountId: 'w', workspaceId: 'p', userId: 'u' }, workspace: { id: 'p', accountId: 'w', ownerUserId: 'u', name: 'Workspace', identifier: 'MUO', repositoryPath: '/repo' }, settings: { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 2 }, tasks: [], attention: [], messages: [], runtime: { activeRuns: 0, chiefRunning: false, providers: { claude: true, codex: true }, demo: false }, ...overrides };
 }
 const at = '2026-09-24T10:05:00Z';
 
 describe('snapshot notifications', () => {
-  it('announces nothing for the first snapshot or after switching projects', () => {
+  it('announces nothing for the first snapshot or after switching workspaces', () => {
     const next = snapshot({ attention: [{ id: 'a1', taskId: 't1', kind: 'completed', title: 'Done', description: '', createdAt: at }] });
     expect(snapshotNotifications(null, next)).toEqual([]);
-    const other = snapshot({ project: { id: 'other', workspaceId: 'w', ownerUserId: 'u', name: 'Other', identifier: 'OTH', repositoryPath: '/other' } });
+    const other = snapshot({ workspace: { id: 'other', accountId: 'w', ownerUserId: 'u', name: 'Other', identifier: 'OTH', repositoryPath: '/other' } });
     expect(snapshotNotifications(other, next)).toEqual([]);
   });
 
@@ -24,12 +24,12 @@ describe('snapshot notifications', () => {
     const next = snapshot({ tasks: [done], attention: [...previous.attention,
       { id: 'a-done', taskId: 't1', kind: 'completed', title: 'Ship it', description: '', createdAt: at },
       { id: 'a-blocked', taskId: 't1', kind: 'blocked', title: 'Ship it', description: '', createdAt: at },
-      { id: 'a-project', taskId: 't1', kind: 'project_completed', title: 'Project is complete', description: '', createdAt: at },
+      { id: 'a-workspace', taskId: 't1', kind: 'workspace_completed', title: 'Workspace is complete', description: '', createdAt: at },
     ] });
     expect(snapshotNotifications(previous, next)).toEqual([
       { kind: 'completed', title: 'Task done', body: 'MUO-1 · Ship it', tag: 'attention:a-done', taskId: 't1' },
       { kind: 'blocked', title: 'A task needs your help', body: 'MUO-1 · Ship it', tag: 'attention:a-blocked', taskId: 't1' },
-      { kind: 'project_completed', title: 'Project complete', body: 'Project is complete', tag: 'attention:a-project', taskId: 't1' },
+      { kind: 'workspace_completed', title: 'Workspace complete', body: 'Workspace is complete', tag: 'attention:a-workspace', taskId: 't1' },
     ]);
     expect(snapshotNotifications(next, next)).toEqual([]);
   });

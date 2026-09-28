@@ -1,15 +1,15 @@
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentRequest, AgentResult, WorktreeProvider } from '../runtime';
 import type { Scope } from '../shared/types';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
 
-const scope: Scope = { workspaceId: 'workspace', projectId: 'project', userId: 'owner' };
+const scope: Scope = { accountId: 'workspace', workspaceId: 'workspace', userId: 'owner' };
 const fixtures: Array<{ service: TaskService; repo: SqliteRepository }> = [];
 async function fixture() {
   const repo = new SqliteRepository(':memory:');
-  await repo.initialize(scope, { id: 'project', workspaceId: 'workspace', ownerUserId: 'owner', identifier: 'MUO', name: 'Test project', repositoryPath: '/test/repository' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
+  await repo.initialize(scope, { id: 'workspace', accountId: 'workspace', ownerUserId: 'owner', identifier: 'MUO', name: 'Test workspace', repositoryPath: '/test/repository' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
   const calls: AgentRequest[] = [];
   const adapter: AgentAdapter = {
     provider: 'claude', available: async () => true,
@@ -18,15 +18,15 @@ async function fixture() {
       request.signal?.addEventListener('abort', () => reject(new Error('Canceled test run')), { once: true });
     }),
   };
-  const workspaces: WorkspaceProvider = {
+  const worktrees: WorktreeProvider = {
     validateRepository: vi.fn(async () => undefined),
     ensure: async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) }),
     changedFiles: async () => [],
   };
-  const service = new TaskService({ scope, repository: repo, adapters: { claude: adapter, codex: { ...adapter, provider: 'codex' } }, workspaces, artifacts: { importFile: async () => '', read: async () => undefined } });
+  const service = new TaskService({ scope, repository: repo, adapters: { claude: adapter, codex: { ...adapter, provider: 'codex' } }, worktrees, artifacts: { importFile: async () => '', read: async () => undefined } });
   await service.initialize();
   fixtures.push({ service, repo });
-  return { service, repo, calls, workspaces };
+  return { service, repo, calls, worktrees };
 }
 afterEach(async () => {
   for (const { service, repo } of fixtures.splice(0)) { await service.stop(); repo.close(); }
@@ -34,19 +34,19 @@ afterEach(async () => {
 
 describe('TaskService settings admission', () => {
   it('allows changing concurrency and pause settings with the unchanged repository during an active run', async () => {
-    const { service, repo, workspaces } = await fixture();
+    const { service, repo, worktrees } = await fixture();
     await service.createTask({ title: 'Active task' });
     await service.updateSettings({ dispatcherEnabled: true });
     await service.tick();
     expect((await service.snapshot()).runtime.activeRuns).toBe(1);
-    await service.updateSettings({ repositoryPath: '/test/repository', projectName: 'Renamed project', maxConcurrentAgents: 3, dispatcherEnabled: false });
+    await service.updateSettings({ repositoryPath: '/test/repository', workspaceName: 'Renamed workspace', maxConcurrentAgents: 3, dispatcherEnabled: false });
     expect(await repo.settings(scope)).toMatchObject({ maxConcurrentAgents: 3, dispatcherEnabled: false });
-    expect(await repo.project(scope)).toMatchObject({ repositoryPath: '/test/repository', name: 'Renamed project' });
-    expect(workspaces.validateRepository).not.toHaveBeenCalled();
+    expect(await repo.workspace(scope)).toMatchObject({ repositoryPath: '/test/repository', name: 'Renamed workspace' });
+    expect(worktrees.validateRepository).not.toHaveBeenCalled();
   });
 
   it('waits for an in-flight dispatch decision and rejects a repository change once that run is admitted', async () => {
-    const { service, repo, workspaces } = await fixture();
+    const { service, repo, worktrees } = await fixture();
     await service.createTask({ title: 'About to run' });
     await service.tick();
     await repo.saveSettings(scope, { ...await repo.settings(scope), dispatcherEnabled: true });
@@ -62,26 +62,26 @@ describe('TaskService settings admission', () => {
     release();
     await dispatching;
     expect(await outcome).toContain('active agents');
-    expect((await repo.project(scope)).repositoryPath).toBe('/test/repository');
-    expect(workspaces.validateRepository).not.toHaveBeenCalled();
+    expect((await repo.workspace(scope)).repositoryPath).toBe('/test/repository');
+    expect(worktrees.validateRepository).not.toHaveBeenCalled();
   });
 
   it('prevents new admission while validating an actual repository change', async () => {
-    const { service, repo, calls, workspaces } = await fixture();
+    const { service, repo, calls, worktrees } = await fixture();
     await service.createTask({ title: 'Queued task' });
     await service.tick();
     await repo.saveSettings(scope, { ...await repo.settings(scope), dispatcherEnabled: true });
     let enter!: () => void; let release!: () => void;
     const entered = new Promise<void>(resolve => { enter = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    vi.mocked(workspaces.validateRepository!).mockImplementationOnce(async () => { enter(); await gate; });
+    vi.mocked(worktrees.validateRepository!).mockImplementationOnce(async () => { enter(); await gate; });
     const changing = service.updateSettings({ repositoryPath: '/test/new-repository', dispatcherEnabled: false });
     await entered;
     await service.tick();
     expect(calls).toEqual([]);
     release();
     await changing;
-    expect((await repo.project(scope)).repositoryPath).toBe('/test/new-repository');
+    expect((await repo.workspace(scope)).repositoryPath).toBe('/test/new-repository');
     expect(calls).toEqual([]);
   });
 

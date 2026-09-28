@@ -52,6 +52,6 @@ export function ChiefSoulDialog({ snapshot, open, onOpenChange, onSaved }: { sna
     </div>
     <div className="chief-soul-preview"><div className="settings-section-label">Preview</div>{draft.trim() ? <Markdown>{draft}</Markdown> : <p className="chief-soul-empty">Your Chief will use its default behavior.</p>}</div>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="dialog-footer"><span>{busy ? 'Saving…' : dirty ? 'Saving automatically…' : savedAt ? 'Saved just now' : 'Saved per project'}</span><Button type="button" onClick={() => void persist(true)} disabled={busy || !dirty}>{busy ? 'Saving…' : <><Check size={14} />Save and close</>}</Button></div>
+    <div className="dialog-footer"><span>{busy ? 'Saving…' : dirty ? 'Saving automatically…' : savedAt ? 'Saved just now' : 'Saved per workspace'}</span><Button type="button" onClick={() => void persist(true)} disabled={busy || !dirty}>{busy ? 'Saving…' : <><Check size={14} />Save and close</>}</Button></div>
   </Dialog>;
 }

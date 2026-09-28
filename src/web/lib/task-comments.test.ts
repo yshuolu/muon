@@ -3,7 +3,7 @@ import type { Task } from '../../shared/types';
 import { taskCommentState } from './task-comments';
 
 const task: Task = {
-  id: 'task', identifier: 'MUO-1', workspaceId: 'workspace', projectId: 'project', ownerUserId: 'owner',
+  id: 'task', identifier: 'MUO-1', accountId: 'workspace', workspaceId: 'workspace', ownerUserId: 'owner',
   title: 'Task conversation', description: '', status: 'done', phase: 'complete', priority: 0, provider: 'claude',
   labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: 'Verified result',
   createdAt: '2026-09-12T10:00:00Z', updatedAt: '2026-09-12T10:00:00Z', version: 1, sessionId: 'saved-session',

@@ -6,8 +6,8 @@ import { join } from 'node:path';
 export const ASSET_INPUT_DIRECTORY = '.muon-cache/inputs';
 
 /** Stage separate immutable copies; providers never receive the storage root or a sibling checkout. */
-export async function materializeAssetInputs(workspacePath: string, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>) {
-  const base = await realpath(workspacePath);
+export async function materializeAssetInputs(worktreePath: string, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>) {
+  const base = await realpath(worktreePath);
   const result: Array<{ id: string; name: string; path: string }> = [];
   for (const original of inputs) {
     if (original.data.byteLength > 100 * 1024 * 1024) throw new Error('Input asset failed its integrity check.');

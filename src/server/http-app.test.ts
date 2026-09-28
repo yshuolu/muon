@@ -5,12 +5,12 @@ import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { AssetService } from './asset-service';
 import { LocalAssetStorage } from './local-assets';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorktreeProvider } from '../runtime';
 import { AgentProcessUnreapedError } from '../runtime';
 import type { ArtifactStore } from './ports';
 import { DomainError } from './ports';
 import { createHttpApp } from './http-app';
-import { singleProjectResolver } from './project-registry';
+import { singleWorkspaceResolver } from './workspace-registry';
 import { LocalChiefCommands } from './local-chief-commands';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
@@ -27,12 +27,12 @@ class TestAdapter implements AgentAdapter {
   }
 }
 
-const scope = { workspaceId: 'test-workspace', projectId: 'test-project', userId: 'owner' };
+const scope = { accountId: 'test-workspace', workspaceId: 'test-workspace', userId: 'owner' };
 let repository: SqliteRepository;
 let service: TaskService;
 let claude: TestAdapter;
 let codex: TestAdapter;
-let workspaces: WorkspaceProvider;
+let worktrees: WorktreeProvider;
 let app: ReturnType<typeof createHttpApp>;
 let artifacts: ArtifactStore;
 let commands: LocalChiefCommands;
@@ -40,20 +40,20 @@ let commands: LocalChiefCommands;
 beforeEach(async () => {
   repository = new SqliteRepository(':memory:');
   await repository.initialize(scope, {
-    id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId,
-    name: 'Test project', identifier: 'TST', repositoryPath: '/test/repo',
+    id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId,
+    name: 'Test workspace', identifier: 'TST', repositoryPath: '/test/repo',
   }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
   claude = new TestAdapter('claude'); codex = new TestAdapter('codex');
-  workspaces = {
+  worktrees = {
     validateRepository: vi.fn(async path => { if (!path.startsWith('/')) throw new Error('Repository path must be absolute.'); }),
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => []),
   };
   artifacts = { importFile: vi.fn(), read: vi.fn(async () => undefined) };
   commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
-  service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
+  service = new TaskService({ scope, repository, artifacts, worktrees, adapters: { claude, codex }, chiefCommands: commands });
   await service.initialize();
-  app = createHttpApp(singleProjectResolver(service), artifacts, { staticRoot: process.cwd(), access: commands });
+  app = createHttpApp(singleWorkspaceResolver(service), artifacts, { staticRoot: process.cwd(), access: commands });
 });
 afterEach(async () => {
   for (const call of [...claude.calls, ...codex.calls]) call.reject(new Error('Test cleanup'));
@@ -62,8 +62,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-/** Chief credentials must address their own project explicitly. */
-const chiefPath = (path: string) => path.replace(/^\/api/, `/api/projects/${scope.projectId}`);
+/** Chief credentials must address their own workspace explicitly. */
+const chiefPath = (path: string) => path.replace(/^\/api/, `/api/workspaces/${scope.workspaceId}`);
 async function request(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>) {
   return app.request(`http://localhost:4310${path}`, {
     method, headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -132,7 +132,7 @@ describe('HTTP validation and local boundary', () => {
     expect((await request('/api/settings', 'PATCH', { chiefProvider: 'codex' })).status).toBe(200);
     expect(await repository.settings(scope)).toMatchObject({ chiefProvider: 'codex', chiefModel: null });
     expect((await request('/api/settings', 'PATCH', { chiefProvider: 'codex', chiefModel: 'gpt-6-astra-mini' })).status).toBe(200);
-    await service.sendChief('Organize the project');
+    await service.sendChief('Organize the workspace');
     await eventually(() => codex.calls.length === 1);
     expect(claude.calls).toHaveLength(0);
     expect(codex.calls[0].request).toMatchObject({ provider: 'codex', phase: 'chief', model: 'gpt-6-astra-mini', cwd: '/test/repo' });
@@ -148,7 +148,7 @@ describe('HTTP validation and local boundary', () => {
   });
 
   it('keeps chief model settings owner-only and rejects changing an active request model', async () => {
-    await service.sendChief('Organize the project');
+    await service.sendChief('Organize the workspace');
     await eventually(() => claude.calls.length === 1);
     const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
     expect((await request(chiefPath('/api/settings'), 'PATCH', { chiefModel: 'sonnet' }, headers)).status).toBe(403);
@@ -157,16 +157,16 @@ describe('HTTP validation and local boundary', () => {
   });
 
   it('validates repository setup through the workspace provider before saving settings', async () => {
-    vi.mocked(workspaces.validateRepository!).mockRejectedValue(new Error('No committed Git history.'));
-    const result = await request('/api/settings', 'PATCH', { repositoryPath: '/empty/git', projectName: 'Changed name', maxConcurrentAgents: 3 });
+    vi.mocked(worktrees.validateRepository!).mockRejectedValue(new Error('No committed Git history.'));
+    const result = await request('/api/settings', 'PATCH', { repositoryPath: '/empty/git', workspaceName: 'Changed name', maxConcurrentAgents: 3 });
     expect(result.status).toBe(400);
     expect((await result.json()).error).toContain('at least one commit');
-    expect((await repository.project(scope)).name).toBe('Test project');
-    expect((await repository.project(scope)).repositoryPath).toBe('/test/repo');
+    expect((await repository.workspace(scope)).name).toBe('Test workspace');
+    expect((await repository.workspace(scope)).repositoryPath).toBe('/test/repo');
     expect((await repository.settings(scope)).maxConcurrentAgents).toBe(1);
-    vi.mocked(workspaces.validateRepository!).mockResolvedValue();
+    vi.mocked(worktrees.validateRepository!).mockResolvedValue();
     expect((await request('/api/settings', 'PATCH', { repositoryPath: '/valid/git' })).status).toBe(200);
-    expect((await repository.project(scope)).repositoryPath).toBe('/valid/git');
+    expect((await repository.workspace(scope)).repositoryPath).toBe('/valid/git');
   });
 
   it('serves recording byte ranges and rejects unsatisfiable ranges', async () => {
@@ -284,7 +284,7 @@ describe('REST record resources', () => {
     expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', {})).status).toBe(400);
     expect((await request(`/api/planning-chats/${chat.id}`, 'PATCH', { model: 'sonnet', busy: false })).status).toBe(400);
     expect((await request('/api/planning-chats/missing', 'PATCH', { model: 'sonnet' })).status).toBe(404);
-    await service.sendChief('Organize the project');
+    await service.sendChief('Organize the workspace');
     await eventually(() => claude.calls.length === 1);
     const headers = { authorization: `Bearer ${claude.calls[0].request.chiefCli!.token}` };
     expect((await request(chiefPath(`/api/planning-chats/${chat.id}`), 'PATCH', { model: 'sonnet' }, headers)).status).toBe(403);
@@ -315,7 +315,7 @@ describe('REST record resources', () => {
     await service.stop();
     const storage = await mkdtemp(join(tmpdir(), 'muon-notes-'));
     const assets = new AssetService({ repository, storage: new LocalAssetStorage(storage), legacyArtifacts: artifacts });
-    const withAssets = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands, assets });
+    const withAssets = new TaskService({ scope, repository, artifacts, worktrees, adapters: { claude, codex }, chiefCommands: commands, assets });
     await withAssets.initialize();
     try {
       const chat = withAssets.createPlanningChat();
@@ -390,7 +390,7 @@ describe('REST record resources', () => {
     const empty = service.createPlanningChat();
     // Simulate a crash while the reply is still running: a new service reads the database before any
     // graceful shutdown could mark the chat idle.
-    const restarted = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
+    const restarted = new TaskService({ scope, repository, artifacts, worktrees, adapters: { claude, codex }, chiefCommands: commands });
     await restarted.initialize();
     try {
       const recovered = restarted.getPlanningChat(chat.id);
@@ -450,7 +450,7 @@ describe('REST record resources', () => {
       expect(response.headers.get('cache-control')).toBe('no-store');
     }
     expect(await (await request(`/api/tasks/${task.id}/plans/plan-1`)).json()).toEqual(saved.plans[0]);
-    expect(await (await request('/api/project')).json()).toEqual(await repository.project(scope));
+    expect(await (await request('/api/workspace')).json()).toEqual(await repository.workspace(scope));
     expect(await (await request('/api/settings')).json()).toEqual(await repository.settings(scope));
     expect(await (await request('/api/runtime')).json()).toEqual((await service.snapshot()).runtime);
     expect(await (await request('/api/chief/messages')).json()).toEqual([message]);
@@ -494,10 +494,10 @@ describe('REST record resources', () => {
     expect((await request(`/api/tasks/${prerequisite.id}/cancel`, 'POST', { status: 'done' })).status).toBe(400);
   });
 
-  it('never returns or relates records from another project scope', async () => {
+  it('never returns or relates records from another workspace scope', async () => {
     const task = await service.createTask({ title: 'Local record', status: 'backlog' });
-    const foreignScope = { ...scope, workspaceId: 'other-workspace', projectId: 'other-project' };
-    await repository.initialize(foreignScope, { id: foreignScope.projectId, workspaceId: foreignScope.workspaceId, ownerUserId: 'other-owner', name: 'Other project', identifier: 'OTHER', repositoryPath: '/other/repo' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
+    const foreignScope = { ...scope, accountId: 'other-workspace', workspaceId: 'other-workspace' };
+    await repository.initialize(foreignScope, { id: foreignScope.workspaceId, accountId: foreignScope.accountId, ownerUserId: 'other-owner', name: 'Other workspace', identifier: 'OTHER', repositoryPath: '/other/repo' }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
     const foreign = await repository.insertTask(foreignScope, { ...task, id: 'foreign-task', title: 'Foreign record', ownerUserId: 'other-owner' });
     await repository.appendMessage(foreignScope, { id: 'foreign-message', role: 'assistant', content: 'Foreign chief result', createdAt: task.createdAt });
     await repository.putAttention(foreignScope, { id: 'foreign-attention', taskId: foreign.id, kind: 'completed', title: 'Foreign attention', description: '', createdAt: task.createdAt });
@@ -538,7 +538,7 @@ describe('REST record resources', () => {
 
   it('authorizes before mutations and observes only successful responses without consuming them', async () => {
     const observed: string[] = [];
-    app = createHttpApp(singleProjectResolver(service), artifacts, { access: {
+    app = createHttpApp(singleWorkspaceResolver(service), artifacts, { access: {
       authorize: request => { if (request.headers.get('authorization') !== 'Bearer allowed') throw new DomainError('Credential rejected.', 403); },
       observe: async (request, response) => { observed.push(`${request.method} ${new URL(request.url).pathname}`); expect(await response.clone().json()).toBeDefined(); },
     } });
@@ -725,7 +725,7 @@ describe('runtime integration regressions', () => {
     await eventually(() => claude.calls.length === 1);
     claude.calls[0].resolve({ text: '# RFC\nImplement in this worktree.', sessionId: 'planning-session' });
     await eventually(async () => (await service.getTask(task.id)).status === 'in_review');
-    vi.mocked(workspaces.ensure).mockRejectedValue(new Error('Worktree branch changed outside Muon'));
+    vi.mocked(worktrees.ensure).mockRejectedValue(new Error('Worktree branch changed outside Muon'));
     const reviewed = await service.getTask(task.id);
     await service.approve(task.id, reviewed.plans[0].id);
     await eventually(async () => (await service.getTask(task.id)).status === 'blocked' || claude.calls.length > 1);

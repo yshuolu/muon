@@ -28,8 +28,8 @@ await exec('git', ['-C', repository, 'config', 'core.hooksPath', join(directory,
 await exec('git', ['-C', repository, 'add', 'math.mjs', 'math.test.mjs']);
 await exec('git', ['-C', repository, '-c', 'user.name=Muon Live Validation', '-c', 'user.email=muon-live@example.invalid', 'commit', '-m', 'Initial validation fixture']);
 
-const workspaces = new LocalWorktreeProvider(join(directory, 'worktrees'));
-const workspace = await workspaces.ensure({ repositoryPath: repository, taskId: 'claude-live' });
+const worktrees = new LocalWorktreeProvider(join(directory, 'worktrees'));
+const workspace = await worktrees.ensure({ repositoryPath: repository, taskId: 'claude-live' });
 const adapter = new ClaudeCodeAdapter();
 assert.equal(await adapter.available(), true, 'Claude CLI must be installed.');
 const { stdout: version } = await exec('claude', ['--version']);
@@ -58,7 +58,7 @@ async function run(phase: AgentPhase, prompt: string): Promise<AgentResult> {
 try {
   const plan = await run('planning', 'Inspect math.mjs and math.test.mjs. Produce a concise Markdown RFC to make add(a, b) return the numerical sum. Include regression tests covering positive numbers, negative numbers and decimals. Scope is exactly these two files. This is the planning phase: do not edit or execute commands. Return the RFC as your final result.');
   assert.match(plan.text, /math|add/i);
-  assert.deepEqual(await workspaces.changedFiles(workspace), [], 'Planning must leave the task worktree unchanged.');
+  assert.deepEqual(await worktrees.changedFiles(workspace), [], 'Planning must leave the task worktree unchanged.');
   await run('building', `The owner approves the RFC below. Implement it now in math.mjs and math.test.mjs. Do not modify other files. Run the tests using node --test math.test.mjs and return a brief implementation result. The test fixture has no dependencies and requires no network.\n\n${plan.text}`);
   assert.notEqual(await readFile(join(workspace.path, 'math.mjs'), 'utf8'), originalSource, 'The coding agent must modify the implementation.');
   const { stdout: hostChecks } = await exec(process.execPath, ['--input-type=module', '-e', "import assert from 'node:assert/strict'; import { add } from './math.mjs'; assert.equal(add(2,3),5); assert.equal(add(-2,-3),-5); assert.equal(add(1.25,2.5),3.75); console.log('Independent positive, negative, decimal checks passed.');"], { cwd: workspace.path });
@@ -66,10 +66,10 @@ try {
   await run('verification', 'Verify the approved implementation. You must execute node --test math.test.mjs and report the actual command, exit outcome, and test count in your final result. Check positive numbers, negative numbers, and decimals are tested. No network is needed. Do not edit files unless required to fix a real failure.');
   const { stdout: testOutput } = await exec(process.execPath, ['--test', 'math.test.mjs'], { cwd: workspace.path });
   await writeFile(join(evidence, 'host-test-output.txt'), testOutput);
-  const changedFiles = await workspaces.changedFiles(workspace);
+  const changedFiles = await worktrees.changedFiles(workspace);
   assert.deepEqual(changedFiles.map(file => file.path), ['math.mjs', 'math.test.mjs']);
   assert.equal(await readFile(join(repository, 'math.mjs'), 'utf8'), originalSource, 'Agent changes must remain in its isolated task worktree.');
-  assert.deepEqual(await workspaces.ensure({ repositoryPath: repository, taskId: 'claude-live' }), workspace, 'Task workspace must be reusable.');
+  assert.deepEqual(await worktrees.ensure({ repositoryPath: repository, taskId: 'claude-live' }), workspace, 'Task workspace must be reusable.');
   const result = { passed: true, validatedAt: new Date().toISOString(), cliVersion: version.trim(), directory, workspace, phases, changedFiles, testOutput, hostChecks };
   await writeFile(join(evidence, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));

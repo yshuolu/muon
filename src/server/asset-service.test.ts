@@ -9,9 +9,9 @@ import { LocalArtifactStore } from './local-artifacts';
 import { LocalAssetStorage } from './local-assets';
 import { SqliteRepository } from './sqlite-repository';
 
-const scope: Scope = { workspaceId: 'workspace-a', projectId: 'project-a', userId: 'owner-a' };
+const scope: Scope = { accountId: 'worktree-a', workspaceId: 'workspace-a', userId: 'owner-a' };
 let temporary: string;
-let workspace: string;
+let worktree: string;
 let storage: LocalAssetStorage;
 let legacy: LocalArtifactStore;
 let repository: SqliteRepository;
@@ -19,12 +19,12 @@ let service: AssetService;
 
 beforeEach(async () => {
   temporary = await mkdtemp(join(tmpdir(), 'muon-assets-'));
-  workspace = join(temporary, 'worktree');
-  await mkdir(workspace);
+  worktree = join(temporary, 'worktree');
+  await mkdir(worktree);
   repository = new SqliteRepository(join(temporary, 'muon.sqlite'));
   await repository.initialize(scope, {
-    id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId,
-    name: 'Project', identifier: 'MUO', repositoryPath: workspace,
+    id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId,
+    name: 'Workspace', identifier: 'MUO', repositoryPath: worktree,
   }, { maxConcurrentAgents: 1, defaultProvider: 'claude', dispatcherEnabled: false });
   storage = new LocalAssetStorage(join(temporary, 'assets'));
   legacy = new LocalArtifactStore(join(temporary, 'artifacts'));
@@ -48,16 +48,16 @@ describe('AssetService', () => {
     expect((await service.read(scope, binary.id))?.data).toEqual(Buffer.from([0, 255, 7]));
     expect(await service.list(scope, [report.id, binary.id, report.id, 'missing'])).toEqual([report, binary]);
     expect(await service.list(scope)).toEqual([binary, report]);
-    expect(await service.get({ ...scope, projectId: 'other-project' }, binary.id)).toBeUndefined();
-    expect(await service.read({ ...scope, workspaceId: 'other-workspace' }, binary.id)).toBeUndefined();
+    expect(await service.get({ ...scope, workspaceId: 'other-workspace' }, binary.id)).toBeUndefined();
+    expect(await service.read({ ...scope, accountId: 'other-worktree' }, binary.id)).toBeUndefined();
   });
 
   it('copies generated files with provenance and media type from their original extension', async () => {
-    await writeFile(join(workspace, 'report.md'), '# Original report');
+    await writeFile(join(worktree, 'report.md'), '# Original report');
     const asset = await service.importFile(scope, {
-      workspacePath: workspace, relativePath: 'report.md', name: 'Report.txt',
+      worktreePath: worktree, relativePath: 'report.md', name: 'Report.txt',
     });
-    await writeFile(join(workspace, 'report.md'), '# A later report');
+    await writeFile(join(worktree, 'report.md'), '# A later report');
     expect(asset).toMatchObject({ name: 'Report.txt', mediaType: 'text/markdown', origin: 'generated', sourcePath: 'report.md' });
     expect(asset).not.toHaveProperty('sourceTaskId');
     expect(asset).not.toHaveProperty('sourceRunId');
@@ -66,21 +66,21 @@ describe('AssetService', () => {
 
   it('rejects unsafe paths, escaping symlinks, directories, and oversized files', async () => {
     await writeFile(join(temporary, 'outside.md'), 'private');
-    await symlink(join(temporary, 'outside.md'), join(workspace, 'escape.md'));
-    await symlink(temporary, join(workspace, 'escape-directory'));
-    await mkdir(join(workspace, 'directory.md'));
-    await writeFile(join(workspace, 'oversized.bin'), '');
-    await truncate(join(workspace, 'oversized.bin'), MAX_ASSET_BYTES + 1);
+    await symlink(join(temporary, 'outside.md'), join(worktree, 'escape.md'));
+    await symlink(temporary, join(worktree, 'escape-directory'));
+    await mkdir(join(worktree, 'directory.md'));
+    await writeFile(join(worktree, 'oversized.bin'), '');
+    await truncate(join(worktree, 'oversized.bin'), MAX_ASSET_BYTES + 1);
     for (const path of [join(temporary, 'outside.md'), '../outside.md', 'escape.md', 'escape-directory/outside.md', 'directory.md', 'oversized.bin', '.']) {
-      await expect(service.importFile(scope, { workspacePath: workspace, relativePath: path })).rejects.toThrow();
+      await expect(service.importFile(scope, { worktreePath: worktree, relativePath: path })).rejects.toThrow();
     }
     expect(await service.list(scope)).toEqual([]);
   });
 
   it('permits a worktree symlink whose file remains inside the worktree', async () => {
-    await writeFile(join(workspace, 'report.md'), '# Report');
-    await symlink(join(workspace, 'report.md'), join(workspace, 'alias.md'));
-    const asset = await service.importFile(scope, { workspacePath: workspace, relativePath: 'alias.md' });
+    await writeFile(join(worktree, 'report.md'), '# Report');
+    await symlink(join(worktree, 'report.md'), join(worktree, 'alias.md'));
+    const asset = await service.importFile(scope, { worktreePath: worktree, relativePath: 'alias.md' });
     expect(Buffer.from((await service.read(scope, asset.id))!.data).toString()).toBe('# Report');
   });
 
@@ -93,8 +93,8 @@ describe('AssetService', () => {
   });
 
   it('retains legacy bytes with deterministic IDs through repeated imports and reopening', async () => {
-    await writeFile(join(workspace, 'report.md'), '# Legacy report');
-    const url = await legacy.importFile(scope, 'task-1', workspace, 'report.md');
+    await writeFile(join(worktree, 'report.md'), '# Legacy report');
+    const url = await legacy.importFile(scope, 'task-1', worktree, 'report.md');
     const [first, simultaneous] = await Promise.all([
       service.importLegacy(scope, url),
       service.importLegacy(scope, url),
@@ -110,8 +110,8 @@ describe('AssetService', () => {
   });
 
   it('recovers legacy imports after failed database insertion or a storage publication error', async () => {
-    await writeFile(join(workspace, 'report.md'), '# Legacy report');
-    const url = await legacy.importFile(scope, 'task-1', workspace, 'report.md');
+    await writeFile(join(worktree, 'report.md'), '# Legacy report');
+    const url = await legacy.importFile(scope, 'task-1', worktree, 'report.md');
     vi.spyOn(repository, 'insertAsset').mockRejectedValueOnce(new Error('Database unavailable'));
     await expect(service.importLegacy(scope, url)).rejects.toThrow('Database unavailable');
     expect(await service.list(scope)).toEqual([]);
@@ -147,10 +147,10 @@ describe('AssetService', () => {
     expect(await service.read(scope, asset.id)).toBeUndefined();
   });
 
-  it('enforces ownership for private assets and project scope for shared assets', async () => {
+  it('enforces ownership for private assets and workspace scope for shared assets', async () => {
     const otherUser = { ...scope, userId: 'another-user' };
     const privateAsset = await service.upload(scope, { name: 'private.md', data: Buffer.from('owner only') });
-    const sharedAsset = await service.upload(scope, { name: 'shared.md', data: Buffer.from('project members'), visibility: 'project' });
+    const sharedAsset = await service.upload(scope, { name: 'shared.md', data: Buffer.from('workspace members'), visibility: 'workspace' });
     const otherPrivate = await service.upload(otherUser, { name: 'other.md', data: Buffer.from('another owner') });
     const read = vi.spyOn(storage, 'read');
     expect(await service.get(otherUser, privateAsset.id)).toBeUndefined();
@@ -159,13 +159,13 @@ describe('AssetService', () => {
     expect(await service.list(otherUser)).toEqual([sharedAsset, otherPrivate]);
     expect(await service.list(scope, [otherPrivate.id, privateAsset.id, sharedAsset.id])).toEqual([privateAsset, sharedAsset]);
     expect((await service.read(otherUser, sharedAsset.id))?.asset.id).toBe(sharedAsset.id);
-    expect(await service.read({ ...otherUser, projectId: 'another-project' }, sharedAsset.id)).toBeUndefined();
-    expect(await service.get({ ...otherUser, workspaceId: 'another-workspace' }, sharedAsset.id)).toBeUndefined();
+    expect(await service.read({ ...otherUser, workspaceId: 'another-workspace' }, sharedAsset.id)).toBeUndefined();
+    expect(await service.get({ ...otherUser, accountId: 'another-worktree' }, sharedAsset.id)).toBeUndefined();
   });
 
-  it('does not disclose an imported private legacy asset to another project member', async () => {
-    await writeFile(join(workspace, 'report.md'), '# Owner report');
-    const url = await legacy.importFile(scope, 'task-1', workspace, 'report.md');
+  it('does not disclose an imported private legacy asset to another workspace member', async () => {
+    await writeFile(join(worktree, 'report.md'), '# Owner report');
+    const url = await legacy.importFile(scope, 'task-1', worktree, 'report.md');
     const asset = await service.importLegacy(scope, url);
     expect(asset?.visibility).toBe('private');
     expect(await service.importLegacy({ ...scope, userId: 'another-user' }, url)).toBeUndefined();

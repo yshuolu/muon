@@ -7,13 +7,13 @@ import { serve } from '@hono/node-server';
 import { chromium, expect, type Browser, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { createHttpApp } from '../src/server/http-app';
-import { singleProjectResolver } from '../src/server/project-registry';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { TaskService } from '../src/server/task-service';
 
-// Real browser, HTTP, and SQLite; controlled providers never execute project commands.
+// Real browser, HTTP, and SQLite; controlled providers never execute workspace commands.
 class ControlledAdapter implements AgentAdapter {
   calls: { request: AgentRequest; finish: (text: string) => void; fail: (error: Error) => void }[] = [];
   constructor(readonly provider: 'claude' | 'codex') {}
@@ -31,19 +31,19 @@ const outputRoot = await mkdtemp(resolve('.muon/validation/planning-chat-model-'
 const repositoryPath = join(outputRoot, 'repository');
 await mkdir(repositoryPath);
 await writeFile(join(repositoryPath, 'README.md'), '# Planning chat model browser fixture\n');
-const scope = { workspaceId: 'planning-chat-model-browser', projectId: 'isolated-project', userId: 'test-owner' };
+const scope = { accountId: 'planning-chat-model-browser', workspaceId: 'isolated-workspace', userId: 'test-owner' };
 const repository = new SqliteRepository(join(outputRoot, 'muon.sqlite'));
-await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Planning chat model fixture', identifier: 'PM', repositoryPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
+await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Planning chat model fixture', identifier: 'PM', repositoryPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
 const claude = new ControlledAdapter('claude');
 const codex = new ControlledAdapter('codex');
 const artifacts = new LocalArtifactStore(join(outputRoot, 'artifacts'));
 const port = Number(process.env.MUON_PLANNING_CHAT_MODEL_BROWSER_PORT ?? 4335);
 const url = `http://127.0.0.1:${port}`;
 const chiefCommands = new LocalChiefCommands({ apiUrl: url, scope });
-const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
+const service = new TaskService({ scope, repository, artifacts, chiefCommands, worktrees: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
 await service.initialize();
 service.start();
-const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const checks: string[] = [];
@@ -377,7 +377,7 @@ try {
   await expect(page.locator('.global-error')).toHaveCount(0);
   const recoveredChatId = decodeURIComponent(new URL(page.url()).pathname.split('/').at(-1)!);
   assert.deepEqual(service.getPlanningChat(recoveredChatId).messages, []);
-  assert.equal((await service.snapshot()).project.repositoryPath, repositoryPath);
+  assert.equal((await service.snapshot()).workspace.repositoryPath, repositoryPath);
   await messageInput.fill('Confirm this recovered chat uses the selected workspace repository.');
   await sendButton.click();
   await expect.poll(() => claude.calls.length).toBe(3);

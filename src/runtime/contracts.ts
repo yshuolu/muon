@@ -33,7 +33,7 @@ export interface AgentAdapter {
   available(): Promise<boolean>;
 }
 
-export interface TaskWorkspace {
+export interface TaskWorktree {
   path: string;
   branch: string;
   baseCommit: string;
@@ -46,7 +46,7 @@ export interface ChangedFile {
   deletions: number;
 }
 
-export interface WorkspaceChanges {
+export interface WorktreeChanges {
   format: 'git-patch';
   baseCommit: string;
   headCommit: string;
@@ -67,20 +67,20 @@ export interface IntegrationResult {
   commits: TaskCommit[];
 }
 
-export interface WorkspaceProvider {
+export interface WorktreeProvider {
   validateRepository?(repositoryPath: string): Promise<void>;
   /** The task branch's own commits (not yet on the repository's checked-out branch), oldest first. */
-  commits?(input: TaskWorkspace): Promise<TaskCommit[]>;
+  commits?(input: TaskWorktree): Promise<TaskCommit[]>;
   /**
    * Commits leftover work on the task branch, rebases the branch onto the repository's checked-out branch, and
    * fast-forwards that branch. Rejects, leaving everything as it was, when the checkout is dirty or detached or
    * the rebase conflicts.
    */
-  integrate?(input: TaskWorkspace & { message: string }): Promise<IntegrationResult>;
+  integrate?(input: TaskWorktree & { message: string }): Promise<IntegrationResult>;
   /** Turns a plain folder into a repository with an initial commit of its current contents, at the owner's request. */
   initializeRepository?(repositoryPath: string): Promise<void>;
-  ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;
+  ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorktree>;
   changedFiles(input: { path: string; baseCommit: string }): Promise<ChangedFile[]>;
-  exportChanges?(input: TaskWorkspace & { maxBytes?: number }): Promise<WorkspaceChanges>;
-  materializeInputs?(workspace: TaskWorkspace, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>): Promise<Array<{ id: string; name: string; path: string }>>;
+  exportChanges?(input: TaskWorktree & { maxBytes?: number }): Promise<WorktreeChanges>;
+  materializeInputs?(worktree: TaskWorktree, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>): Promise<Array<{ id: string; name: string; path: string }>>;
 }

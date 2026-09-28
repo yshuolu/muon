@@ -4,10 +4,10 @@ import { evidenceAttempts } from '../components/verification-evidence';
 import { queueReasons, relationCandidates } from './task-state';
 
 function task(overrides: Partial<Task> = {}): Task {
-  return { id: 'task', identifier: 'MUO-1', workspaceId: 'w', projectId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-08T10:00:00Z', updatedAt: '2026-09-08T10:00:00Z', version: 1, ...overrides };
+  return { id: 'task', identifier: 'MUO-1', accountId: 'w', workspaceId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-08T10:00:00Z', updatedAt: '2026-09-08T10:00:00Z', version: 1, ...overrides };
 }
 function snapshot(tasks: Task[]): AppSnapshot {
-  return { scope: { workspaceId: 'w', projectId: 'p', userId: 'u' }, project: { id: 'p', workspaceId: 'w', ownerUserId: 'u', name: 'Project', identifier: 'MUO', repositoryPath: '/tmp/repo' }, settings: { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 2 }, tasks, attention: [], messages: [], runtime: { activeRuns: 0, chiefRunning: false, providers: { claude: true, codex: true }, demo: false } };
+  return { scope: { accountId: 'w', workspaceId: 'p', userId: 'u' }, workspace: { id: 'p', accountId: 'w', ownerUserId: 'u', name: 'Workspace', identifier: 'MUO', repositoryPath: '/tmp/repo' }, settings: { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 2 }, tasks, attention: [], messages: [], runtime: { activeRuns: 0, chiefRunning: false, providers: { claude: true, codex: true }, demo: false } };
 }
 const evidence = (id: string, runId: string | undefined, result: Evidence['result'], createdAt = '2026-09-08T10:04:00Z'): Evidence => ({ id, runId, result, kind: 'test', title: id, description: '', createdAt });
 
@@ -37,13 +37,13 @@ describe('queue explanations', () => {
   });
   it('explains setup, pause, and occupied capacity independently', () => {
     const current = task(); const state = snapshot([current]);
-    state.project.repositoryPath = ''; state.runtime.providers.claude = false;
+    state.workspace.repositoryPath = ''; state.runtime.providers.claude = false;
     state.settings.dispatcherEnabled = false; state.runtime.activeRuns = 2;
     expect(queueReasons(current, state)).toHaveLength(4);
   });
   it('shows child progress for groups without suggesting an agent will run the group', () => {
     const group = task({ kind: 'group' }); const child = task({ id: 'child', parentId: group.id });
-    const state = snapshot([group, child]); state.project.repositoryPath = ''; state.runtime.providers.claude = false;
+    const state = snapshot([group, child]); state.workspace.repositoryPath = ''; state.runtime.providers.claude = false;
     expect(queueReasons(group, state)).toEqual(['0 of 1 subtasks completed']);
   });
   it('excludes ancestors from a child’s dependency choices', () => {

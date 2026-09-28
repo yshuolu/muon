@@ -3,7 +3,7 @@ import type { Asset } from '../../shared/types';
 import { filterMentions, insertMention, mentionQuery } from './mentions';
 
 const doc = (id: string, name: string, createdAt: string, latestVersionId?: string): Asset => ({
-  id, name, createdAt, latestVersionId, workspaceId: 'w', projectId: 'p', mediaType: 'text/markdown', sizeBytes: 10, sha256: 'x', storageBackendId: 'local', objectKey: id,
+  id, name, createdAt, latestVersionId, accountId: 'w', workspaceId: 'p', mediaType: 'text/markdown', sizeBytes: 10, sha256: 'x', storageBackendId: 'local', objectKey: id,
   origin: 'upload', createdByUserId: 'u', ownerUserId: 'u', visibility: 'private',
 });
 

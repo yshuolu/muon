@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, open, readlink, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { ChangedFile, TaskWorkspace, WorkspaceChanges } from './contracts.js';
+import type { ChangedFile, TaskWorktree, WorktreeChanges } from './contracts.js';
 
 const exec = promisify(execFile);
 export const MAX_DEPENDENCY_PATCH_BYTES = 256 * 1024;
@@ -14,10 +14,10 @@ const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
 type SnapshotFile = { file: ChangedFile; mode: string; content: Buffer };
 type Snapshot = { files: SnapshotFile[]; headCommit: string; sha256: string };
 
-export async function exportWorktreeChanges(input: TaskWorkspace & { maxBytes?: number }, operations: {
+export async function exportWorktreeChanges(input: TaskWorktree & { maxBytes?: number }, operations: {
   validate: () => Promise<{ commonDirectory: string }>;
   changedFiles: () => Promise<ChangedFile[]>;
-}): Promise<WorkspaceChanges> {
+}): Promise<WorktreeChanges> {
   const maxBytes = input.maxBytes ?? MAX_DEPENDENCY_PATCH_BYTES;
   if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_DEPENDENCY_PATCH_BYTES) throw new Error('Dependency patch limit must be between 1 byte and 256 KiB.');
   const manifest = await operations.validate();

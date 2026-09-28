@@ -31,7 +31,7 @@ interface AssetProvenance {
 }
 
 interface ImportFileInput extends AssetProvenance {
-  workspacePath: string;
+  worktreePath: string;
   relativePath: string;
   name?: string;
   origin?: 'generated' | 'imported';
@@ -57,8 +57,8 @@ function mediaType(name: string, suggested?: string) {
 
 /** Asset references never grant access. Future recipient grants extend this policy. */
 export function canReadAsset(scope: Scope, asset: Asset) {
-  return asset.workspaceId === scope.workspaceId && asset.projectId === scope.projectId &&
-    (asset.ownerUserId === scope.userId || asset.visibility === 'project');
+  return asset.accountId === scope.accountId && asset.workspaceId === scope.workspaceId &&
+    (asset.ownerUserId === scope.userId || asset.visibility === 'workspace');
 }
 
 /**
@@ -129,7 +129,7 @@ export class AssetService {
     if (!input.relativePath || isAbsolute(input.relativePath) || input.relativePath.includes('\0')) {
       throw new DomainError('Asset paths must be relative to the task worktree.');
     }
-    const base = await realpath(input.workspacePath);
+    const base = await realpath(input.worktreePath);
     const source = await realpath(resolve(base, input.relativePath));
     const child = relative(base, source);
     if (!child || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
@@ -181,14 +181,14 @@ export class AssetService {
     id?: string; name: string; mediaType?: string; data: Uint8Array; origin: Asset['origin']; visibility?: Asset['visibility']; previousVersionId?: string;
   }): Promise<Asset> {
     if (input.data.byteLength > MAX_ASSET_BYTES) throw new DomainError('Assets must be no larger than 100 MiB.', 413);
-    if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'project') {
-      throw new DomainError('Asset visibility must be private or project.');
+    if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') {
+      throw new DomainError('Asset visibility must be private or workspace.');
     }
     // Own the bytes across asynchronous storage calls, even if an upload buffer is reused by its caller.
     const data = Uint8Array.from(input.data);
     const id = input.id ?? randomUUID();
     const asset: Asset = {
-      id, workspaceId: scope.workspaceId, projectId: scope.projectId, name: input.name,
+      id, accountId: scope.accountId, workspaceId: scope.workspaceId, name: input.name,
       mediaType: input.mediaType ?? mediaType(input.name), sizeBytes: data.byteLength, sha256: digest(data),
       storageBackendId: this.options.storage.backendId, objectKey: id, origin: input.origin,
       createdAt: new Date().toISOString(), createdByUserId: scope.userId,

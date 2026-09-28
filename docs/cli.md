@@ -17,7 +17,7 @@ The executable is also declared as the package’s `muon` bin. Dependencies must
 ```sh
 muon health
 muon state
-muon project
+muon workspace
 muon runtime
 muon settings get
 muon settings update --json '{"maxConcurrentAgents":2,"dispatcherEnabled":true}'
@@ -54,7 +54,7 @@ muon chief messages
 muon chief send --json '{"content":"Break authentication into reviewed coding tasks."}'
 ```
 
-Task references accept UUIDs or project identifiers. `tasks MUO-3 evidence`, `tasks MUO-3 discussion`, and `tasks MUO-3 comments` are also accepted for task subresources. Creation and edits use the API’s validated JSON fields; protected lifecycle state and RFC ownership cannot be overridden by JSON or by using the generic API command. Exact plan IDs are mandatory for approvals and RFC review comments so a stale decision cannot approve or revise a later RFC.
+Task references accept UUIDs or workspace identifiers. `tasks MUO-3 evidence`, `tasks MUO-3 discussion`, and `tasks MUO-3 comments` are also accepted for task subresources. Creation and edits use the API’s validated JSON fields; protected lifecycle state and RFC ownership cannot be overridden by JSON or by using the generic API command. Exact plan IDs are mandatory for approvals and RFC review comments so a stale decision cannot approve or revise a later RFC.
 
 ## Following up with the task agent
 
@@ -96,19 +96,19 @@ muon tasks update MUO-3 --file - < edits.json
 
 Successful record commands emit one JSON value to stdout. Errors emit one `{ "error": { "code", "message", "status" } }` value to stderr and exit with status 1. HTTP failures preserve the API status and code; local argument and connectivity failures use status 0. Help is ordinary text. No model logs, npm banners, or SQLite output are mixed into command results when using the launcher directly.
 
-## Projects
+## Workspaces
 
 ```sh
-muon projects list
-muon projects create --json '{"name":"Billing service","repositoryPath":"/Users/you/projects/billing"}'
-muon projects create --json '{"name":"Notes","repositoryPath":"/Users/you/notes","initializeRepository":true}'
-muon tasks list --project BS
-MUON_PROJECT=BS muon state
-muon projects archive BS
-muon projects restore BS
+muon workspaces list
+muon workspaces create --json '{"name":"Billing service","repositoryPath":"/Users/you/workspaces/billing"}'
+muon workspaces create --json '{"name":"Notes","repositoryPath":"/Users/you/notes","initializeRepository":true}'
+muon tasks list --workspace BS
+MUON_WORKSPACE=BS muon state
+muon workspaces archive BS
+muon workspaces restore BS
 ```
 
-Project-scoped commands address the server's default project (the first active one) unless `--project <id|identifier>` or the `MUON_PROJECT` environment variable selects another; the flag wins. The CLI then sends those requests under `/api/projects/<project>/…`, including `api` escape-hatch paths, while `projects` and `health` stay workspace-level. The chief's launcher freezes `MUON_PROJECT` to the project that started it, so the chief can only act on its own project.
+Workspace-scoped commands address the server's default workspace (the first active one) unless `--workspace <id|identifier>` or the `MUON_WORKSPACE` environment variable selects another; the flag wins. The CLI then sends those requests under `/api/workspaces/<workspace>/…`, including `api` escape-hatch paths, while `workspaces` and `health` stay workspace-level. The chief's launcher freezes `MUON_WORKSPACE` to the workspace that started it, so the chief can only act on its own workspace.
 
 ## Plans, dependency patches, and asset files
 
@@ -123,7 +123,7 @@ muon api POST /api/assets/notes --json '{"name":"decisions","content":"# Decisio
 muon artifacts download ARTIFACT-ID --output verification.webm
 ```
 
-`GET /api/assets` lists the whole library: every asset the caller may read in the project, whether or not a task references it. `POST /api/assets/notes` writes a Markdown reference note as a new immutable asset (`.md` is appended when missing) and requires the owner; the chief may list and read library files but cannot create them. Review comments on a document live under `/api/assets/ASSET-ID/comments` (see the REST contract); a resolved review that changed the text creates a new asset whose `previousVersionId` names the version it came from.
+`GET /api/assets` lists the whole library: every asset the caller may read in the workspace, whether or not a task references it. `POST /api/assets/notes` writes a Markdown reference note as a new immutable asset (`.md` is appended when missing) and requires the owner; the chief may list and read library files but cannot create them. Review comments on a document live under `/api/assets/ASSET-ID/comments` (see the REST contract); a resolved review that changed the text creates a new asset whose `previousVersionId` names the version it came from.
 
 Plan exports preserve their original Markdown or HTML. Dependency exports download the exact immutable patch recorded with the RFC. Asset downloads preserve binary bytes. `artifacts download` remains available for legacy evidence URLs; new records use `/api/assets/:id/content`. An output path must be new and its parent directory must exist; downloads never overwrite existing files. `--output -` writes raw bytes to stdout for piping, without JSON framing. After file downloads, stdout contains the path, byte length, and content type.
 

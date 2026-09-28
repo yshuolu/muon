@@ -11,7 +11,7 @@ import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
-import { singleProjectResolver } from '../src/server/project-registry';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry';
 import type { Task } from '../src/shared/types';
 
 // Dedicated headless browser, isolated SQLite, and real HTTP/Git/artifact storage.
@@ -43,21 +43,21 @@ await git('config', 'core.hooksPath', join(outputRoot, 'empty-hooks'));
 await git('add', '.');
 await git('commit', '-m', 'Initialize isolated browser acceptance repository');
 
-const scope = { workspaceId: 'browser-acceptance', projectId: 'isolated-project', userId: 'test-owner' };
+const scope = { accountId: 'browser-acceptance', workspaceId: 'isolated-workspace', userId: 'test-owner' };
 const databasePath = join(outputRoot, 'muon.sqlite');
 const repository = new SqliteRepository(databasePath);
-await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Browser acceptance fixture', identifier: 'UI', repositoryPath: repoPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
+await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Browser acceptance fixture', identifier: 'UI', repositoryPath: repoPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
 const claude = new ControlledAdapter('claude');
 const codex = new ControlledAdapter('codex');
 const artifacts = new LocalArtifactStore(join(outputRoot, 'artifacts'));
-const workspaces = new LocalWorktreeProvider(join(outputRoot, 'worktrees'));
+const worktrees = new LocalWorktreeProvider(join(outputRoot, 'worktrees'));
 const port = Number(process.env.MUON_BROWSER_TEST_PORT ?? 4332);
 const commands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
-const service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands });
+const service = new TaskService({ scope, repository, artifacts, worktrees, adapters: { claude, codex }, chiefCommands: commands });
 await service.initialize();
 service.start();
 const url = `http://127.0.0.1:${port}`;
-const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: commands });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: commands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 const browser = await chromium.launch({ headless: true });
 const screenshots: string[] = [];
@@ -310,7 +310,7 @@ try {
   await page.getByLabel('Message your chief of staff', { exact: true }).fill('Capture a backlog follow-up for this fixture.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const chief = await call(9, 'chief');
-  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token, MUON_PROJECT: scope.projectId } });
+  await exec(process.execPath, [resolve('bin/muon.mjs'), 'tasks', 'create', '--json', JSON.stringify({ title: 'Fixture follow-up', status: 'backlog' })], { env: { ...process.env, MUON_API_URL: url, MUON_API_TOKEN: chief.request.chiefCli!.token, MUON_WORKSPACE: scope.workspaceId } });
   chief.finish('Captured the follow-up in the backlog.');
   await expect(page.getByRole('button').filter({ hasText: 'Fixture follow-up' })).toBeVisible();
   await page.getByRole('button').filter({ hasText: 'Fixture follow-up' }).click();
@@ -337,7 +337,7 @@ try {
   if (succeeded) { assert.ok(saved.some(task => task.status === 'done' && task.evidence.some(item => item.kind === 'recording') && task.planDiscussion?.length === 4 && task.plans.length === 3)); check('SQLite reopen retains the completed task, RFC discussion and revisions, attempt history, and media references.'); }
   await writeFile(join(outputRoot, 'report.json'), JSON.stringify({ succeeded, checks, errors, screenshots, outputRoot }, null, 2));
   if (succeeded) {
-    await writeFile(resolve('docs/browser-validation.md'), `# Browser acceptance validation\n\nPassed ${new Date().toISOString()}.\n\nThis is an isolated product acceptance fixture with controlled agent outcomes, real HTTP and SQLite, real Git worktrees, and a dedicated headless Chromium browser. It does not claim authenticated Claude/Codex execution. No user browser tab or project database was used.\n\n${checks.map(item => `- ${item}`).join('\n')}\n\n## Retained artifacts\n\n- Fixture database, Git repository, worktrees, imported artifacts, and JSON report: \`${outputRoot}\`\n- Full browser recording: \`${join(outputRoot, 'recordings')}\`\n- Downloaded original recording: \`${join(outputRoot, 'downloaded-recording.webm')}\`\n${screenshots.map(path => `- [${path.split('/').at(-1)}](${path})`).join('\n')}\n\nRerun after building: \`npx tsx scripts/browser-live-check.ts\`. Install the dedicated Chromium test runtime once with \`npx playwright install chromium\`.\n`);
+    await writeFile(resolve('docs/browser-validation.md'), `# Browser acceptance validation\n\nPassed ${new Date().toISOString()}.\n\nThis is an isolated product acceptance fixture with controlled agent outcomes, real HTTP and SQLite, real Git worktrees, and a dedicated headless Chromium browser. It does not claim authenticated Claude/Codex execution. No user browser tab or workspace database was used.\n\n${checks.map(item => `- ${item}`).join('\n')}\n\n## Retained artifacts\n\n- Fixture database, Git repository, worktrees, imported artifacts, and JSON report: \`${outputRoot}\`\n- Full browser recording: \`${join(outputRoot, 'recordings')}\`\n- Downloaded original recording: \`${join(outputRoot, 'downloaded-recording.webm')}\`\n${screenshots.map(path => `- [${path.split('/').at(-1)}](${path})`).join('\n')}\n\nRerun after building: \`npx tsx scripts/browser-live-check.ts\`. Install the dedicated Chromium test runtime once with \`npx playwright install chromium\`.\n`);
   }
   if (succeeded) {
     const generatedValidationPath = resolve('docs/browser-validation.md');

@@ -8,7 +8,7 @@ import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { TaskService } from '../src/server/task-service.js';
 import { createHttpApp } from '../src/server/http-app.js';
-import { singleProjectResolver } from '../src/server/project-registry.js';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry.js';
 
 const exec = promisify(execFile);
 const root = resolve('.muon/acceptance', `codex-${Date.now()}`);
@@ -21,12 +21,12 @@ await exec('git', ['init', '-b', 'main'], { cwd: repositoryPath });
 await exec('git', ['add', '.'], { cwd: repositoryPath });
 await exec('git', ['-c', 'user.name=Muon Acceptance', '-c', 'user.email=acceptance@localhost', 'commit', '-m', 'Initialize isolated acceptance fixture'], { cwd: repositoryPath });
 
-const scope = { workspaceId: 'acceptance', projectId: 'codex-fixture', userId: 'acceptance-owner' };
+const scope = { accountId: 'acceptance', workspaceId: 'codex-fixture', userId: 'acceptance-owner' };
 const repo = new SqliteRepository(join(root, 'state.sqlite'));
 const artifacts = new LocalArtifactStore(join(root, 'artifacts'));
-await repo.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Codex live acceptance', identifier: 'LIVE', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: true, defaultProvider: 'codex' });
-const service = new TaskService({ scope, repository: repo, artifacts, workspaces: new LocalWorktreeProvider(join(root, 'worktrees')), adapters: { codex: new CodexAdapter(), claude: new ClaudeCodeAdapter() } });
-const app = createHttpApp(singleProjectResolver(service), artifacts);
+await repo.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Codex live acceptance', identifier: 'LIVE', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: true, defaultProvider: 'codex' });
+const service = new TaskService({ scope, repository: repo, artifacts, worktrees: new LocalWorktreeProvider(join(root, 'worktrees')), adapters: { codex: new CodexAdapter(), claude: new ClaudeCodeAdapter() } });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts);
 let taskId = '';
 const start = Date.now();
 async function request(path: string, body: unknown) {

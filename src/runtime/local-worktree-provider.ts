@@ -4,12 +4,12 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { ChangedFile, IntegrationResult, TaskCommit, TaskWorkspace, WorkspaceProvider } from './contracts.js';
+import type { ChangedFile, IntegrationResult, TaskCommit, TaskWorktree, WorktreeProvider } from './contracts.js';
 import { exportWorktreeChanges } from './local-worktree-export.js';
 import { ASSET_INPUT_DIRECTORY, materializeAssetInputs } from './local-asset-inputs.js';
 
 const exec = promisify(execFile);
-type Manifest = TaskWorkspace & { repositoryPath: string; commonDirectory: string; taskId: string };
+type Manifest = TaskWorktree & { repositoryPath: string; commonDirectory: string; taskId: string };
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const hooks = await mkdtemp(join(tmpdir(), 'muon-empty-git-hooks-'));
@@ -57,8 +57,8 @@ function inside(root: string, candidate: string): boolean {
   return suffix !== '' && suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
-export class LocalWorktreeProvider implements WorkspaceProvider {
-  private readonly pending = new Map<string, Promise<TaskWorkspace>>();
+export class LocalWorktreeProvider implements WorktreeProvider {
+  private readonly pending = new Map<string, Promise<TaskWorktree>>();
 
   constructor(private readonly root: string) {
     if (!isAbsolute(root)) throw new Error('Worktree storage root must be an absolute path.');
@@ -90,19 +90,19 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     await git(path, [...identity, 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Initial commit recorded by Muon']);
   }
 
-  /** A task workspace this provider created, re-validated against its saved manifest before Git touches it. */
+  /** A task worktree this provider created, re-validated against its saved manifest before Git touches it. */
   private async ownedWorkspace(input: { path: string; baseCommit: string }, purpose: string): Promise<{ path: string; manifest: Manifest }> {
     if (!/^[0-9a-f]{40,64}$/.test(input.baseCommit)) throw new Error('A verified base commit is required.');
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (!inside(root, path)) throw new Error(`${purpose} must target a Muon-owned worktree.`);
-    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
-    if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error(`${purpose} does not match the saved task workspace.`);
+    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error(`${purpose} does not match the saved task worktree.`);
     if ((await git(path, ['symbolic-ref', '--short', 'HEAD'])).trim() !== manifest.branch) throw new Error('Worktree branch changed outside Muon; review it before continuing.');
     return { path, manifest };
   }
 
-  async commits(input: TaskWorkspace): Promise<TaskCommit[]> {
+  async commits(input: TaskWorktree): Promise<TaskCommit[]> {
     const { path, manifest } = await this.ownedWorkspace(input, 'Commit inspection');
     const target = (await git(manifest.repositoryPath, ['symbolic-ref', '--short', '--quiet', 'HEAD']).catch(() => '')).trim();
     // The task's own commits: everything on the branch that the owner's checked-out branch does not have yet.
@@ -110,7 +110,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     return parseLog(await git(path, ['log', '--reverse', '--format=%H%x00%s%x00%aI', ...range, '--']));
   }
 
-  async integrate(input: TaskWorkspace & { message: string }): Promise<IntegrationResult> {
+  async integrate(input: TaskWorktree & { message: string }): Promise<IntegrationResult> {
     const { path, manifest } = await this.ownedWorkspace(input, 'Integration');
     const repositoryPath = manifest.repositoryPath;
     const target = (await git(repositoryPath, ['symbolic-ref', '--short', '--quiet', 'HEAD']).catch(() => '')).trim();
@@ -136,30 +136,30 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     return { branch: target, headBefore, headAfter, commits };
   }
 
-  private async validateExport(input: TaskWorkspace): Promise<Manifest> {
+  private async validateExport(input: TaskWorktree): Promise<Manifest> {
     if (!/^[0-9a-f]{40,64}$/.test(input.baseCommit)) throw new Error('A verified base commit is required.');
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (path !== input.path || !inside(root, path)) throw new Error('Dependency export must target a Muon-owned worktree.');
-    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
-    if (manifest.path !== path || manifest.branch !== input.branch || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Dependency export does not match the saved task workspace.');
+    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    if (manifest.path !== path || manifest.branch !== input.branch || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Dependency export does not match the saved task worktree.');
     if ((await git(path, ['symbolic-ref', '--short', 'HEAD'])).trim() !== manifest.branch) throw new Error('Dependency worktree branch changed outside Muon. Review it before integrating.');
     return manifest;
   }
 
-  exportChanges(input: TaskWorkspace & { maxBytes?: number }) {
+  exportChanges(input: TaskWorktree & { maxBytes?: number }) {
     return exportWorktreeChanges(input, { validate: () => this.validateExport(input), changedFiles: () => this.changedFiles(input) });
   }
 
-  async materializeInputs(workspace: TaskWorkspace, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>) {
-    await this.validateExport(workspace);
+  async materializeInputs(worktree: TaskWorktree, inputs: Array<{ id: string; name: string; sha256: string; data: Uint8Array }>) {
+    await this.validateExport(worktree);
     // A repository-owned file must never be silently replaced by a managed input.
-    const tracked = await git(workspace.path, ['ls-files', '-z', '--', ASSET_INPUT_DIRECTORY]);
+    const tracked = await git(worktree.path, ['ls-files', '-z', '--', ASSET_INPUT_DIRECTORY]);
     if (tracked) throw new Error('The reserved input asset directory contains tracked files.');
-    return materializeAssetInputs(workspace.path, inputs);
+    return materializeAssetInputs(worktree.path, inputs);
   }
 
-  async ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace> {
+  async ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorktree> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(input.taskId)) throw new Error('Invalid task ID for worktree.');
     if (!isAbsolute(input.repositoryPath)) throw new Error('Repository path must be absolute.');
     const repositoryPath = await realpath(input.repositoryPath);
@@ -174,7 +174,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     try { return await promise; } finally { this.pending.delete(key); }
   }
 
-  private async ensureLocked(input: { repositoryPath: string; taskId: string; baseRef?: string }, commonDirectory: string): Promise<TaskWorkspace> {
+  private async ensureLocked(input: { repositoryPath: string; taskId: string; baseRef?: string }, commonDirectory: string): Promise<TaskWorktree> {
     await mkdir(this.root, { recursive: true });
     const root = await realpath(this.root);
     const namespace = createHash('sha256').update(commonDirectory).digest('hex').slice(0, 16);
@@ -189,7 +189,7 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     try {
       const path = join(taskDirectory, 'checkout');
       const branch = `muon/${input.taskId}`;
-      const metadataPath = join(taskDirectory, 'workspace.json');
+      const metadataPath = join(taskDirectory, 'worktree.json');
       let manifest: Manifest;
       if (await exists(metadataPath)) {
         manifest = JSON.parse(await readFile(metadataPath, 'utf8')) as Manifest;
@@ -200,8 +200,8 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
         const baseRef = input.baseRef ?? 'HEAD';
         if (!baseRef || baseRef.startsWith('-') || /[\0\r\n]/.test(baseRef)) throw new Error('Invalid worktree base ref.');
         const baseCommit = (await git(input.repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`])).trim();
-        if ((await git(input.repositoryPath, ['branch', '--list', branch])).trim()) throw new Error(`Branch ${branch} already exists without Muon workspace metadata.`);
-        if (await exists(path)) throw new Error('Refusing to replace an existing checkout without Muon workspace metadata.');
+        if ((await git(input.repositoryPath, ['branch', '--list', branch])).trim()) throw new Error(`Branch ${branch} already exists without Muon worktree metadata.`);
+        if (await exists(path)) throw new Error('Refusing to replace an existing checkout without Muon worktree metadata.');
         manifest = { path, branch, baseCommit, repositoryPath: input.repositoryPath, commonDirectory, taskId: input.taskId };
         // Write the base first so a restart after worktree creation cannot lose its diff baseline.
         await writeFile(metadataPath, JSON.stringify(manifest, null, 2), { flag: 'wx', mode: 0o600 });
@@ -226,8 +226,8 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     const root = await realpath(this.root);
     const path = await realpath(input.path);
     if (!inside(root, path)) throw new Error('Changed-file inspection must target a Muon-owned worktree.');
-    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
-    if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Changed-file inspection does not match the saved task workspace.');
+    const manifest = JSON.parse(await readFile(join(path, '..', 'worktree.json'), 'utf8')) as Manifest;
+    if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error('Changed-file inspection does not match the saved task worktree.');
     const [statusOutput, statsOutput, untrackedOutput] = await Promise.all([
       git(path, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z', input.baseCommit, '--']),
       git(path, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', input.baseCommit, '--']),

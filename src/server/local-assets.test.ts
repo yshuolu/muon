@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Scope } from '../shared/types';
 import { LocalAssetStorage } from './local-assets';
 
-const scope: Scope = { workspaceId: 'workspace-a', projectId: 'project-a', userId: 'owner-a' };
+const scope: Scope = { accountId: 'workspace-a', workspaceId: 'workspace-a', userId: 'owner-a' };
 let temporary: string;
 let root: string;
 let storage: LocalAssetStorage;
@@ -36,9 +36,9 @@ describe('LocalAssetStorage', () => {
   it('isolates scopes and safely encodes path-like scope identifiers', async () => {
     const data = Buffer.from('scoped bytes');
     await storage.write(scope, 'asset-1', data);
+    expect(await storage.read({ ...scope, accountId: 'other' }, 'asset-1')).toBeUndefined();
     expect(await storage.read({ ...scope, workspaceId: 'other' }, 'asset-1')).toBeUndefined();
-    expect(await storage.read({ ...scope, projectId: 'other' }, 'asset-1')).toBeUndefined();
-    const pathScope = { ...scope, workspaceId: '../workspace', projectId: '..' };
+    const pathScope = { ...scope, accountId: '../workspace', workspaceId: '..' };
     await storage.write(pathScope, 'asset-1', Buffer.from('path scope'));
     expect(Buffer.from((await storage.read(pathScope, 'asset-1'))!).toString()).toBe('path scope');
     expect(await storage.read(scope, 'asset-1')).toEqual(data);

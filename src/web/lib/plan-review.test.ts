@@ -4,7 +4,7 @@ import { displayedPlan, planReviewState } from './plan-review';
 
 const first: Plan = { id: 'rfc-1', version: 1, format: 'markdown', content: '# Initial RFC', status: 'changes_requested', createdAt: '2026-09-08T10:00:00Z' };
 const second: Plan = { id: 'rfc-2', version: 2, format: 'markdown', content: '# Revised RFC', status: 'pending', createdAt: '2026-09-08T10:05:00Z' };
-const review: Task = { id: 'task', identifier: 'MUO-1', workspaceId: 'w', projectId: 'p', ownerUserId: 'owner', title: 'Review task', description: '', status: 'in_review', phase: 'plan_review', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [first, second], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: first.createdAt, updatedAt: second.createdAt, version: 3 };
+const review: Task = { id: 'task', identifier: 'MUO-1', accountId: 'w', workspaceId: 'p', ownerUserId: 'owner', title: 'Review task', description: '', status: 'in_review', phase: 'plan_review', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [first, second], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: first.createdAt, updatedAt: second.createdAt, version: 3 };
 
 describe('plan conversation review state', () => {
   it('follows new RFCs by default while preserving an intentionally selected historical version', () => {

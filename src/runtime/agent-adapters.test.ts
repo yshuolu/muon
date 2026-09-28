@@ -37,7 +37,7 @@ process.stdin.setEncoding('utf8').on('data', data => prompt += data).on('end', (
   console.log(JSON.stringify({type:'system',subtype:'init',session_id:confirmedId}));
   if (prompt === 'session-hang') { setInterval(() => {}, 1000); return; }
   if (prompt === 'session-error') { console.log(JSON.stringify({type:'result',is_error:true,result:'Provider unavailable',session_id:sessionId})); return; }
-  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'thinking',thinking:'private'},{type:'tool_use',name:'Read',input:{file_path:'src/project.ts'}},{type:'text',text:'Working...'}]}}));
+  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'thinking',thinking:'private'},{type:'tool_use',name:'Read',input:{file_path:'src/workspace.ts'}},{type:'text',text:'Working...'}]}}));
   const result = Buffer.from(JSON.stringify({type:'result',subtype:'success',result:'Finished ✓',session_id:prompt === 'changed-session' ? 'another-session' : sessionId}) + '\\n');
   const split = result.indexOf(Buffer.from('✓')) + 1;
   process.stdout.write(result.subarray(0, split));
@@ -61,7 +61,7 @@ lines.on('line', line => {
   appendFileSync(logDirectory + '/requests.jsonl', line + '\\n');
   if (!frame.method) return;
   if (frame.method === 'initialize') send({id:frame.id,result:{}});
-  if (frame.method === 'config/read') send({id:frame.id,result:{config:{model:'configured-model',mcp_servers:{'personal-tools':{command:'tool-server'},'project.tools':{url:'https://example.invalid/mcp'}}}}});
+  if (frame.method === 'config/read') send({id:frame.id,result:{config:{model:'configured-model',mcp_servers:{'personal-tools':{command:'tool-server'},'workspace.tools':{url:'https://example.invalid/mcp'}}}}});
   if (frame.method === 'thread/start' || frame.method === 'thread/resume') send({id:frame.id,result:{thread:{id:Object.hasOwn(options, 'sessionId') ? options.sessionId : frame.params.threadId ?? 'codex-thread'}}});
   if (frame.method === 'turn/start') {
     const threadId = frame.params.threadId;
@@ -152,7 +152,7 @@ describe('ClaudeCodeAdapter', () => {
     expect(settings.permissions.additionalDirectories).toEqual([directory]);
     expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, network: { allowedDomains: [], allowLocalBinding: false }, filesystem: { allowWrite: [scratch], denyWrite: [directory], denyRead: [join(directory, '.muon'), join(directory, '.env')] } });
     expect(invocation.cwd).toBe(scratch);
-    expect(invocation.prompt).toContain(`The project repository is at ${directory}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder`);
+    expect(invocation.prompt).toContain(`The workspace repository is at ${directory}. Read it with absolute paths; it is read-only for this session. Your working directory ${scratch} is a scratch folder`);
     expect(invocation.prompt).toContain('Explore an idea');
     await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
     await adapter.run({ provider: 'claude', phase: 'chat', cwd: directory, prompt: 'Use the configured default' });
@@ -188,7 +188,7 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter(await claudeFixture());
     const progress: string[] = [];
     await adapter.run({ provider: 'claude', phase: 'chief', cwd: directory, prompt: 'Manage tasks', onProgress: message => progress.push(message), chiefCli: { command: join(directory, 'muon'), apiUrl: 'http://127.0.0.1:4310', token: 'fixture-token' } });
-    expect(progress).toContain('Reading src/project.ts');
+    expect(progress).toContain('Reading src/workspace.ts');
   });
 
   it('confines building and verification without bypassing permissions', async () => {
@@ -296,7 +296,7 @@ describe('CodexAdapter', () => {
     const requests = (await readFile(join(directory, 'requests.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(requests.map((entry) => entry.method)).toEqual(['initialize', 'initialized', 'config/read', 'thread/resume', 'turn/start']);
     expect(requests[2].params).toEqual({ cwd: directory, includeLayers: false });
-    expect(requests[3].params.config).toEqual({ mcp_servers: { 'personal-tools': { enabled: false }, 'project.tools': { enabled: false } }, features: { apps: false, plugins: false, hooks: false, multi_agent: false } });
+    expect(requests[3].params.config).toEqual({ mcp_servers: { 'personal-tools': { enabled: false }, 'workspace.tools': { enabled: false } }, features: { apps: false, plugins: false, hooks: false, multi_agent: false } });
     expect(requests[3].params.config.model).toBeUndefined();
     expect(requests[4].params).toMatchObject({ approvalPolicy: 'never', sandboxPolicy: { type: 'workspaceWrite', writableRoots: [directory], networkAccess: true } });
     const { args } = JSON.parse(await readFile(join(directory, 'codex-invocation.json'), 'utf8'));
@@ -316,7 +316,7 @@ describe('CodexAdapter', () => {
     expect(requests[2].params.cwd).toBe(scratch);
     expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', approvalPolicy: 'never', config: { model: 'gpt-6-astra-mini' } });
     expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: true } });
-    expect(requests[4].params.input[0].text).toContain(`The project repository is at ${directory}`);
+    expect(requests[4].params.input[0].text).toContain(`The workspace repository is at ${directory}`);
     expect(requests[4].params.input[0].text).toContain('Organize');
     await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(adapter.run({ provider: 'codex', phase: 'chief', cwd: directory, prompt: 'Organize' })).rejects.toThrow('scoped Muon CLI');
@@ -334,7 +334,7 @@ describe('CodexAdapter', () => {
     expect(scratch).toContain('muon-codex-chat-');
     expect(requests[3].params).toMatchObject({ sandbox: 'workspace-write', config: { model: 'gpt-6-astra-mini', model_reasoning_effort: 'high' } });
     expect(requests[4].params).toMatchObject({ cwd: scratch, sandboxPolicy: { type: 'workspaceWrite', writableRoots: [scratch], networkAccess: false } });
-    expect(requests[4].params.input[0].text).toContain(`The project repository is at ${directory}`);
+    expect(requests[4].params.input[0].text).toContain(`The workspace repository is at ${directory}`);
     await expect(stat(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

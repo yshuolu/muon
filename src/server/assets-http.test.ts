@@ -3,23 +3,23 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentRequest, AgentResult, WorktreeProvider } from '../runtime';
 import type { Asset, AssetComment, AssetCommentThread, Task } from '../shared/types';
 import { AssetService } from './asset-service';
 import { createHttpApp } from './http-app';
-import { singleProjectResolver } from './project-registry';
+import { singleWorkspaceResolver } from './workspace-registry';
 import { LocalAssetStorage } from './local-assets';
 import { LocalChiefCommands } from './local-chief-commands';
 import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
 
-const scope = { workspaceId: 'asset-workspace', projectId: 'asset-project', userId: 'owner' };
+const scope = { accountId: 'asset-workspace', workspaceId: 'asset-workspace', userId: 'owner' };
 let directory: string;
 let repository: SqliteRepository;
 let assets: AssetService;
 let service: TaskService;
-let workspaces: WorkspaceProvider;
+let worktrees: WorktreeProvider;
 let commands: LocalChiefCommands;
 let app: ReturnType<typeof createHttpApp>;
 let claude: TestAdapter;
@@ -47,10 +47,10 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'muon-assets-http-'));
   repository = new SqliteRepository(':memory:');
   await repository.initialize(scope, {
-    id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId,
-    name: 'Asset project', identifier: 'AST', repositoryPath: join(directory, 'repository'),
+    id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId,
+    name: 'Asset workspace', identifier: 'AST', repositoryPath: join(directory, 'repository'),
   }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
-  workspaces = {
+  worktrees = {
     ensure: vi.fn(async ({ taskId }) => ({ path: join(directory, 'worktrees', taskId), branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => []),
   };
@@ -59,9 +59,9 @@ beforeEach(async () => {
   claude = new TestAdapter('claude');
   codex = new TestAdapter('codex');
   commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
-  service = new TaskService({ scope, repository, artifacts, assets, workspaces, adapters: { claude, codex }, chiefCommands: commands });
+  service = new TaskService({ scope, repository, artifacts, assets, worktrees, adapters: { claude, codex }, chiefCommands: commands });
   await service.initialize();
-  app = createHttpApp(singleProjectResolver(service), artifacts, { staticRoot: directory, access: commands });
+  app = createHttpApp(singleWorkspaceResolver(service), artifacts, { staticRoot: directory, access: commands });
 });
 
 afterEach(async () => {
@@ -72,7 +72,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const chiefPath = (path: string) => path.replace(/^\/api/, `/api/projects/${scope.projectId}`);
+const chiefPath = (path: string) => path.replace(/^\/api/, `/api/workspaces/${scope.workspaceId}`);
 function request(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>) {
   return app.request(`http://localhost:4310${path}`, {
     method, headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -88,11 +88,11 @@ function upload(path: string, name: string, content: string | Uint8Array, type =
 
 async function taskWithReport(status: 'blocked' | 'done' = 'blocked') {
   const task = await service.createTask({ title: 'Generate report', status: 'backlog' });
-  const worktree = await workspaces.ensure({ repositoryPath: join(directory, 'repository'), taskId: task.id });
+  const worktree = await worktrees.ensure({ repositoryPath: join(directory, 'repository'), taskId: task.id });
   await mkdir(worktree.path, { recursive: true });
   await writeFile(join(worktree.path, 'report.md'), '# Findings\n\nA readable report.\n');
   const changedFiles = [{ path: 'report.md', status: 'added', additions: 3, deletions: 0 }];
-  vi.mocked(workspaces.changedFiles).mockResolvedValue(changedFiles);
+  vi.mocked(worktrees.changedFiles).mockResolvedValue(changedFiles);
   return repository.saveTask(scope, { ...task, status, phase: status === 'done' ? 'complete' : 'verification', worktree, changedFiles }, task.version);
 }
 
@@ -113,7 +113,7 @@ describe('asset HTTP resources', () => {
     expect(asset).toMatchObject({
       name: 'brief.md', mediaType: 'text/markdown', sizeBytes: Buffer.byteLength(content),
       sha256: createHash('sha256').update(content).digest('hex'), origin: 'upload',
-      workspaceId: scope.workspaceId, projectId: scope.projectId, createdByUserId: scope.userId,
+      accountId: scope.accountId, workspaceId: scope.workspaceId, createdByUserId: scope.userId,
       ownerUserId: scope.userId, visibility: 'private',
     });
     expect((await service.getTask(task.id)).description).toContain(`[brief.md](asset://${asset.id})`);
@@ -203,13 +203,13 @@ describe('asset HTTP resources', () => {
     expect(await repository.assets(scope)).toEqual([asset]);
   });
 
-  it('does not reveal or attach assets belonging to another project', async () => {
+  it('does not reveal or attach assets belonging to another workspace', async () => {
     const response = await upload('/api/assets', 'private.md', '# Private');
     const asset = await response.json() as Asset;
-    const otherScope = { ...scope, projectId: 'other-project' };
+    const otherScope = { ...scope, workspaceId: 'other-workspace' };
     await repository.initialize(otherScope, {
-      id: otherScope.projectId, workspaceId: otherScope.workspaceId, ownerUserId: scope.userId,
-      name: 'Other project', identifier: 'OTH', repositoryPath: '',
+      id: otherScope.workspaceId, accountId: otherScope.accountId, ownerUserId: scope.userId,
+      name: 'Other workspace', identifier: 'OTH', repositoryPath: '',
     }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
     const foreign = await repository.insertAsset(otherScope, { ...asset, id: 'foreign-asset' });
     const task = await service.createTask({ title: 'Stay scoped', status: 'backlog' });
@@ -224,16 +224,16 @@ describe('asset HTTP resources', () => {
   it('enforces asset visibility independently of a task text reference', async () => {
     const otherOwner = { ...scope, userId: 'another-owner' };
     const privateAsset = await assets.upload(otherOwner, { name: 'private.md', data: Buffer.from('# Private') });
-    const projectAsset = await assets.upload(otherOwner, { name: 'shared.md', data: Buffer.from('# Project'), visibility: 'project' });
+    const workspaceAsset = await assets.upload(otherOwner, { name: 'shared.md', data: Buffer.from('# Workspace'), visibility: 'workspace' });
     const task = await service.createTask({ title: 'References do not grant access', status: 'backlog' });
     await repository.saveTask(scope, {
-      ...task, description: `[Private](asset://${privateAsset.id})\n[Shared](asset://${projectAsset.id})`,
+      ...task, description: `[Private](asset://${privateAsset.id})\n[Shared](asset://${workspaceAsset.id})`,
     }, task.version);
     expect((await request(`/api/assets/${privateAsset.id}`)).status).toBe(404);
     expect((await request(`/api/assets/${privateAsset.id}/content`)).status).toBe(404);
     expect((await request(`/api/tasks/${task.id}/assets/attach`, 'POST', { assetId: privateAsset.id })).status).toBe(404);
-    expect(await (await request(`/api/tasks/${task.id}/assets`)).json()).toEqual([projectAsset]);
-    expect(await (await request(`/api/assets/${projectAsset.id}/content`)).text()).toBe('# Project');
+    expect(await (await request(`/api/tasks/${task.id}/assets`)).json()).toEqual([workspaceAsset]);
+    expect(await (await request(`/api/assets/${workspaceAsset.id}/content`)).text()).toBe('# Workspace');
     expect(await assets.get(otherOwner, privateAsset.id)).toEqual(privateAsset);
   });
 
@@ -290,7 +290,7 @@ describe('asset HTTP resources', () => {
       ...task.changedFiles, { path: 'escape.md', status: 'added', additions: 1, deletions: 0 },
     ];
     task = await repository.saveTask(scope, { ...task, changedFiles }, task.version);
-    vi.mocked(workspaces.changedFiles).mockResolvedValue(changedFiles);
+    vi.mocked(worktrees.changedFiles).mockResolvedValue(changedFiles);
     for (const path of ['unlisted.md', '../outside.md', join(directory, 'outside.md'), 'escape.md']) {
       const response = await request(`/api/tasks/${task.id}/assets/import`, 'POST', { path });
       expect(response.status).toBe(400);
@@ -303,11 +303,11 @@ describe('asset HTTP resources', () => {
 });
 
 describe('library resources', () => {
-  it('lists every authorized asset in the project and hides other owners’ private files', async () => {
+  it('lists every authorized asset in the workspace and hides other owners’ private files', async () => {
     const task = await service.createTask({ title: 'Read the brief', status: 'backlog' });
     const brief = await (await upload(`/api/tasks/${task.id}/assets`, 'brief.md', '# Brief', 'text/markdown')).json() as Asset;
     const standalone = await (await upload('/api/assets', 'diagram.png', new Uint8Array([137, 80, 78, 71]), 'image/png')).json() as Asset;
-    const shared = await repository.insertAsset(scope, { ...standalone, id: 'shared-asset', objectKey: 'shared-asset', ownerUserId: 'teammate', createdByUserId: 'teammate', visibility: 'project' });
+    const shared = await repository.insertAsset(scope, { ...standalone, id: 'shared-asset', objectKey: 'shared-asset', ownerUserId: 'teammate', createdByUserId: 'teammate', visibility: 'workspace' });
     await repository.insertAsset(scope, { ...standalone, id: 'private-asset', objectKey: 'private-asset', ownerUserId: 'teammate', createdByUserId: 'teammate', visibility: 'private' });
     const response = await request('/api/assets');
     expect(response.status).toBe(200);
@@ -333,7 +333,7 @@ describe('library resources', () => {
     expect((await request('/api/assets/notes', 'POST', { name: 'Empty', content: ' \n\t' })).status).toBe(400);
     expect((await request('/api/assets/notes', 'POST', { name: 'nested/note', content: 'Body' })).status).toBe(400);
     expect((await request('/api/assets/notes', 'POST', { name: 'Big', content: 'x'.repeat(200_001) })).status).toBe(400);
-    expect((await request('/api/assets/notes', 'POST', { name: 'Extra', content: 'Body', visibility: 'project' })).status).toBe(400);
+    expect((await request('/api/assets/notes', 'POST', { name: 'Extra', content: 'Body', visibility: 'workspace' })).status).toBe(400);
     expect((await upload('/api/assets/notes', 'note.md', '# Note', 'text/markdown')).status).toBe(415);
     expect(await repository.assets(scope)).toEqual([]);
   });
@@ -445,7 +445,7 @@ describe('library resources', () => {
       ['library/API-discussion.md', 'A different note with the same name.\n'],
       [`library/API-discussion-${revision.id.slice(0, 8)}.md`, '# API\n\nSecond draft.\n'],
     ]);
-    expect(run.prompt).toContain('read-only copies of the project\'s Library documents are in the "library" folder');
+    expect(run.prompt).toContain('read-only copies of the workspace\'s Library documents are in the "library" folder');
     expect(run.prompt).toContain(`- library/API-discussion-${revision.id.slice(0, 8)}.md — API discussion.md (asset://${revision.id}`);
     expect(run.prompt).not.toContain(note.id);
     claude.calls[0].resolve({ text: 'Compared.' });

@@ -7,11 +7,11 @@ import { LocalAssetStorage } from './local-assets';
 import { AssetService } from './asset-service';
 import { TaskService } from './task-service';
 import { createHttpApp } from './http-app';
-import { DemoAdapter, demoWorkspaces, seedDemo } from './demo';
+import { DemoAdapter, demoWorktrees, seedDemo } from './demo';
 import { LocalIdentityProvider } from './local-identity';
 import { acquireLocalInstance } from './local-instance-lock';
 import { LocalChiefCommands } from './local-chief-commands';
-import { ProjectRegistry } from './project-registry';
+import { WorkspaceRegistry } from './workspace-registry';
 
 const demo = process.env.MUON_DEMO === '1';
 const port = Number(process.env.PORT ?? 4310);
@@ -36,15 +36,15 @@ const adapters = demo ? { claude: new DemoAdapter('claude'), codex: new DemoAdap
     bypassPermissions: bypassAgentPermissions,
   }),
 };
-const workspaces = demo ? demoWorkspaces : new LocalWorktreeProvider(resolve(dataRoot, 'worktrees'));
-// Shared dependencies serve every project; each project gets its own coordinator and dispatcher.
-const registry: ProjectRegistry = new ProjectRegistry({
-  scope: identity, repository, workspaces, adapters,
+const worktrees = demo ? demoWorktrees : new LocalWorktreeProvider(resolve(dataRoot, 'worktrees'));
+// Shared dependencies serve every workspace; each workspace gets its own coordinator and dispatcher.
+const registry: WorkspaceRegistry = new WorkspaceRegistry({
+  scope: identity, repository, worktrees, adapters,
   defaultSettings: { maxConcurrentAgents: 2, dispatcherEnabled: !demo, defaultProvider: 'claude' },
-  seed: { name: demo ? 'Muon' : 'My project', identifier: 'MUO', repositoryPath: demo ? '/demo/project' : process.env.MUON_REPOSITORY_PATH ?? '' },
-  createService: (scope, providerAvailability) => new TaskService({ scope, repository, artifacts, assets, demo, chiefCommands, adapters, workspaces, providerAvailability, reviewEffort: process.env.MUON_REVIEW_EFFORT ?? 'high' }),
+  seed: { name: demo ? 'Muon' : 'My workspace', identifier: 'MUO', repositoryPath: demo ? '/demo/workspace' : process.env.MUON_REPOSITORY_PATH ?? '' },
+  createService: (scope, providerAvailability) => new TaskService({ scope, repository, artifacts, assets, demo, chiefCommands, adapters, worktrees, providerAvailability, reviewEffort: process.env.MUON_REVIEW_EFFORT ?? 'high' }),
 });
-const chiefCommands: LocalChiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope: identity, resolveProjectId: reference => registry.projectIdFor(reference) });
+const chiefCommands: LocalChiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope: identity, resolveWorkspaceId: reference => registry.workspaceIdFor(reference) });
 let ready = false;
 const app = createHttpApp(registry, artifacts, { port, ready: () => ready, access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {

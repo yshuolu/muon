@@ -32,8 +32,8 @@ export async function requestSystemNotifications(): Promise<boolean> {
   catch { return false; }
 }
 
-export type NotificationKind = 'approval' | 'completed' | 'blocked' | 'project_completed' | 'chief' | 'comment' | 'discussion' | 'planning';
-export interface WorkspaceNotification {
+export type NotificationKind = 'approval' | 'completed' | 'blocked' | 'workspace_completed' | 'chief' | 'comment' | 'discussion' | 'planning';
+export interface SnapshotNotification {
   kind: NotificationKind;
   title: string;
   body: string;
@@ -46,7 +46,7 @@ const ATTENTION_KINDS: Record<Attention['kind'], { kind: NotificationKind; title
   plan_approval: { kind: 'approval', title: 'RFC ready for your review' },
   completed: { kind: 'completed', title: 'Task done' },
   blocked: { kind: 'blocked', title: 'A task needs your help' },
-  project_completed: { kind: 'project_completed', title: 'Project complete' },
+  workspace_completed: { kind: 'workspace_completed', title: 'Workspace complete' },
 };
 
 function taskLabel(task: Task | undefined, fallback: string) {
@@ -60,17 +60,17 @@ function excerpt(text: string, limit = 140) {
 
 /**
  * Notifications implied by the change from one snapshot to the next: new attention records and new agent replies.
- * The first snapshot after opening a project produces nothing, so existing state is never announced twice.
+ * The first snapshot after opening a workspace produces nothing, so existing state is never announced twice.
  */
-export function snapshotNotifications(previous: AppSnapshot | null, next: AppSnapshot): WorkspaceNotification[] {
-  if (!previous || previous.project.id !== next.project.id) return [];
-  const notifications: WorkspaceNotification[] = [];
+export function snapshotNotifications(previous: AppSnapshot | null, next: AppSnapshot): SnapshotNotification[] {
+  if (!previous || previous.workspace.id !== next.workspace.id) return [];
+  const notifications: SnapshotNotification[] = [];
   const knownAttention = new Set(previous.attention.map(item => item.id));
   for (const item of next.attention) {
     if (knownAttention.has(item.id)) continue;
     const task = next.tasks.find(candidate => candidate.id === item.taskId);
     const label = ATTENTION_KINDS[item.kind];
-    notifications.push({ kind: label.kind, title: label.title, body: item.kind === 'project_completed' ? item.title : taskLabel(task, item.title), tag: `attention:${item.id}`, taskId: item.taskId });
+    notifications.push({ kind: label.kind, title: label.title, body: item.kind === 'workspace_completed' ? item.title : taskLabel(task, item.title), tag: `attention:${item.id}`, taskId: item.taskId });
   }
   const knownMessages = new Set(previous.messages.map(message => message.id));
   for (const message of next.messages) {
@@ -114,7 +114,7 @@ export function unlockAudio() {
 export function playChime(kind: NotificationKind = 'completed') {
   const ctx = context();
   if (!ctx || ctx.state !== 'running') return;
-  const notes = kind === 'blocked' ? [392, 311] : kind === 'approval' || kind === 'completed' || kind === 'project_completed' ? [659, 880] : [587, 740];
+  const notes = kind === 'blocked' ? [392, 311] : kind === 'approval' || kind === 'completed' || kind === 'workspace_completed' ? [659, 880] : [587, 740];
   const start = ctx.currentTime;
   notes.forEach((frequency, index) => {
     const oscillator = ctx.createOscillator();
@@ -132,7 +132,7 @@ export function playChime(kind: NotificationKind = 'completed') {
 }
 
 /** Delivers one notification according to the stored preferences. System notifications only fire while the page is not focused. */
-export function deliverNotification(notification: WorkspaceNotification, onOpen?: () => void) {
+export function deliverNotification(notification: SnapshotNotification, onOpen?: () => void) {
   const preferences = notificationPreferences();
   if (preferences.sound) playChime(notification.kind);
   if (!preferences.system || systemNotificationSupport() !== 'granted') return;

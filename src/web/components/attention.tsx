@@ -14,11 +14,11 @@ export function AttentionView({ snapshot, onSelect, onRead }: { snapshot: AppSna
   return <div className="attention-view"><div className="view-intro"><span className="eyebrow">YOUR NEXT MOVE</span><h2>A little attention. A lot of progress.</h2><p>Review a plan, unblock an agent, or review completed work.</p></div>
     {items.length === 0 ? <EmptyState icon={<CheckCheck size={28} />} title="You’re all caught up" description="When an agent needs your approval or completes a task, it will appear here." /> : <div className="attention-list">{items.map(item => {
       const task = snapshot.tasks.find(t => t.id === item.taskId);
-      const projectComplete = item.kind === 'project_completed';
-      const completed = item.kind === 'completed' || projectComplete;
+      const workspaceComplete = item.kind === 'workspace_completed';
+      const completed = item.kind === 'completed' || workspaceComplete;
       const Icon = item.kind === 'plan_approval' ? FileCheck2 : completed ? CheckCircle2 : ShieldAlert;
-      const label = item.kind === 'plan_approval' ? 'APPROVAL NEEDED' : projectComplete ? 'PROJECT COMPLETE' : completed ? 'READY FOR YOU' : 'NEEDS YOUR HELP';
-      const actionLabel = item.kind === 'plan_approval' ? 'Review plan' : projectComplete ? 'See final task' : completed ? 'See results' : 'Open task';
+      const label = item.kind === 'plan_approval' ? 'APPROVAL NEEDED' : workspaceComplete ? 'WORKSPACE COMPLETE' : completed ? 'READY FOR YOU' : 'NEEDS YOUR HELP';
+      const actionLabel = item.kind === 'plan_approval' ? 'Review plan' : workspaceComplete ? 'See final task' : completed ? 'See results' : 'Open task';
       return <article key={item.id} className={`attention-card attention-${completed ? 'completed' : item.kind}`}>
         <div className="attention-kind-icon"><Icon size={20} /></div>
         <div className="attention-card-content">

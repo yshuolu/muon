@@ -1,12 +1,12 @@
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentProvider, AgentRequest, AgentResult, WorktreeProvider } from '../runtime';
 import type { Scope, Settings, Task } from '../shared/types';
 import type { ArtifactStore } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService, type ServiceOptions } from './task-service';
 import { createHttpApp } from './http-app';
-import { singleProjectResolver } from './project-registry';
+import { singleWorkspaceResolver } from './workspace-registry';
 import { LocalChiefCommands } from './local-chief-commands';
 
 interface ControlledCall {
@@ -38,7 +38,7 @@ class ControlledAdapter implements AgentAdapter {
   }
 }
 
-const scope: Scope = { workspaceId: 'workspace', projectId: 'project', userId: 'owner' };
+const scope: Scope = { accountId: 'workspace', workspaceId: 'workspace', userId: 'owner' };
 const initialSettings: Settings = { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' };
 interface Fixture {
   repo: SqliteRepository;
@@ -46,7 +46,7 @@ interface Fixture {
   claude: ControlledAdapter;
   codex: ControlledAdapter;
   options: ServiceOptions;
-  workspaces: WorkspaceProvider;
+  worktrees: WorktreeProvider;
   artifacts: ArtifactStore;
   app: ReturnType<typeof createHttpApp>;
 }
@@ -55,12 +55,12 @@ const fixtures: Fixture[] = [];
 async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
   const repo = new SqliteRepository(':memory:');
   await repo.initialize(scope, {
-    id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId,
+    id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId,
     name: 'Muon test', identifier: 'MUO', repositoryPath: '/test/repository',
   }, { ...initialSettings, maxConcurrentAgents });
   const claude = new ControlledAdapter('claude');
   const codex = new ControlledAdapter('codex');
-  const workspaces: WorkspaceProvider = {
+  const worktrees: WorktreeProvider = {
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => [{ path: 'src/app.ts', status: 'M', additions: 4, deletions: 1 }]),
     commits: vi.fn(async () => [{ sha: 'c'.repeat(40), subject: 'Implement the task detail', authoredAt: '2026-09-27T10:00:00Z' }]),
@@ -72,11 +72,11 @@ async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
     read: vi.fn(async () => undefined),
   };
   const commands = new LocalChiefCommands({ apiUrl: 'http://127.0.0.1:4310', scope });
-  const options = { scope, repository: repo, artifacts, workspaces, adapters: { claude, codex }, chiefCommands: commands };
+  const options = { scope, repository: repo, artifacts, worktrees, adapters: { claude, codex }, chiefCommands: commands };
   const service = new TaskService(options);
   await service.initialize();
-  const app = createHttpApp(singleProjectResolver(service), artifacts, { access: commands });
-  const result = { repo, service, claude, codex, options, workspaces, artifacts, app };
+  const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { access: commands });
+  const result = { repo, service, claude, codex, options, worktrees, artifacts, app };
   fixtures.push(result);
   return result;
 }
@@ -119,7 +119,7 @@ async function waitForState(fixture: Fixture, taskId: string, status: Task['stat
 }
 async function chiefRequest<T = Task>(fixture: Fixture, call: ControlledCall, path: string, method: string, body: unknown, status = 200): Promise<T> {
   expect(call.request.chiefCli?.token).toBeTruthy();
-  const response = await fixture.app.request(`http://127.0.0.1:4310/api/projects/${fixture.service.scope.projectId}${path}`, {
+  const response = await fixture.app.request(`http://127.0.0.1:4310/api/workspaces/${fixture.service.scope.workspaceId}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${call.request.chiefCli!.token}` },
     body: JSON.stringify(body),
@@ -248,7 +248,7 @@ describe('TaskService workflow', () => {
 
   it('counts the chief against the global limit and resists concurrent dispatcher ticks', async () => {
     const f = await fixture(2);
-    await f.service.sendChief('Organize the project');
+    await f.service.sendChief('Organize the workspace');
     const chief = await waitForCall(f, 0, 'chief');
     await f.service.createTask({ title: 'First coding task', priority: 1 });
     await f.service.createTask({ title: 'Second coding task', priority: 2 });
@@ -258,17 +258,17 @@ describe('TaskService workflow', () => {
     await Promise.all(Array.from({ length: 25 }, () => f.service.tick()));
     expect(f.claude.calls).toHaveLength(2);
     expect((await f.service.snapshot()).runtime).toMatchObject({ activeRuns: 2, chiefRunning: true });
-    chief.finish('The project is organized.');
+    chief.finish('The workspace is organized.');
     await waitForCall(f, 2, 'planning');
     expect((await f.service.snapshot()).runtime).toMatchObject({ activeRuns: 2, chiefRunning: false });
-    expect((await f.repo.messages(scope)).map(item => item.content)).toEqual(['Organize the project', 'The project is organized.']);
+    expect((await f.repo.messages(scope)).map(item => item.content)).toEqual(['Organize the workspace', 'The workspace is organized.']);
   });
 
   it('applies the saved model only to chief requests and restores the adapter default when cleared', async () => {
     const f = await fixture(2);
     const config = (await f.service.snapshot()).runtime.config;
     await f.service.updateSettings({ chiefModel: 'sonnet[1m]' });
-    await f.service.sendChief('Organize the project');
+    await f.service.sendChief('Organize the workspace');
     const chief = await waitForCall(f, 0, 'chief');
     expect(chief.request.model).toBe('sonnet[1m]');
     await expect(f.service.updateSettings({ chiefModel: 'opus' })).rejects.toMatchObject({ status: 409 });
@@ -278,7 +278,7 @@ describe('TaskService workflow', () => {
     await dispatch(f);
     expect((await waitForCall(f, 1, 'planning')).request.model).toBeUndefined();
     expect((await f.service.snapshot()).runtime.config).toEqual(config);
-    chief.finish('The project is organized.');
+    chief.finish('The workspace is organized.');
     await eventually(async () => !(await f.service.snapshot()).runtime.chiefRunning, 'chief finished');
     await f.service.updateSettings({ chiefModel: null });
     await f.service.sendChief('Continue with the configured model');
@@ -312,8 +312,8 @@ describe('TaskService workflow', () => {
   it('releases planning-chat reservations when configuration fails so the owner can switch and retry', async () => {
     const f = await fixture();
     const chat = f.service.createPlanningChat();
-    vi.spyOn(f.repo, 'project').mockRejectedValueOnce(new Error('Project lookup failed'));
-    await expect(f.service.sendPlanningChat(chat.id, 'Explore this idea')).rejects.toThrow('Project lookup failed');
+    vi.spyOn(f.repo, 'workspace').mockRejectedValueOnce(new Error('Workspace lookup failed'));
+    await expect(f.service.sendPlanningChat(chat.id, 'Explore this idea')).rejects.toThrow('Workspace lookup failed');
     expect(chat.messages).toEqual([]);
     expect(f.service.updatePlanningChat(chat.id, { model: 'sonnet' }).model).toBe('sonnet');
     await f.service.sendPlanningChat(chat.id, 'Try again');
@@ -342,8 +342,8 @@ describe('TaskService workflow', () => {
     const chat = f.service.createPlanningChat();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const project = f.repo.project.bind(f.repo);
-    vi.spyOn(f.repo, 'project').mockImplementationOnce(async target => { await gate; return project(target); });
+    const workspace = f.repo.workspace.bind(f.repo);
+    vi.spyOn(f.repo, 'workspace').mockImplementationOnce(async target => { await gate; return workspace(target); });
     const sending = f.service.sendPlanningChat(chat.id, 'Discard before running');
     const outcome = sending.catch(error => error);
     f.service.discardPlanningChat(chat.id);
@@ -355,12 +355,12 @@ describe('TaskService workflow', () => {
   it('includes the saved Chief SOUL in the chief prompt and keeps it owner-only', async () => {
     const f = await fixture(2);
     await f.service.updateSettings({ chiefSoul: 'Be concise and ask before expanding scope.' });
-    await f.service.sendChief('Organize the project');
+    await f.service.sendChief('Organize the workspace');
     const chief = await waitForCall(f, 0, 'chief');
     expect(chief.request.prompt).toContain('Owner-configured SOUL');
     expect(chief.request.prompt).toContain('Be concise and ask before expanding scope.');
     await expect(f.service.updateSettings({ chiefSoul: 'Change while busy' })).rejects.toMatchObject({ status: 409 });
-    chief.finish('The project is organized.');
+    chief.finish('The workspace is organized.');
   });
 
   it('keeps a queued chief model unchanged until capacity becomes available', async () => {
@@ -704,8 +704,8 @@ describe('TaskService workflow', () => {
     const expectedKind = result === 'passed' ? 'completed' : 'blocked';
     await eventually(async () => (await f.repo.attention(scope)).some(item => item.kind === expectedKind), 'verification attention');
     expect((await f.repo.attention(scope)).filter(item => item.kind === expectedKind)).toHaveLength(1);
-    expect(f.workspaces.ensure).toHaveBeenCalledTimes(3);
-    expect(new Set(vi.mocked(f.workspaces.ensure).mock.calls.map(([input]) => input.taskId)).size).toBe(1);
+    expect(f.worktrees.ensure).toHaveBeenCalledTimes(3);
+    expect(new Set(vi.mocked(f.worktrees.ensure).mock.calls.map(([input]) => input.taskId)).size).toBe(1);
   });
 
   it('integrates verified work into the repository branch and records the commit stack, with a retry after failure', async () => {
@@ -716,13 +716,13 @@ describe('TaskService workflow', () => {
     const saved = await waitForState(f, task.id, 'done');
     await eventually(async () => (await f.service.getTask(task.id)).integration?.status === 'integrated', 'integration');
     const integrated = await f.service.getTask(task.id);
-    expect(f.workspaces.integrate).toHaveBeenCalledWith({ ...saved.worktree, message: `${task.identifier}: Implement the task detail` });
+    expect(f.worktrees.integrate).toHaveBeenCalledWith({ ...saved.worktree, message: `${task.identifier}: Implement the task detail` });
     expect(integrated.integration).toMatchObject({ status: 'integrated', branch: 'main', headAfter: 'd'.repeat(40), commits: [{ sha: 'd'.repeat(40) }] });
     expect(integrated.activity.at(-1)?.text).toBe('Integrated 1 commit into main: rebased onto it and fast-forwarded.');
     await expect(f.service.integrateTask(task.id)).rejects.toMatchObject({ status: 409 });
 
     const g = await fixture();
-    vi.mocked(g.workspaces.integrate!).mockRejectedValueOnce(new Error('The repository has uncommitted changes on main. Commit or stash them, then integrate again.'));
+    vi.mocked(g.worktrees.integrate!).mockRejectedValueOnce(new Error('The repository has uncommitted changes on main. Commit or stash them, then integrate again.'));
     const other = await prepareVerification(g);
     other.call.finish(verification('passed'));
     await waitForState(g, other.task.id, 'done');
@@ -794,15 +794,15 @@ describe('TaskService workflow', () => {
     expect((await f.service.getTask(task.id)).recovery).toMatchObject({ mode: 'resume' });
   });
 
-  it('acknowledges project completion until new backlog work makes the project incomplete', async () => {
+  it('acknowledges workspace completion until new backlog work makes the workspace incomplete', async () => {
     const f = await fixture();
     const canceled = await f.service.createTask({ title: 'Removed from scope', status: 'backlog' });
     await f.service.editTask(canceled.id, { status: 'canceled' });
     const { task, call } = await prepareVerification(f);
     call.finish(verification('passed'));
     await waitForState(f, task.id, 'done');
-    await eventually(async () => (await f.repo.attention(scope)).some(item => item.kind === 'project_completed'), 'project completion notice');
-    const completion = (await f.repo.attention(scope)).find(item => item.kind === 'project_completed')!;
+    await eventually(async () => (await f.repo.attention(scope)).some(item => item.kind === 'workspace_completed'), 'workspace completion notice');
+    const completion = (await f.repo.attention(scope)).find(item => item.kind === 'workspace_completed')!;
     expect(completion.taskId).toBe(task.id);
     expect(completion.title).toBe('Muon test is complete');
     expect(completion.description).toContain('1 completed coding task');
@@ -810,28 +810,28 @@ describe('TaskService workflow', () => {
     expect((await f.repo.attention(scope)).filter(item => item.kind === 'completed')).toHaveLength(1);
 
     await f.service.markRead(completion.id);
-    const acknowledged = (await f.repo.attention(scope)).find(item => item.kind === 'project_completed')!;
+    const acknowledged = (await f.repo.attention(scope)).find(item => item.kind === 'workspace_completed')!;
     expect(acknowledged.readAt).toBeTruthy();
     await f.service.tick();
     await f.service.tick();
-    expect((await f.repo.attention(scope)).filter(item => item.kind === 'project_completed')).toEqual([acknowledged]);
+    expect((await f.repo.attention(scope)).filter(item => item.kind === 'workspace_completed')).toEqual([acknowledged]);
 
     await f.service.createTask({ title: 'A new idea', status: 'backlog' });
     await f.service.tick();
-    expect((await f.repo.attention(scope)).filter(item => item.kind === 'project_completed')).toEqual([]);
+    expect((await f.repo.attention(scope)).filter(item => item.kind === 'workspace_completed')).toEqual([]);
     expect((await f.repo.attention(scope)).filter(item => item.kind === 'completed')).toHaveLength(1);
   });
 
-  it('does not report an empty or entirely canceled project as completed', async () => {
+  it('does not report an empty or entirely canceled workspace as completed', async () => {
     const f = await fixture();
     await f.service.tick();
-    expect((await f.repo.attention(scope)).some(item => item.kind === 'project_completed')).toBe(false);
+    expect((await f.repo.attention(scope)).some(item => item.kind === 'workspace_completed')).toBe(false);
     const first = await f.service.createTask({ title: 'Canceled one', status: 'backlog' });
     const second = await f.service.createTask({ title: 'Canceled two', status: 'backlog' });
     await f.service.editTask(first.id, { status: 'canceled' });
     await f.service.editTask(second.id, { status: 'canceled' });
     await f.service.tick();
-    expect((await f.repo.attention(scope)).some(item => item.kind === 'project_completed')).toBe(false);
+    expect((await f.repo.attention(scope)).some(item => item.kind === 'workspace_completed')).toBe(false);
     expect(f.claude.calls).toHaveLength(0);
   });
 
@@ -993,11 +993,11 @@ describe('TaskService workflow', () => {
     }
     expect((await f.service.getTask(root.id)).summary).toContain('Regression check passed');
     expect(f.claude.calls).toHaveLength(3);
-    expect(f.workspaces.ensure).toHaveBeenCalledTimes(3);
-    await eventually(async () => (await f.repo.attention(scope)).some(item => item.kind === 'project_completed'), 'group project completion');
-    const projectNotice = (await f.repo.attention(scope)).find(item => item.kind === 'project_completed')!;
-    expect(projectNotice.description).toContain('1 completed coding task');
-    expect(projectNotice.description).toContain('2 task groups');
+    expect(f.worktrees.ensure).toHaveBeenCalledTimes(3);
+    await eventually(async () => (await f.repo.attention(scope)).some(item => item.kind === 'workspace_completed'), 'group workspace completion');
+    const workspaceNotice = (await f.repo.attention(scope)).find(item => item.kind === 'workspace_completed')!;
+    expect(workspaceNotice.description).toContain('1 completed coding task');
+    expect(workspaceNotice.description).toContain('2 task groups');
   });
 
   it('keeps empty groups and groups with canceled children incomplete, and allows removing a canceled child', async () => {
@@ -1036,7 +1036,7 @@ describe('TaskService workflow', () => {
     expect((await f.service.getTask(group.id)).completedAt).toBeUndefined();
     expect(await f.service.getTask(first.id)).toEqual(completed);
     expect((await f.repo.attention(scope)).some(item => item.taskId === group.id && item.kind === 'completed')).toBe(false);
-    expect((await f.repo.attention(scope)).some(item => item.kind === 'project_completed')).toBe(false);
+    expect((await f.repo.attention(scope)).some(item => item.kind === 'workspace_completed')).toBe(false);
   });
 
   it('rejects hierarchy/dependency cycles across groups and coding subtasks', async () => {
@@ -1128,15 +1128,15 @@ describe('TaskService workflow', () => {
     planning.finish('# RFC\nIntegrate the supplied dependency snapshot.');
     const review = await waitForState(f, integration.id, 'in_review', 'plan_review');
     expect(review.plans[0].dependencyInputs).toMatchObject([{ taskId: prerequisite.id, changes: { sha256: 'f'.repeat(64), patch: expect.stringContaining('dependency = 42') } }]);
-    vi.mocked(f.workspaces.exportChanges!).mockRejectedValue(new Error('The source changed after review.'));
+    vi.mocked(f.worktrees.exportChanges!).mockRejectedValue(new Error('The source changed after review.'));
     await f.service.approve(integration.id, review.plans[0].id);
     const building = await waitForCall(f, 1, 'building');
     expect(building.request.prompt).toContain('dependency = 42');
-    expect(f.workspaces.exportChanges).toHaveBeenCalledTimes(1);
+    expect(f.worktrees.exportChanges).toHaveBeenCalledTimes(1);
     building.finish('Integrated the reviewed dependency snapshot.');
     const checking = await waitForCall(f, 2, 'verification');
     expect(checking.request.prompt).toContain('dependency = 42');
-    expect(f.workspaces.exportChanges).toHaveBeenCalledTimes(1);
+    expect(f.worktrees.exportChanges).toHaveBeenCalledTimes(1);
     checking.finish(verification('passed'));
     expect((await waitForState(f, integration.id, 'done')).plans[0].dependencyInputs).toEqual(review.plans[0].dependencyInputs);
   });
@@ -1151,7 +1151,7 @@ describe('TaskService workflow', () => {
     const integration = await f.service.createTask({ title: 'Integrate feature', blockedByIds: [group.id, first.id] });
     await dispatch(f);
     const planning = await waitForCall(f, 0, 'planning');
-    expect(f.workspaces.exportChanges).toHaveBeenCalledTimes(2);
+    expect(f.worktrees.exportChanges).toHaveBeenCalledTimes(2);
     expect(planning.request.prompt).toContain(first.identifier);
     expect(planning.request.prompt).toContain(second.identifier);
     planning.finish('# RFC\nIntegrate both completed leaf snapshots.');
@@ -1163,7 +1163,7 @@ describe('TaskService workflow', () => {
     const f = await fixture();
     const prerequisite = await f.service.createTask({ title: 'Prerequisite', status: 'backlog' });
     await f.repo.saveTask(scope, { ...prerequisite, status: 'done', phase: 'complete', worktree: { path: '/test/dependency', branch: 'muon/dependency', baseCommit: 'c'.repeat(40) } }, prerequisite.version);
-    vi.mocked(f.workspaces.exportChanges!).mockRejectedValue(new Error('Dependency patch exceeds 262144 bytes. No partial patch was supplied.'));
+    vi.mocked(f.worktrees.exportChanges!).mockRejectedValue(new Error('Dependency patch exceeds 262144 bytes. No partial patch was supplied.'));
     const integration = await f.service.createTask({ title: 'Integrate large change', blockedByIds: [prerequisite.id] });
     await dispatch(f);
     const blocked = await waitForState(f, integration.id, 'blocked', 'planning');

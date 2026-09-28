@@ -18,7 +18,7 @@ export const createTaskSchema = z.strictObject({
 export const editTaskSchema = createTaskSchema.omit({ kind: true }).partial().extend({ status: z.enum(['backlog', 'todo', 'canceled']).optional() });
 export const settingsSchema = z.strictObject({
   maxConcurrentAgents: z.number().int().min(1).max(8).optional(), dispatcherEnabled: z.boolean().optional(),
-  defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), projectName: z.string().trim().min(1).max(100).optional(),
+  defaultProvider: z.enum(['claude', 'codex']).optional(), repositoryPath: z.string().max(2000).optional(), workspaceName: z.string().trim().min(1).max(100).optional(),
   chiefProvider: z.enum(['claude', 'codex']).nullable().optional(),
   chiefModel: modelIdentifierSchema.nullable().optional(),
   chiefEffort: effortSchema.nullable().optional(),
@@ -31,17 +31,17 @@ export const createAssetCommentSchema = z.strictObject({
   content: z.string().trim().min(1).max(4000), requestId: z.uuid(), anchor: assetCommentAnchorSchema.optional(),
 });
 export const updateAssetCommentSchema = z.strictObject({ content: z.string().trim().min(1).max(4000) });
-export const projectIdentifierSchema = z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9]{1,4}$/, 'Identifiers are 2 to 5 letters or digits, starting with a letter.');
-export const createProjectSchema = z.strictObject({
+export const workspaceIdentifierSchema = z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9]{1,4}$/, 'Identifiers are 2 to 5 letters or digits, starting with a letter.');
+export const createWorkspaceSchema = z.strictObject({
   name: z.string().trim().min(1).max(100), repositoryPath: z.string().trim().min(1).max(2000),
-  identifier: projectIdentifierSchema.optional(),
+  identifier: workspaceIdentifierSchema.optional(),
   /** Create a Git repository with an initial commit when the folder is not one yet. */
   initializeRepository: z.boolean().optional(),
 });
-export const updateProjectSchema = z.strictObject({
+export const updateWorkspaceSchema = z.strictObject({
   name: z.string().trim().min(1).max(100).optional(), repositoryPath: z.string().trim().max(2000).optional(),
   /** A new task prefix; existing task identifiers are renamed with it. */
-  identifier: projectIdentifierSchema.optional(),
+  identifier: workspaceIdentifierSchema.optional(),
 });
 export const retryTaskSchema = z.strictObject({ mode: z.enum(['retry', 'resume', 'fix', 'replan']).optional(), feedback: z.string().trim().max(20_000).optional() });
 export const reviewSchema = z.strictObject({ planId: z.string().min(1) });
@@ -86,8 +86,8 @@ export type TaskCommentRequest = z.infer<typeof taskCommentSchema>;
 export type ChiefMessageRequest = z.infer<typeof chiefMessageSchema>;
 export type UpdatePlanningChatRequest = z.infer<typeof updatePlanningChatSchema>;
 export type CreateNoteRequest = z.infer<typeof createNoteSchema>;
-export type CreateProjectRequest = z.input<typeof createProjectSchema>;
-export type UpdateProjectRequest = z.infer<typeof updateProjectSchema>;
+export type CreateWorkspaceRequest = z.input<typeof createWorkspaceSchema>;
+export type UpdateWorkspaceRequest = z.infer<typeof updateWorkspaceSchema>;
 export type ListTasksQuery = z.input<typeof listTasksQuerySchema>;
 export type ListAttentionQuery = z.input<typeof listAttentionQuerySchema>;
 export interface ApiErrorResponse { error: string }

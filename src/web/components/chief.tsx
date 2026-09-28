@@ -38,7 +38,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
   const providerDetected = snapshot.runtime.providers[selectedProvider];
   const modelSelect = useRef<HTMLSelectElement>(null);
   const scroll = useConversationScroll({
-    conversationKey: JSON.stringify([snapshot.scope.workspaceId, snapshot.scope.projectId, 'chief']),
+    conversationKey: JSON.stringify([snapshot.scope.accountId, snapshot.scope.workspaceId, 'chief']),
     messages: snapshot.messages,
   });
   useEffect(() => { setSelectedModel(snapshot.settings.chiefModel ?? null); }, [snapshot.settings.chiefModel]);
@@ -85,7 +85,7 @@ export function ChiefView({ snapshot, onRefresh, onSelect }: { snapshot: AppSnap
     {snapshot.messages.length === 0 ? <div className="chief-welcome"><div className="chief-orb"><MuonMark /></div><span className="eyebrow">YOUR CHIEF OF STAFF</span><h2>Big picture. Next steps.</h2><p>A thinking partner who knows your tasks.<br />Tell me what’s on your mind. We’ll turn it into progress.</p><div className="chief-suggestions">{[
       { icon: ListTodo, title: 'Make a plan', text: 'Help me break down my next feature into clear, actionable tasks.' },
       { icon: CheckCircle2, title: 'Find my focus', text: 'Review my tasks and tell me what needs my attention first.' },
-      { icon: Sparkles, title: 'See the big picture', text: 'Give me a concise update on this project and what is ready to ship.' },
+      { icon: Sparkles, title: 'See the big picture', text: 'Give me a concise update on this workspace and what is ready to ship.' },
     ].map(suggestion => <button key={suggestion.title} onClick={() => setContent(suggestion.text)}><suggestion.icon size={17} /><span>{suggestion.title}</span><ArrowRight size={14} /></button>)}</div></div> : <div className="chief-messages">{snapshot.messages.map(message => <article key={message.id} data-message-id={message.id} className={`chief-message ${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <MuonMark small /> : 'Y'}</div><div className="message-content"><ConversationUnreadBoundary scroll={scroll} messageId={message.id} /><div className="message-author">{message.role === 'assistant' ? 'Chief of staff' : 'You'}{message.role === 'assistant' && <span>{PROVIDER_LABELS[message.provider ?? 'claude']}</span>}</div><Markdown>{message.content}</Markdown>{Boolean(message.taskIds?.length) && <div className="message-task-links">{message.taskIds?.map(id => { const task = snapshot.tasks.find(t => t.id === id); return task ? <button key={id} onClick={() => onSelect(task)}><span>{task.identifier}</span>{task.title}<ArrowRight size={13} /></button> : null; })}</div>}</div></article>)}</div>}
     {(snapshot.runtime.chiefRunning || busy) && <div className="chief-working"><span className="working-dots"><i /><i /><i /></span>{chiefQueued ? 'Request saved. Waiting for an available agent slot…' : snapshot.runtime.chiefActivity ?? 'Chief of staff is working on it…'}</div>}
     </ConversationViewport><div className="chief-composer-wrap">

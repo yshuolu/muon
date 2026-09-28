@@ -9,7 +9,7 @@ import { TaskService } from '../src/server/task-service';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { createHttpApp } from '../src/server/http-app';
-import { singleProjectResolver } from '../src/server/project-registry';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry';
 import type { Task } from '../src/shared/types';
 
 // Opt-in authenticated Claude check: real CLI -> REST -> SQLite -> planning agent.
@@ -26,10 +26,10 @@ await exec('git', ['-C', repoPath, 'config', 'core.hooksPath', join(directory, '
 await exec('git', ['-C', repoPath, 'add', '.']);
 await exec('git', ['-C', repoPath, '-c', 'user.name=Muon Live Validation', '-c', 'user.email=muon-live@example.invalid', 'commit', '-m', 'Initialize plan discussion fixture']);
 
-const scope = { workspaceId: 'discussion-validation', projectId: 'counter', userId: 'test-owner' };
+const scope = { accountId: 'discussion-validation', workspaceId: 'counter', userId: 'test-owner' };
 const databasePath = join(directory, 'muon.sqlite');
 const repository = new SqliteRepository(databasePath);
-await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Plan discussion validation', identifier: 'RFC', repositoryPath: repoPath }, { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 1 });
+await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Plan discussion validation', identifier: 'RFC', repositoryPath: repoPath }, { defaultProvider: 'claude', dispatcherEnabled: true, maxConcurrentAgents: 1 });
 const real = new ClaudeCodeAdapter();
 const calls: { phase: string; sessionId?: string; resultSessionId?: string; elapsedMs?: number }[] = [];
 const adapter: AgentAdapter = {
@@ -46,15 +46,15 @@ const adapter: AgentAdapter = {
     return result;
   },
 };
-const workspaces = new LocalWorktreeProvider(join(directory, 'worktrees'));
+const worktrees = new LocalWorktreeProvider(join(directory, 'worktrees'));
 const artifacts = new LocalArtifactStore(join(directory, 'artifacts'));
 const unavailable: AgentAdapter = { provider: 'codex', available: async () => false, run: async () => { throw new Error('Unexpected Codex execution'); } };
-const service = new TaskService({ scope, repository, artifacts, workspaces, adapters: { claude: adapter, codex: unavailable } });
+const service = new TaskService({ scope, repository, artifacts, worktrees, adapters: { claude: adapter, codex: unavailable } });
 await service.initialize();
 assert.equal((await service.snapshot()).runtime.providers.claude, true);
 const port = Number(process.env.MUON_DISCUSSION_TEST_PORT ?? 4334);
 const url = `http://127.0.0.1:${port}`;
-const app = createHttpApp(singleProjectResolver(service), artifacts, { port });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { port });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 service.start();
 console.log(`Live validation directory: ${directory}`);
@@ -99,7 +99,7 @@ try {
   assert.ok(calls[0].resultSessionId);
   assert.equal(calls[1].sessionId, calls[0].resultSessionId);
   assert.equal(calls[2].sessionId, calls[1].resultSessionId);
-  assert.deepEqual(await workspaces.changedFiles(task.worktree!), []);
+  assert.deepEqual(await worktrees.changedFiles(task.worktree!), []);
   assert.deepEqual(await cli('tasks', 'discussion', task.identifier), task.planDiscussion);
   succeeded = true;
 } catch (cause) {

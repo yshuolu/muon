@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { ClaudeCodeAdapter, CodexAdapter, LocalWorktreeProvider } from '../src/runtime/index.js';
 import { createHttpApp } from '../src/server/http-app.js';
-import { singleProjectResolver } from '../src/server/project-registry.js';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry.js';
 import { LocalArtifactStore } from '../src/server/local-artifacts.js';
 import { SqliteRepository } from '../src/server/sqlite-repository.js';
 import { TaskService } from '../src/server/task-service.js';
@@ -27,15 +27,15 @@ await exec('git', ['-C', repositoryPath, 'config', 'core.hooksPath', join(direct
 await exec('git', ['-C', repositoryPath, 'add', 'README.md']);
 await exec('git', ['-C', repositoryPath, '-c', 'user.name=Muon Live Validation', '-c', 'user.email=muon-live@example.invalid', 'commit', '-m', 'Initial chief validation fixture']);
 
-const scope = { workspaceId: 'chief-live', projectId: 'arithmetic', userId: 'owner' };
+const scope = { accountId: 'chief-live', workspaceId: 'arithmetic', userId: 'owner' };
 const repository = new SqliteRepository(join(directory, 'muon.sqlite'));
 const artifacts = new LocalArtifactStore(join(directory, 'artifacts'));
-await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Arithmetic fixture', identifier: 'CHK', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
+await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Arithmetic fixture', identifier: 'CHK', repositoryPath }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
 const port = Number(process.env.MUON_CHIEF_TEST_PORT ?? 4333);
 const chiefCommands = new LocalChiefCommands({ apiUrl: `http://127.0.0.1:${port}`, scope });
-const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(directory, 'worktrees')), adapters: { claude: new ClaudeCodeAdapter(), codex: new CodexAdapter() } });
+const service = new TaskService({ scope, repository, artifacts, chiefCommands, worktrees: new LocalWorktreeProvider(join(directory, 'worktrees')), adapters: { claude: new ClaudeCodeAdapter(), codex: new CodexAdapter() } });
 await service.initialize();
-const app = createHttpApp(singleProjectResolver(service), artifacts, { port, access: chiefCommands });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { port, access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 console.log(`Live chief validation directory: ${directory}`);

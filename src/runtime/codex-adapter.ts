@@ -21,7 +21,7 @@ export class CodexAdapter implements AgentAdapter {
   private readonly bypassPermissions: boolean;
 
   constructor(executable?: string, options: { model?: string; reasoningEffort?: string; bypassPermissions?: boolean } = {}) {
-    // Use the project's tested CLI version, while retaining an explicit host override.
+    // Use the workspace's tested CLI version, while retaining an explicit host override.
     this.executable = executable ?? process.execPath;
     this.prefixArgs = executable ? [] : [createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js')];
     this.model = options.model;
@@ -53,7 +53,7 @@ export class CodexAdapter implements AgentAdapter {
     const scratch = advisory ? await mkdtemp(join(tmpdir(), chief ? 'muon-codex-chief-' : 'muon-codex-chat-')) : undefined;
     if (scratch) await writeScratchFiles(scratch, request.files).catch(async error => { await rm(scratch, { recursive: true, force: true }); throw error; });
     const workingDirectory = scratch ?? request.cwd;
-    const prompt = advisory ? `The project repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder for temporary files.\n${request.prompt}` : request.prompt;
+    const prompt = advisory ? `The workspace repository is at ${request.cwd}. Read it with absolute paths; it is not writable from this session, and your working directory is a scratch folder for temporary files.\n${request.prompt}` : request.prompt;
     const pending = new Map<number, PendingRequest>();
     let nextRequestId = 1;
     let sessionId: string | undefined;
@@ -163,7 +163,7 @@ export class CodexAdapter implements AgentAdapter {
         clientInfo: { name: 'muon', title: 'Muon', version: '0.1.0' },
       });
       connection.send({ method: 'initialized' });
-      // Empty MCP tables merge with user/project config; disable each effective server explicitly.
+      // Empty MCP tables merge with user/workspace config; disable each effective server explicitly.
       // Read only configuration in memory: never rewrite the owner's config or credentials.
       const configuration = record(record(await rpc('config/read', { cwd: workingDirectory, includeLayers: false }))?.config);
       if (!configuration) throw new Error('Codex could not resolve isolated task configuration. Use the app-managed CLI.');

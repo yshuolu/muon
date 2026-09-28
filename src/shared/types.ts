@@ -1,15 +1,15 @@
-import type { WorkspaceChanges } from '../runtime/contracts';
+import type { WorktreeChanges } from '../runtime/contracts';
 
 export type Provider = 'claude' | 'codex';
 export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'blocked' | 'canceled';
 export type TaskPhase = 'idle' | 'planning' | 'plan_review' | 'building' | 'verification' | 'complete';
 export type Priority = 0 | 1 | 2 | 3 | 4;
-export interface Scope { workspaceId: string; projectId: string; userId: string }
+export interface Scope { accountId: string; workspaceId: string; userId: string }
 export interface Asset {
-  id: string; workspaceId: string; projectId: string; name: string; mediaType: string;
+  id: string; accountId: string; workspaceId: string; name: string; mediaType: string;
   sizeBytes: number; sha256: string; storageBackendId: string; objectKey: string;
   origin: 'upload' | 'generated' | 'imported'; createdAt: string; createdByUserId: string;
-  ownerUserId: string; visibility: 'private' | 'project'; sourcePath?: string;
+  ownerUserId: string; visibility: 'private' | 'workspace'; sourcePath?: string;
   /** The version this document was revised from when an agent resolved review comments. */
   previousVersionId?: string;
   /** Set on a superseded version: the newest readable version in its lineage, which readers show instead. */
@@ -30,7 +30,7 @@ export interface DocumentReview { assetId: string; busy: boolean; activity?: str
 export interface AssetCommentThread { comments: AssetComment[]; inherited: AssetComment[]; review: DocumentReview }
 export interface DependencyInput {
   taskId: string; identifier: string; title: string; capturedAt: string;
-  changes: WorkspaceChanges;
+  changes: WorktreeChanges;
 }
 export interface Plan {
   id: string; version: number; format: 'markdown' | 'html'; content: string;
@@ -82,7 +82,7 @@ export interface AgentRun {
   finishedAt?: string; sessionId?: string; error?: string; planId?: string;
 }
 export interface Task {
-  id: string; identifier: string; workspaceId: string; projectId: string; ownerUserId: string;
+  id: string; identifier: string; accountId: string; workspaceId: string; ownerUserId: string;
   title: string; description: string; status: TaskStatus; phase: TaskPhase;
   priority: Priority; provider: Provider; labels: string[]; parentId: string | null;
   /** A thinking effort for this task's agent runs, or null for the provider's configured default. */
@@ -103,14 +103,14 @@ export interface Task {
   recovery?: { mode: 'retry' | 'resume' | 'fix' | 'replan'; feedback: string; requestedAt: string };
 }
 export interface Attention {
-  id: string; taskId: string; kind: 'plan_approval' | 'completed' | 'project_completed' | 'blocked';
+  id: string; taskId: string; kind: 'plan_approval' | 'completed' | 'workspace_completed' | 'blocked';
   title: string; description: string; createdAt: string; readAt?: string;
 }
-export interface Project {
-  id: string; workspaceId: string; name: string; identifier: string;
+export interface Workspace {
+  id: string; accountId: string; name: string; identifier: string;
   repositoryPath: string; ownerUserId: string;
   createdAt?: string;
-  /** An archived project keeps its records and worktrees but runs no agents until restored. */
+  /** An archived workspace keeps its records and worktrees but runs no agents until restored. */
   archivedAt?: string;
 }
 export interface Settings {
@@ -142,10 +142,10 @@ export interface PlanningChat {
 }
 export interface AgentRuntimeConfig { model: string; thinking: string; bypassPermissions: boolean }
 export interface AppSnapshot {
-  scope: Scope; project: Project; settings: Settings; tasks: Task[];
+  scope: Scope; workspace: Workspace; settings: Settings; tasks: Task[];
   attention: Attention[]; messages: ChiefMessage[];
-  /** Every project in the workspace, including archived ones; supplied by the HTTP layer. */
-  projects?: Project[];
+  /** Every workspace in the workspace, including archived ones; supplied by the HTTP layer. */
+  workspaces?: Workspace[];
   runtime: { activeRuns: number; chiefRunning: boolean; chiefActivity?: string | null; providers: Record<Provider, boolean>; config?: Record<Provider, AgentRuntimeConfig>; demo: boolean };
 }
 export interface CreateTaskInput {

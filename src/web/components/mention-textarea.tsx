@@ -13,7 +13,7 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChan
 };
 
 /**
- * A textarea where typing `@` offers the project's Library documents. Picking one inserts a Markdown asset
+ * A textarea where typing `@` offers the workspace's Library documents. Picking one inserts a Markdown asset
  * reference, the same `[name](asset://ID)` form agents receive in prompts and the app renders as a link.
  */
 export function MentionTextarea({ value, onChange, onKeyDown, onClick, onKeyUp, onBlur, placement = 'above', ...rest }: Props) {

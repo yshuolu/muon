@@ -4,12 +4,12 @@ import { assetReferrers, filterLibrary, libraryKind } from './library';
 
 function asset(overrides: Partial<Asset> & Pick<Asset, 'id' | 'name'>): Asset {
   return {
-    workspaceId: 'w', projectId: 'p', mediaType: 'application/octet-stream', sizeBytes: 1, sha256: 'x', storageBackendId: 'local',
+    accountId: 'w', workspaceId: 'p', mediaType: 'application/octet-stream', sizeBytes: 1, sha256: 'x', storageBackendId: 'local',
     objectKey: overrides.id, origin: 'upload', createdAt: '2026-09-20T10:00:00Z', createdByUserId: 'u', ownerUserId: 'u', visibility: 'private', ...overrides,
   };
 }
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'identifier'>): Task {
-  return { workspaceId: 'w', projectId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-08T10:00:00Z', updatedAt: '2026-09-08T10:00:00Z', version: 1, ...overrides };
+  return { accountId: 'w', workspaceId: 'p', ownerUserId: 'u', title: 'Task', description: '', status: 'todo', phase: 'idle', priority: 0, provider: 'claude', labels: [], parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [], activity: [], summary: '', createdAt: '2026-09-08T10:00:00Z', updatedAt: '2026-09-08T10:00:00Z', version: 1, ...overrides };
 }
 
 const notes = asset({ id: 'notes', name: 'decisions.md', mediaType: 'text/markdown', createdAt: '2026-09-21T09:00:00Z' });

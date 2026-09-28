@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentAdapter, AgentRequest, AgentResult, WorkspaceProvider } from '../runtime';
+import type { AgentAdapter, AgentRequest, AgentResult, WorktreeProvider } from '../runtime';
 import { materializeAssetInputs } from '../runtime/local-asset-inputs';
 import { assetIdsInText, assetReference } from '../shared/asset-references';
 import type { Task } from '../shared/types';
@@ -11,14 +11,14 @@ import { LocalAssetStorage } from './local-assets';
 import { SqliteRepository } from './sqlite-repository';
 import { TaskService } from './task-service';
 
-const scope = { workspaceId: 'workspace', projectId: 'project', userId: 'owner' };
+const scope = { accountId: 'worktree', workspaceId: 'workspace', userId: 'owner' };
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'muon-asset-workflow-'));
   const repository = new SqliteRepository(':memory:');
-  await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Test', identifier: 'AST', repositoryPath: directory }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
+  await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Test', identifier: 'AST', repositoryPath: directory }, { maxConcurrentAgents: 1, dispatcherEnabled: false, defaultProvider: 'claude' });
   const calls: Array<{ request: AgentRequest; finish: (result: AgentResult) => void }> = [];
   const adapter: AgentAdapter = {
     provider: 'claude', available: async () => true,
@@ -27,17 +27,17 @@ async function fixture() {
       calls.push({ request, finish: resolve });
     }),
   };
-  const workspaces: WorkspaceProvider = {
+  const worktrees: WorktreeProvider = {
     ensure: async ({ taskId }) => {
       const path = join(directory, taskId);
       await mkdir(path, { recursive: true });
       return { path, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) };
     },
     changedFiles: async () => [],
-    materializeInputs: vi.fn((workspace, inputs) => materializeAssetInputs(workspace.path, inputs)),
+    materializeInputs: vi.fn((worktree, inputs) => materializeAssetInputs(worktree.path, inputs)),
   };
   const assets = new AssetService({ repository, storage: new LocalAssetStorage(join(directory, 'assets')) });
-  const service = new TaskService({ scope, repository, assets, artifacts: { importFile: vi.fn(), read: async () => undefined }, workspaces, adapters: { claude: adapter, codex: { ...adapter, provider: 'codex' } } });
+  const service = new TaskService({ scope, repository, assets, artifacts: { importFile: vi.fn(), read: async () => undefined }, worktrees, adapters: { claude: adapter, codex: { ...adapter, provider: 'codex' } } });
   await service.initialize();
   cleanups.push(async () => { await service.stop(); repository.close(); await rm(directory, { recursive: true, force: true }); });
   async function dispatch() {
@@ -48,7 +48,7 @@ async function fixture() {
     await vi.waitFor(async () => expect((await service.getTask(id)).phase).toBe(phase));
     return service.getTask(id);
   }
-  return { directory, repository, calls, workspaces, assets, service, dispatch, taskState };
+  return { directory, repository, calls, worktrees, assets, service, dispatch, taskState };
 }
 
 describe('asset references across the task lifecycle', () => {

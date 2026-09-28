@@ -18,8 +18,8 @@ export class LocalAssetStorage implements AssetStorage {
   private async directory(scope: Scope, create: boolean) {
     if (create) await mkdir(this.root, { recursive: true });
     let directory = await realpath(this.root);
-    for (const id of [scope.workspaceId, scope.projectId]) {
-      if (!id) throw new DomainError('Asset storage requires a workspace and project.');
+    for (const id of [scope.accountId, scope.workspaceId]) {
+      if (!id) throw new DomainError('Asset storage requires an account and a workspace.');
       directory = resolve(directory, Buffer.from(id).toString('base64url'));
       if (create) await mkdir(directory).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'EEXIST') throw error;

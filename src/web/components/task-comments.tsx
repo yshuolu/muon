@@ -25,7 +25,7 @@ export function TaskComments({ task, userId, dispatcherEnabled, active, busy, er
   const [retrying, setRetrying] = useState(false);
   const pendingRequest = useRef<CommentOnTaskInput | null>(null);
   const comments = task.comments ?? [];
-  const scroll = useConversationScroll({ conversationKey: JSON.stringify([task.workspaceId, task.projectId, 'comments', task.id]), messages: comments, active });
+  const scroll = useConversationScroll({ conversationKey: JSON.stringify([task.accountId, task.workspaceId, 'comments', task.id]), messages: comments, active });
   const state = taskCommentState(task, userId, dispatcherEnabled, busy || sending || retrying);
   const provider = task.provider === 'claude' ? 'Claude Code' : 'Codex';
   const followUp = task.followUp;

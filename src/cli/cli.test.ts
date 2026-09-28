@@ -64,8 +64,8 @@ describe('Muon CLI', () => {
     expect(await io.run(['tasks', 'runs', 'MUO-1'])).toBe(0);
     expect(await io.run(['attention', 'list', '--unread'])).toBe(0);
     expect(calls[5].url).toMatch(/\/attention\?unread=true$/);
-    expect(await io.run(['chief', 'send', '--json', '{"content":"Organize this project"}'])).toBe(0);
-    expect(calls[6]).toMatchObject({ method: 'POST', body: { content: 'Organize this project' } });
+    expect(await io.run(['chief', 'send', '--json', '{"content":"Organize this workspace"}'])).toBe(0);
+    expect(calls[6]).toMatchObject({ method: 'POST', body: { content: 'Organize this workspace' } });
     expect(io.stderr).toEqual([]);
   });
 
@@ -198,35 +198,35 @@ describe('Muon CLI', () => {
   }, 15_000);
 });
 
-describe('Muon CLI projects', () => {
-  it('lists, creates, archives, and restores projects and scopes other commands to a chosen project', async () => {
+describe('Muon CLI workspaces', () => {
+  it('lists, creates, archives, and restores workspaces and scopes other commands to a chosen workspace', async () => {
     const calls: Array<{ url: string; method: string; body?: unknown }> = [];
     const fetcher: typeof fetch = async (url, options) => { calls.push({ url: String(url), method: options?.method ?? 'GET', body: options?.body ? JSON.parse(String(options.body)) : undefined }); return Response.json({ ok: true }); };
-    const io = harness(fetcher, { MUON_PROJECT: undefined });
-    expect(await io.run(['projects'])).toBe(0);
-    expect(await io.run(['projects', 'create', '--json', '{"name":"Second","repositoryPath":"/repos/second"}'])).toBe(0);
-    expect(await io.run(['projects', 'archive', 'SEC'])).toBe(0);
-    expect(await io.run(['projects', 'restore', 'SEC'])).toBe(0);
-    expect(await io.run(['tasks', 'list', '--project', 'SEC'])).toBe(0);
-    expect(await io.run(['projects', 'list', '--project', 'SEC'])).toBe(0);
-    expect(await io.run(['health', '--project', 'SEC'])).toBe(0);
-    expect(await io.run(['api', 'GET', '/api/assets?x=1', '--project', 'SEC'])).toBe(0);
+    const io = harness(fetcher, { MUON_WORKSPACE: undefined });
+    expect(await io.run(['workspaces'])).toBe(0);
+    expect(await io.run(['workspaces', 'create', '--json', '{"name":"Second","repositoryPath":"/repos/second"}'])).toBe(0);
+    expect(await io.run(['workspaces', 'archive', 'SEC'])).toBe(0);
+    expect(await io.run(['workspaces', 'restore', 'SEC'])).toBe(0);
+    expect(await io.run(['tasks', 'list', '--workspace', 'SEC'])).toBe(0);
+    expect(await io.run(['workspaces', 'list', '--workspace', 'SEC'])).toBe(0);
+    expect(await io.run(['health', '--workspace', 'SEC'])).toBe(0);
+    expect(await io.run(['api', 'GET', '/api/assets?x=1', '--workspace', 'SEC'])).toBe(0);
     expect(calls.map(call => [call.method, call.url])).toEqual([
-      ['GET', 'http://127.0.0.1:4310/api/projects'],
-      ['POST', 'http://127.0.0.1:4310/api/projects'],
-      ['POST', 'http://127.0.0.1:4310/api/projects/SEC/archive'],
-      ['POST', 'http://127.0.0.1:4310/api/projects/SEC/restore'],
-      ['GET', 'http://127.0.0.1:4310/api/projects/SEC/tasks'],
-      ['GET', 'http://127.0.0.1:4310/api/projects'],
+      ['GET', 'http://127.0.0.1:4310/api/workspaces'],
+      ['POST', 'http://127.0.0.1:4310/api/workspaces'],
+      ['POST', 'http://127.0.0.1:4310/api/workspaces/SEC/archive'],
+      ['POST', 'http://127.0.0.1:4310/api/workspaces/SEC/restore'],
+      ['GET', 'http://127.0.0.1:4310/api/workspaces/SEC/tasks'],
+      ['GET', 'http://127.0.0.1:4310/api/workspaces'],
       ['GET', 'http://127.0.0.1:4310/api/health'],
-      ['GET', 'http://127.0.0.1:4310/api/projects/SEC/assets?x=1'],
+      ['GET', 'http://127.0.0.1:4310/api/workspaces/SEC/assets?x=1'],
     ]);
     expect(calls[1].body).toEqual({ name: 'Second', repositoryPath: '/repos/second' });
-    expect(await harness(fetcher, { MUON_PROJECT: 'local project' }).run(['state'])).toBe(0);
-    expect(calls.at(-1)?.url).toBe('http://127.0.0.1:4310/api/projects/local%20project/state');
-    expect(await harness(fetcher, { MUON_PROJECT: 'env' }).run(['state', '--project', 'flag'])).toBe(0);
-    expect(calls.at(-1)?.url).toBe('http://127.0.0.1:4310/api/projects/flag/state');
-    expect(await io.run(['projects', 'explode'])).toBe(1);
-    expect(io.stderr.at(-1)).toContain('Unknown projects command');
+    expect(await harness(fetcher, { MUON_WORKSPACE: 'local workspace' }).run(['state'])).toBe(0);
+    expect(calls.at(-1)?.url).toBe('http://127.0.0.1:4310/api/workspaces/local%20workspace/state');
+    expect(await harness(fetcher, { MUON_WORKSPACE: 'env' }).run(['state', '--workspace', 'flag'])).toBe(0);
+    expect(calls.at(-1)?.url).toBe('http://127.0.0.1:4310/api/workspaces/flag/state');
+    expect(await io.run(['workspaces', 'explode'])).toBe(1);
+    expect(io.stderr.at(-1)).toContain('Unknown workspaces command');
   });
 });

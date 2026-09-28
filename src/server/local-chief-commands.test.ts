@@ -7,22 +7,22 @@ import { tmpdir } from 'node:os';
 import { LocalChiefCommands } from './local-chief-commands';
 import type { ChiefCommandSession } from './ports';
 
-const scope = { workspaceId: 'local-workspace', projectId: 'local-project', userId: 'owner' };
+const scope = { accountId: 'local-workspace', workspaceId: 'local-project', userId: 'owner' };
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 async function session(commands: LocalChiefCommands, signal = new AbortController().signal) {
   const result = await commands.open(scope, signal); cleanups.push(() => result.close()); return result;
 }
 function request(grant: ChiefCommandSession, path: string, method = 'GET') {
-  return new Request(`http://127.0.0.1:4310/api/projects/${scope.projectId}/${path}`, { method, headers: { authorization: `Bearer ${grant.cli.token}` } });
+  return new Request(`http://127.0.0.1:4310/api/workspaces/${scope.workspaceId}/${path}`, { method, headers: { authorization: `Bearer ${grant.cli.token}` } });
 }
-const taskResponse = (id: string, overrides = {}) => Response.json({ id, workspaceId: scope.workspaceId, projectId: scope.projectId, ...overrides });
+const taskResponse = (id: string, overrides = {}) => Response.json({ id, accountId: scope.accountId, workspaceId: scope.workspaceId, ...overrides });
 
 describe('Local chief CLI capabilities', () => {
   it('allows task operations while keeping owner review, settings and attention actions restricted', async () => {
     const commands = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310' }); const grant = await session(commands);
     for (const [path, method] of [
-      ['state', 'GET'], ['project', 'GET'], ['settings', 'GET'], ['runtime', 'GET'], ['tasks', 'GET'],
+      ['state', 'GET'], ['workspace', 'GET'], ['settings', 'GET'], ['runtime', 'GET'], ['tasks', 'GET'],
       ['tasks/MUO-1/evidence', 'GET'], ['attention', 'GET'], ['chief/messages', 'GET'], ['artifacts/file', 'GET'],
       ['tasks/MUO-1/plan-discussion', 'GET'], ['tasks/MUO-1/comments', 'GET'],
       ['tasks', 'POST'], ['tasks/MUO-1', 'PATCH'], ['tasks/MUO-1/cancel', 'POST'], ['tasks/MUO-1/retry', 'POST'],
@@ -33,25 +33,25 @@ describe('Local chief CLI capabilities', () => {
       ['attention/notice/read', 'POST'], ['chief/messages', 'POST'], ['tasks/MUO-1', 'DELETE'],
       ['unknown', 'GET'],
     ]) expect(() => commands.authorize(request(grant, path, method))).toThrow('workspace owner');
-    for (const path of ['/api/tasks', '/api/state', '/api/projects/other-project/tasks', '/api/projects']) {
-      expect(() => commands.authorize(new Request(`http://127.0.0.1:4310${path}`, { headers: { authorization: `Bearer ${grant.cli.token}` } }))).toThrow('own project');
+    for (const path of ['/api/tasks', '/api/state', '/api/workspaces/other-workspace/tasks', '/api/workspaces']) {
+      expect(() => commands.authorize(new Request(`http://127.0.0.1:4310${path}`, { headers: { authorization: `Bearer ${grant.cli.token}` } }))).toThrow('own workspace');
     }
-    const byIdentifier = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310', resolveProjectId: reference => reference.toLowerCase() === 'muo' ? scope.projectId : undefined });
+    const byIdentifier = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310', resolveWorkspaceId: reference => reference.toLowerCase() === 'muo' ? scope.workspaceId : undefined });
     const identified = await session(byIdentifier);
-    expect(() => byIdentifier.authorize(new Request('http://127.0.0.1:4310/api/projects/MUO/tasks', { headers: { authorization: `Bearer ${identified.cli.token}` } }))).not.toThrow();
-    expect(() => byIdentifier.authorize(new Request('http://127.0.0.1:4310/api/projects/OTHER/tasks', { headers: { authorization: `Bearer ${identified.cli.token}` } }))).toThrow('own project');
+    expect(() => byIdentifier.authorize(new Request('http://127.0.0.1:4310/api/workspaces/MUO/tasks', { headers: { authorization: `Bearer ${identified.cli.token}` } }))).not.toThrow();
+    expect(() => byIdentifier.authorize(new Request('http://127.0.0.1:4310/api/workspaces/OTHER/tasks', { headers: { authorization: `Bearer ${identified.cli.token}` } }))).toThrow('own workspace');
     expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/settings', { method: 'PATCH' }))).not.toThrow();
     expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/state', { headers: { authorization: 'Bearer invalid' } }))).toThrow('invalid or expired');
   });
 
   it('rejects mismatched scope and revokes credentials on abort, expiration, and close', async () => {
     const commands = new LocalChiefCommands({ scope, apiUrl: 'http://127.0.0.1:4310', lifetimeMs: 1_000 });
-    await expect(commands.open({ ...scope, workspaceId: 'other-workspace' }, new AbortController().signal)).rejects.toThrow('scope');
+    await expect(commands.open({ ...scope, accountId: 'other-workspace' }, new AbortController().signal)).rejects.toThrow('scope');
     await expect(commands.open({ ...scope, userId: 'someone-else' }, new AbortController().signal)).rejects.toThrow('scope');
     const sibling = await session(commands); await sibling.close();
-    const other = await commands.open({ ...scope, projectId: 'other-project' }, new AbortController().signal); cleanups.push(() => other.close());
-    expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/projects/other-project/tasks', { headers: { authorization: `Bearer ${other.cli.token}` } }))).not.toThrow();
-    expect(() => commands.authorize(request(other, 'tasks'))).toThrow('own project');
+    const other = await commands.open({ ...scope, workspaceId: 'other-workspace' }, new AbortController().signal); cleanups.push(() => other.close());
+    expect(() => commands.authorize(new Request('http://127.0.0.1:4310/api/workspaces/other-workspace/tasks', { headers: { authorization: `Bearer ${other.cli.token}` } }))).not.toThrow();
+    expect(() => commands.authorize(request(other, 'tasks'))).toThrow('own workspace');
     const aborted = new AbortController(); aborted.abort();
     await expect(commands.open(scope, aborted.signal)).rejects.toThrow('canceled');
     const abort = new AbortController(); const live = await session(commands, abort.signal);
@@ -73,8 +73,8 @@ describe('Local chief CLI capabilities', () => {
     await observed('tasks/task-2', 'PATCH', taskResponse('task-2'));
     await observed('tasks/task-3', 'GET', taskResponse('task-3'));
     await observed('tasks', 'POST', Response.json({ error: 'Rejected' }, { status: 400 }));
-    await observed('tasks', 'POST', taskResponse('foreign', { projectId: 'other-project' }));
-    await observed('tasks', 'POST', taskResponse('foreign-workspace', { workspaceId: 'other-workspace' }));
+    await observed('tasks', 'POST', taskResponse('foreign', { workspaceId: 'other-workspace' }));
+    await observed('tasks', 'POST', taskResponse('foreign-workspace', { accountId: 'other-workspace' }));
     await observed('tasks', 'POST', Response.json({ id: 'unscoped' }));
     await commands.observe(request(grant, 'tasks', 'POST'), taskResponse('not-admitted'));
     expect(grant.taskIds()).toEqual(['task-1', 'task-2']);
@@ -103,12 +103,12 @@ describe('Local chief CLI capabilities', () => {
     const launcher = grant.cli.command.slice(1, -1); expect((await stat(launcher)).mode & 0o777).toBe(0o500);
     const cwd = await mkdtemp(join(tmpdir(), 'muon-chief-cwd-')); cleanups.push(() => rm(cwd, { force: true, recursive: true }));
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(launcher, ['tasks', 'create', '--file', '-'], { cwd, env: { ...process.env, MUON_API_URL: 'http://127.0.0.1:1', MUON_API_TOKEN: 'owner-override-attempt', MUON_PROJECT: 'other-project' }, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(launcher, ['tasks', 'create', '--file', '-'], { cwd, env: { ...process.env, MUON_API_URL: 'http://127.0.0.1:1', MUON_API_TOKEN: 'owner-override-attempt', MUON_WORKSPACE: 'other-workspace' }, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = ''; child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr })); child.stdin.end('{"title":"Created through wrapper"}');
     });
     expect(result.code).toBe(0); expect(result.stderr).toBe(''); expect(JSON.parse(result.stdout)).toEqual({ id: 'saved-task' });
-    expect(observed).toEqual({ path: `/api/projects/${scope.projectId}/tasks`, token: `Bearer ${grant.cli.token}`, body: '{"title":"Created through wrapper"}' });
+    expect(observed).toEqual({ path: `/api/workspaces/${scope.workspaceId}/tasks`, token: `Bearer ${grant.cli.token}`, body: '{"title":"Created through wrapper"}' });
     expect(result.stdout).not.toContain(grant.cli.token); expect(result.stderr).not.toContain(grant.cli.token);
     await grant.close(); await expect(stat(launcher)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 15_000);

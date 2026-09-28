@@ -22,7 +22,7 @@ const FALLBACK_CONFIG: Record<Provider, { model: string; thinking: string }> = {
 /** Claude Code accepts short aliases; Codex chats use the configured model or an explicit identifier. */
 const MODEL_ALIASES: Record<Provider, string[]> = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };
 
-/** Saved threads for this project, newest first; unfolds from the History control in the toolbar. */
+/** Saved threads for this workspace, newest first; unfolds from the History control in the toolbar. */
 function PlanningChatHistory({ currentId, onOpen, onClose }: { currentId: string; onOpen: (id: string) => void; onClose: () => void }) {
   const [chats, setChats] = useState<PlanningChatSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
   const modelDisabled = !chat || busy || savingModel || chat.busy;
   const providerDetected = snapshot.runtime.providers[provider];
   const scroll = useConversationScroll({
-    conversationKey: JSON.stringify([snapshot.scope.workspaceId, snapshot.scope.projectId, 'planning', chatId]),
+    conversationKey: JSON.stringify([snapshot.scope.accountId, snapshot.scope.workspaceId, 'planning', chatId]),
     messages: chat?.messages ?? [],
     ready: Boolean(chat),
   });
@@ -168,7 +168,7 @@ export function PlanningChatView({ chatId, snapshot, onClose, onTaskified, onNew
     <header className="planning-chat-toolbar">
       <Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={onOpenNavigation}><PanelLeft size={17} /></Button>
       <Button variant="ghost" size="icon" aria-label="Back to tasks" title="Back to tasks" onClick={onClose}><ArrowLeft size={15} /></Button>
-      <div className="planning-chat-title"><span title={snapshot.project.name}>{snapshot.project.name}</span><ChevronRight size={12} aria-hidden="true" /><h1>Planning thread</h1></div>
+      <div className="planning-chat-title"><span title={snapshot.workspace.name}>{snapshot.workspace.name}</span><ChevronRight size={12} aria-hidden="true" /><h1>Planning thread</h1></div>
       {snapshot.runtime.demo && <span className="demo-badge">Demo workspace</span>}
       <Button variant="ghost" size="icon" aria-label="Discard thread" title="Discard thread" disabled={!chat || chat.busy || busy} onClick={() => void discard()}><Trash2 size={15} /></Button>
       <Button variant="ghost" size="sm" aria-label="Past planning threads" aria-expanded={history} title="Past planning threads" onClick={() => setHistory(value => !value)}><History size={15} />History</Button>

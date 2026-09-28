@@ -3,19 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Asset, Attention, ChiefMessage, Project, Scope, Settings, Task } from '../shared/types';
+import type { Asset, Attention, ChiefMessage, Workspace, Scope, Settings, Task } from '../shared/types';
 import { ConflictError } from './ports';
 import { SqliteRepository } from './sqlite-repository';
 
-const scope: Scope = { workspaceId: 'workspace-a', projectId: 'project-a', userId: 'owner-a' };
+const scope: Scope = { accountId: 'workspace-a', workspaceId: 'workspace-a', userId: 'owner-a' };
 const settings: Settings = { maxConcurrentAgents: 2, dispatcherEnabled: true, defaultProvider: 'claude' };
 const timestamp = '2026-09-08T12:00:00.000Z';
-const project = (target: Scope = scope): Project => ({
-  id: target.projectId, workspaceId: target.workspaceId, ownerUserId: target.userId,
-  name: 'Test project', identifier: 'MUO', repositoryPath: '/tmp/test-repository',
+const workspace = (target: Scope = scope): Workspace => ({
+  id: target.workspaceId, accountId: target.accountId, ownerUserId: target.userId,
+  name: 'Test workspace', identifier: 'MUO', repositoryPath: '/tmp/test-repository',
 });
 const task = (id: string, target: Scope = scope): Task => ({
-  id, identifier: 'unallocated', workspaceId: target.workspaceId, projectId: target.projectId,
+  id, identifier: 'unallocated', accountId: target.accountId, workspaceId: target.workspaceId,
   ownerUserId: target.userId, title: `Task ${id}`, description: 'A persisted task',
   status: 'todo', phase: 'idle', priority: 2, provider: 'claude', labels: [],
   parentId: null, blockedByIds: [], plans: [], evidence: [], changedFiles: [],
@@ -26,7 +26,7 @@ const attention = (id: string, taskId: string, kind: Attention['kind'] = 'plan_a
 });
 const message = (id: string): ChiefMessage => ({ id, role: 'user', content: id, createdAt: timestamp });
 const asset = (id: string): Asset => ({
-  id, workspaceId: scope.workspaceId, projectId: scope.projectId, name: 'report.md',
+  id, accountId: scope.accountId, workspaceId: scope.workspaceId, name: 'report.md',
   mediaType: 'text/markdown', sizeBytes: 8, sha256: 'a'.repeat(64), storageBackendId: 'local',
   objectKey: id, origin: 'generated', createdAt: timestamp, createdByUserId: scope.userId,
   ownerUserId: scope.userId, visibility: 'private',
@@ -34,11 +34,68 @@ const asset = (id: string): Asset => ({
 
 const opened = new Set<SqliteRepository>();
 const directories: string[] = [];
-async function repository(filename = ':memory:') {
+async function repository(filename = ':memory:', target: Scope = scope) {
   const repo = new SqliteRepository(filename);
   opened.add(repo);
-  await repo.initialize(scope, project(), settings);
+  await repo.initialize(target, workspace(target), settings);
   return repo;
+}
+
+/** The schema Muon wrote before version 5, when the folder unit was a project under a tenant called workspace. */
+const LEGACY_DDL = {
+  1: `
+    CREATE TABLE projects (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (workspace_id, project_id));
+    CREATE TABLE configuration (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, settings TEXT NOT NULL, next_sequence INTEGER NOT NULL DEFAULT 1, pending_chief TEXT,
+      PRIMARY KEY (workspace_id, project_id), FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    CREATE TABLE tasks (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, identifier TEXT NOT NULL, owner_user_id TEXT NOT NULL, status TEXT NOT NULL,
+      phase TEXT NOT NULL, priority INTEGER NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (workspace_id, project_id, id),
+      UNIQUE (workspace_id, project_id, identifier), FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    CREATE INDEX task_dispatch ON tasks(workspace_id, project_id, status, priority);
+    CREATE TABLE attention (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, project_id, id), FOREIGN KEY (workspace_id, project_id, task_id) REFERENCES tasks(workspace_id, project_id, id));
+    CREATE TABLE chief_messages (sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
+      FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    PRAGMA user_version = 1;`,
+  2: `
+    CREATE TABLE assets (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, storage_backend_id TEXT NOT NULL, object_key TEXT NOT NULL, payload TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, project_id, id), UNIQUE (workspace_id, project_id, storage_backend_id, object_key), FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    PRAGMA user_version = 2;`,
+  3: `
+    CREATE TABLE planning_chats (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, project_id, id), FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    PRAGMA user_version = 3;`,
+  4: `
+    CREATE TABLE asset_comments (workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, id TEXT NOT NULL, asset_id TEXT NOT NULL, request_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, project_id, id), UNIQUE (workspace_id, project_id, asset_id, request_id), FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, project_id));
+    CREATE INDEX asset_comment_status ON asset_comments(workspace_id, project_id, asset_id, status);
+    PRAGMA user_version = 4;`,
+};
+
+/** A database file as an installation at the given legacy version would have left it, with rows in every table it had. */
+async function legacyDatabase(version: 1 | 4): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'muon-repository-migration-'));
+  directories.push(directory);
+  const filename = join(directory, 'muon.sqlite');
+  const db = new DatabaseSync(filename);
+  db.exec('PRAGMA foreign_keys = ON;');
+  for (const step of [1, 2, 3, 4] as const) if (step <= version) db.exec(LEGACY_DDL[step]);
+  const keys = ['local-workspace', 'local-project'];
+  db.prepare('INSERT INTO projects VALUES (?,?,?)').run(...keys, JSON.stringify({ id: 'local-project', workspaceId: 'local-workspace', ownerUserId: 'local-owner', name: 'Legacy project', identifier: 'MUO', repositoryPath: '/repos/legacy' }));
+  db.prepare('INSERT INTO configuration (workspace_id, project_id, settings, next_sequence, pending_chief) VALUES (?,?,?,?,?)').run(...keys, JSON.stringify({ ...settings, maxConcurrentAgents: 3 }), 2, 'm1');
+  const legacyTask = { ...task('t1'), identifier: 'MUO-1', title: 'Legacy task', workspaceId: 'local-workspace', projectId: 'local-project', ownerUserId: 'local-owner', version: 1 } as Record<string, unknown>;
+  delete legacyTask.accountId;
+  db.prepare('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)').run(...keys, 't1', 'MUO-1', 'local-owner', 'todo', 'idle', 2, 1, JSON.stringify(legacyTask));
+  db.prepare('INSERT INTO attention VALUES (?,?,?,?,?,?)').run(...keys, 'project:local-project:completed', 't1', 'project_completed', JSON.stringify({ id: 'project:local-project:completed', taskId: 't1', kind: 'project_completed', title: 'Legacy project is complete', description: 'Done.', createdAt: timestamp }));
+  db.prepare('INSERT INTO chief_messages (workspace_id, project_id, id, payload) VALUES (?,?,?,?)').run(...keys, 'm1', JSON.stringify(message('m1')));
+  if (version >= 4) {
+    const legacyAsset = { ...asset('a1'), workspaceId: 'local-workspace', projectId: 'local-project', ownerUserId: 'local-owner', createdByUserId: 'local-owner', visibility: 'project' } as Record<string, unknown>;
+    delete legacyAsset.accountId;
+    db.prepare('INSERT INTO assets VALUES (?,?,?,?,?,?)').run(...keys, 'a1', 'local', 'a1', JSON.stringify(legacyAsset));
+    db.prepare('INSERT INTO planning_chats VALUES (?,?,?,?)').run(...keys, 'c1', JSON.stringify({ id: 'c1', provider: 'claude', model: null, messages: [], createdAt: timestamp, updatedAt: timestamp, busy: false }));
+    db.prepare('INSERT INTO asset_comments VALUES (?,?,?,?,?,?,?)').run(...keys, 'ac1', 'a1', 'r1', 'pending', JSON.stringify({ id: 'ac1', assetId: 'a1', requestId: 'r1', content: 'Why?', createdAt: timestamp, updatedAt: timestamp, status: 'pending' }));
+  }
+  db.close();
+  return filename;
 }
 function close(repo: SqliteRepository) { repo.close(); opened.delete(repo); }
 
@@ -49,43 +106,75 @@ afterEach(async () => {
 });
 
 describe('SqliteRepository', () => {
-  it('persists immutable assets with project and workspace isolation', async () => {
+  it('persists immutable assets with account and workspace isolation', async () => {
     const repo = await repository();
-    const otherProject = { ...scope, projectId: 'project-b' };
     const otherWorkspace = { ...scope, workspaceId: 'workspace-b' };
-    for (const target of [otherProject, otherWorkspace]) await repo.initialize(target, project(target), settings);
+    const otherAccount = { ...scope, accountId: 'account-b' };
+    for (const target of [otherWorkspace, otherAccount]) await repo.initialize(target, workspace(target), settings);
     const first = await repo.insertAsset(scope, asset('same-id'));
-    await repo.insertAsset(otherProject, { ...asset('same-id'), name: 'Other project.md' });
     await repo.insertAsset(otherWorkspace, { ...asset('same-id'), name: 'Other workspace.md' });
+    await repo.insertAsset(otherAccount, { ...asset('same-id'), name: 'Other account.md' });
     expect(await repo.assets(scope)).toEqual([first]);
-    expect((await repo.asset(otherProject, first.id))?.name).toBe('Other project.md');
     expect((await repo.asset(otherWorkspace, first.id))?.name).toBe('Other workspace.md');
-    expect(await repo.asset({ ...scope, projectId: 'missing' }, first.id)).toBeUndefined();
+    expect((await repo.asset(otherAccount, first.id))?.name).toBe('Other account.md');
+    expect(await repo.asset({ ...scope, workspaceId: 'missing' }, first.id)).toBeUndefined();
     await expect(repo.insertAsset(scope, { ...first, name: 'Replacement.md' })).rejects.toThrow();
     await expect(repo.insertAsset(scope, { ...first, id: 'duplicate-key' })).rejects.toThrow();
     expect(await repo.asset(scope, first.id)).toEqual(first);
   });
 
   it('migrates a version 1 database without changing existing task records', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'muon-repository-migration-'));
-    directories.push(directory);
-    const filename = join(directory, 'muon.sqlite');
-    let repo = await repository(filename);
-    const original = await repo.insertTask(scope, task('first'));
+    const filename = await legacyDatabase(1);
+    const legacy = { accountId: 'local-workspace', workspaceId: 'local-project', userId: 'local-owner' };
+    let repo = await repository(filename, legacy);
+    const original = await repo.task(legacy, 't1');
+    expect(original).toMatchObject({ id: 't1', identifier: 'MUO-1', accountId: 'local-workspace', workspaceId: 'local-project', title: 'Legacy task' });
+    expect(original).not.toHaveProperty('projectId');
+    const stored = await repo.insertAsset(legacy, { ...asset('asset-1'), accountId: legacy.accountId, workspaceId: legacy.workspaceId });
     close(repo);
-    const oldDatabase = new DatabaseSync(filename);
-    oldDatabase.exec('DROP TABLE assets; PRAGMA user_version = 1;');
-    oldDatabase.close();
-    repo = await repository(filename);
-    expect(await repo.task(scope, original.id)).toEqual(original);
-    const stored = await repo.insertAsset(scope, asset('asset-1'));
-    close(repo);
-    repo = await repository(filename);
-    expect(await repo.asset(scope, stored.id)).toEqual(stored);
-    expect((await repo.insertTask(scope, task('second'))).identifier).toBe('MUO-2');
+    repo = await repository(filename, legacy);
+    expect(await repo.asset(legacy, stored.id)).toEqual(stored);
+    expect(await repo.task(legacy, 't1')).toEqual(original);
+    expect((await repo.insertTask(legacy, task('second', legacy))).identifier).toBe('MUO-2');
     const migratedDatabase = new DatabaseSync(filename);
-    expect(migratedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(4);
+    expect(migratedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(5);
     migratedDatabase.close();
+  });
+
+  it('migrates a version 4 database to accounts and workspaces without losing or renaming any value', async () => {
+    const filename = await legacyDatabase(4);
+    const legacy = { accountId: 'local-workspace', workspaceId: 'local-project', userId: 'local-owner' };
+    const repo = new SqliteRepository(filename);
+    opened.add(repo);
+    const raw = new DatabaseSync(filename);
+    expect(raw.prepare('PRAGMA user_version').get()?.user_version).toBe(5);
+    expect(raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='workspaces'").get()?.n).toBe(1);
+    expect(raw.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='projects' OR sql LIKE '%project%'").get()?.n).toBe(0);
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(raw.prepare('PRAGMA integrity_check').get()?.integrity_check).toBe('ok');
+    raw.close();
+    expect(await repo.workspace(legacy)).toEqual({ id: 'local-project', accountId: 'local-workspace', ownerUserId: 'local-owner', name: 'Legacy project', identifier: 'MUO', repositoryPath: '/repos/legacy' });
+    const migratedTask = await repo.task(legacy, 't1');
+    expect(migratedTask).toMatchObject({ identifier: 'MUO-1', accountId: 'local-workspace', workspaceId: 'local-project' });
+    expect(migratedTask).not.toHaveProperty('projectId');
+    const migratedAsset = await repo.asset(legacy, 'a1');
+    expect(migratedAsset).toMatchObject({ accountId: 'local-workspace', workspaceId: 'local-project', visibility: 'workspace' });
+    expect(migratedAsset).not.toHaveProperty('projectId');
+    expect(await repo.attention(legacy)).toEqual([{ id: 'workspace:local-project:completed', taskId: 't1', kind: 'workspace_completed', title: 'Legacy project is complete', description: 'Done.', createdAt: timestamp }]);
+    await repo.removeAttention(legacy, 't1', 'workspace_completed');
+    expect(await repo.attention(legacy)).toEqual([]);
+    expect((await repo.messages(legacy)).map(item => item.id)).toEqual(['m1']);
+    expect(await repo.pendingChief(legacy)).toBe('m1');
+    expect((await repo.planningChats(legacy)).map(chat => chat.id)).toEqual(['c1']);
+    expect((await repo.assetComments(legacy, 'a1')).map(comment => comment.id)).toEqual(['ac1']);
+    expect(await repo.pendingCommentCounts(legacy)).toEqual({ a1: 1 });
+    expect((await repo.settings(legacy)).maxConcurrentAgents).toBe(3);
+    expect((await repo.insertTask(legacy, task('second', legacy))).identifier).toBe('MUO-2');
+    const again = new DatabaseSync(filename);
+    expect(() => again.prepare('INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?)').run('local-workspace', 'local-project', 'dup', 'MUO-1', 'local-owner', 'todo', 'idle', 0, 1, '{}')).toThrow(/UNIQUE constraint failed: tasks.account_id, tasks.workspace_id, tasks.identifier/);
+    expect(again.prepare('PRAGMA user_version').get()?.user_version).toBe(5);
+    again.close();
+    await expect(repo.putAttention(legacy, attention('orphan', 'missing-task'))).rejects.toThrow();
   });
 
   it('refuses a newer database schema without rewriting its version', async () => {
@@ -93,41 +182,41 @@ describe('SqliteRepository', () => {
     directories.push(directory);
     const filename = join(directory, 'muon.sqlite');
     const futureDatabase = new DatabaseSync(filename);
-    futureDatabase.exec('PRAGMA user_version = 5;');
+    futureDatabase.exec('PRAGMA user_version = 6;');
     futureDatabase.close();
     expect(() => new SqliteRepository(filename)).toThrow('newer version');
     const unchangedDatabase = new DatabaseSync(filename);
-    expect(unchangedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(5);
+    expect(unchangedDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(6);
     unchangedDatabase.close();
   });
 
-  it('isolates records by both workspace and project even when task IDs match', async () => {
+  it('isolates records by both account and workspace even when task IDs match', async () => {
     const repo = await repository();
-    const otherProject = { ...scope, projectId: 'project-b' };
     const otherWorkspace = { ...scope, workspaceId: 'workspace-b' };
-    for (const target of [otherProject, otherWorkspace]) await repo.initialize(target, project(target), settings);
+    const otherAccount = { ...scope, accountId: 'account-b' };
+    for (const target of [otherWorkspace, otherAccount]) await repo.initialize(target, workspace(target), settings);
 
     const first = await repo.insertTask(scope, task('same-id'));
-    await repo.insertTask(otherProject, { ...task('same-id', otherProject), title: 'Other project' });
     await repo.insertTask(otherWorkspace, { ...task('same-id', otherWorkspace), title: 'Other workspace' });
+    await repo.insertTask(otherAccount, { ...task('same-id', otherAccount), title: 'Other account' });
     await repo.putAttention(scope, attention('same-attention', first.id));
-    await repo.putAttention(otherProject, attention('same-attention', 'same-id'));
+    await repo.putAttention(otherWorkspace, attention('same-attention', 'same-id'));
     await repo.appendMessage(scope, message('message-a'));
-    await repo.appendMessage(otherProject, message('message-b'));
+    await repo.appendMessage(otherWorkspace, message('message-b'));
     await repo.setPendingChief(scope, 'message-a');
-    await repo.saveSettings(otherProject, { ...settings, maxConcurrentAgents: 7 });
+    await repo.saveSettings(otherWorkspace, { ...settings, maxConcurrentAgents: 7 });
 
     expect((await repo.tasks(scope)).map(item => item.title)).toEqual(['Task same-id']);
-    expect((await repo.task(otherProject, 'same-id'))?.title).toBe('Other project');
     expect((await repo.task(otherWorkspace, 'same-id'))?.title).toBe('Other workspace');
-    expect(await repo.task({ ...scope, projectId: 'missing' }, 'same-id')).toBeUndefined();
+    expect((await repo.task(otherAccount, 'same-id'))?.title).toBe('Other account');
+    expect(await repo.task({ ...scope, workspaceId: 'missing' }, 'same-id')).toBeUndefined();
     expect((await repo.messages(scope)).map(item => item.id)).toEqual(['message-a']);
-    expect((await repo.messages(otherProject)).map(item => item.id)).toEqual(['message-b']);
-    expect(await repo.pendingChief(otherProject)).toBeNull();
+    expect((await repo.messages(otherWorkspace)).map(item => item.id)).toEqual(['message-b']);
+    expect(await repo.pendingChief(otherWorkspace)).toBeNull();
     expect((await repo.settings(scope)).maxConcurrentAgents).toBe(2);
     await repo.removeAttention(scope, 'same-id');
     expect(await repo.attention(scope)).toEqual([]);
-    expect(await repo.attention(otherProject)).toHaveLength(1);
+    expect(await repo.attention(otherWorkspace)).toHaveLength(1);
   });
 
   it('allocates unique identifiers and rolls back sequence increments on a failed insert', async () => {
@@ -175,12 +264,12 @@ describe('SqliteRepository', () => {
     await expect(repo.putAttention(scope, attention('invalid', 'missing-task'))).rejects.toThrow();
   });
 
-  it('does not let scoped updates overwrite a task in another project', async () => {
+  it('does not let scoped updates overwrite a task in another workspace', async () => {
     const repo = await repository();
     const inserted = await repo.insertTask(scope, task('first'));
-    const otherProject = { ...scope, projectId: 'other-project' };
-    await repo.initialize(otherProject, project(otherProject), settings);
-    await expect(repo.saveTask(otherProject, { ...inserted, title: 'Wrong scope' }, 1)).rejects.toBeInstanceOf(ConflictError);
+    const otherWorkspace = { ...scope, workspaceId: 'other-workspace' };
+    await repo.initialize(otherWorkspace, workspace(otherWorkspace), settings);
+    await expect(repo.saveTask(otherWorkspace, { ...inserted, title: 'Wrong scope' }, 1)).rejects.toBeInstanceOf(ConflictError);
     expect(await repo.task(scope, inserted.id)).toEqual(inserted);
   });
 
@@ -198,7 +287,7 @@ describe('SqliteRepository', () => {
       worktree: { path: '/tmp/worktree', branch: 'muon/task-first', baseCommit: 'a'.repeat(40) },
     }, inserted.version);
     await repo.saveSettings(scope, { ...settings, dispatcherEnabled: false, chiefModel: 'sonnet[1m]', chiefSoul: 'Be concise.' });
-    await repo.saveProject(scope, { ...project(), name: 'Renamed project' });
+    await repo.saveWorkspace(scope, { ...workspace(), name: 'Renamed workspace' });
     await repo.putAttention(scope, attention('review-first', 'first'));
     await repo.appendMessage(scope, message('message-first'));
     await repo.appendMessage(scope, message('message-second'));
@@ -207,7 +296,7 @@ describe('SqliteRepository', () => {
 
     repo = await repository(filename);
     expect(await repo.task(scope, 'first')).toEqual(stored);
-    expect((await repo.project(scope)).name).toBe('Renamed project');
+    expect((await repo.workspace(scope)).name).toBe('Renamed workspace');
     expect(await repo.settings(scope)).toMatchObject({ dispatcherEnabled: false, chiefModel: 'sonnet[1m]', chiefSoul: 'Be concise.' });
     expect(await repo.attention(scope)).toEqual([attention('review-first', 'first')]);
     expect((await repo.messages(scope)).map(item => item.id)).toEqual(['message-first', 'message-second']);

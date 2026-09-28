@@ -1,18 +1,18 @@
-import type { AppSnapshot, Asset, AssetComment, Attention, ChiefMessage, PlanningChat, Project, Scope, Settings, Task } from '../shared/types';
+import type { AppSnapshot, Asset, AssetComment, Attention, ChiefMessage, PlanningChat, Workspace, Scope, Settings, Task } from '../shared/types';
 
 export interface Repository {
-  initialize(scope: Scope, project: Project, settings: Settings): Promise<void>;
-  project(scope: Scope): Promise<Project>;
-  /** Every project row in a workspace, in creation order, including archived ones. */
-  projects(workspaceId: string): Promise<Project[]>;
-  saveProject(scope: Scope, project: Project): Promise<void>;
+  initialize(scope: Scope, workspace: Workspace, settings: Settings): Promise<void>;
+  workspace(scope: Scope): Promise<Workspace>;
+  /** Every workspace row in a worktree, in creation order, including archived ones. */
+  workspaces(accountId: string): Promise<Workspace[]>;
+  saveWorkspace(scope: Scope, workspace: Workspace): Promise<void>;
   settings(scope: Scope): Promise<Settings>;
   saveSettings(scope: Scope, settings: Settings): Promise<void>;
   tasks(scope: Scope): Promise<Task[]>;
   task(scope: Scope, id: string): Promise<Task | undefined>;
   insertTask(scope: Scope, task: Task): Promise<Task>;
   saveTask(scope: Scope, task: Task, expectedVersion: number): Promise<Task>;
-  /** Rewrites `PREVIOUS-n` identifiers to `NEXT-n` for every task in the project; returns how many changed. */
+  /** Rewrites `PREVIOUS-n` identifiers to `NEXT-n` for every task in the workspace; returns how many changed. */
   renameTaskIdentifiers(scope: Scope, previous: string, next: string): Promise<number>;
   assets(scope: Scope): Promise<Asset[]>;
   asset(scope: Scope, id: string): Promise<Asset | undefined>;
@@ -37,7 +37,7 @@ export interface Repository {
   close(): void;
 }
 export interface ArtifactStore {
-  importFile(scope: Scope, taskId: string, workspacePath: string, relativePath: string): Promise<string>;
+  importFile(scope: Scope, taskId: string, worktreePath: string, relativePath: string): Promise<string>;
   read(scope: Scope, id: string): Promise<{ data: Uint8Array; mime: string } | undefined>;
 }
 export interface AssetStorage {

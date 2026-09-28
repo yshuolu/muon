@@ -1,17 +1,17 @@
-/** Open document tabs per project, remembered in this browser so a reload restores the reader. */
+/** Open document tabs per workspace, remembered in this browser so a reload restores the reader. */
 const MAX_TABS = 12;
-const key = (projectId: string) => `muon.libraryTabs.${projectId}`;
+const key = (workspaceId: string) => `muon.libraryTabs.${workspaceId}`;
 
-export function loadTabs(projectId: string): string[] {
+export function loadTabs(workspaceId: string): string[] {
   try {
-    const stored = window.localStorage.getItem(key(projectId));
+    const stored = window.localStorage.getItem(key(workspaceId));
     const parsed: unknown = stored ? JSON.parse(stored) : [];
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string').slice(-MAX_TABS) : [];
   } catch { return []; }
 }
 
-export function saveTabs(projectId: string, tabs: string[]) {
-  try { window.localStorage.setItem(key(projectId), JSON.stringify(tabs)); }
+export function saveTabs(workspaceId: string, tabs: string[]) {
+  try { window.localStorage.setItem(key(workspaceId), JSON.stringify(tabs)); }
   catch { /* Private browsing or blocked storage: tabs last for this page only. */ }
 }
 

@@ -27,6 +27,6 @@ export function TaskList({ snapshot, layout, onSelect, onCreate, selectedId }: {
         </button>)}</div>}
       </section>)}
     </div>}
-    <div className="list-footer"><span><span className="tiny-dot" />Local workspace</span><span>Built for progress. Designed for focus.</span></div>
+    <div className="list-footer"><span><span className="tiny-dot" />Running locally</span><span>Built for progress. Designed for focus.</span></div>
   </>;
 }

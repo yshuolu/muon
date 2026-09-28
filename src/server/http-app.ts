@@ -5,12 +5,12 @@ import { z } from 'zod';
 import { resolve } from 'node:path';
 import { DomainError, ConflictError, type ArtifactStore } from './ports';
 import type { TaskService } from './task-service';
-import type { ProjectResolver } from './project-registry';
+import type { WorkspaceResolver } from './workspace-registry';
 import type { Task } from '../shared/types';
 import {
   chiefMessageSchema, createTaskSchema, editTaskSchema, emptyMutationSchema, listAttentionQuerySchema, planningChatMessageSchema,
   listTasksQuerySchema, planCommentSchema, updatePlanCommentSchema, taskCommentSchema, requestChangesSchema, retryTaskSchema, reviewSchema, settingsSchema, attachAssetSchema, createNoteSchema, importAssetSchema, updatePlanningChatSchema,
-  createProjectSchema, updateProjectSchema, createAssetCommentSchema, updateAssetCommentSchema,
+  createWorkspaceSchema, updateWorkspaceSchema, createAssetCommentSchema, updateAssetCommentSchema,
 } from '../shared/api-contract';
 
 export interface HttpRequestAccess {
@@ -18,7 +18,7 @@ export interface HttpRequestAccess {
   observe?(request: Request, response: Response): void | Promise<void>;
 }
 function isAssetUpload(path: string, method: string) {
-  return method === 'POST' && /^\/api\/(projects\/[^/]+\/)?(assets|tasks\/[^/]+\/assets)$/.test(path);
+  return method === 'POST' && /^\/api\/(workspaces\/[^/]+\/)?(assets|tasks\/[^/]+\/assets)$/.test(path);
 }
 
 function rangeResponse(data: Uint8Array<ArrayBuffer>, headers: Headers, range?: string) {
@@ -53,16 +53,16 @@ function assetResponse(bytes: Uint8Array, mediaType: string, name: string, range
   return rangeResponse(data, headers, range);
 }
 
-type ProjectEnv = { Variables: { service: TaskService } };
+type WorkspaceEnv = { Variables: { service: TaskService } };
 
-/** Every project resource is served under `/api/projects/:project` and, for the default project, under `/api`. */
-function projectRoutes(projects: ProjectResolver) {
-  const app = new Hono<ProjectEnv>();
+/** Every workspace resource is served under `/api/workspaces/:workspace` and, for the default workspace, under `/api`. */
+function workspaceRoutes(workspaces: WorkspaceResolver) {
+  const app = new Hono<WorkspaceEnv>();
   app.use('*', async (c, next) => {
-    c.set('service', projects.resolve(c.req.param('project')));
+    c.set('service', workspaces.resolve(c.req.param('workspace')));
     await next();
   });
-  // All resource lookups use the service's project scope. Identifiers are a convenience;
+  // All resource lookups use the service's workspace scope. Identifiers are a convenience;
   // stable UUIDs remain the canonical references in returned records.
   const resolveTask = (tasks: Task[], reference: string) => {
     const task = tasks.find(item => item.id === reference) ?? tasks.find(item => item.identifier.toLowerCase() === reference.toLowerCase());
@@ -75,7 +75,7 @@ function projectRoutes(projects: ProjectResolver) {
     const tasks = (await service.snapshot()).tasks;
     const relationId = (reference: string) => {
       try { return resolveTask(tasks, reference).id; }
-      catch { throw new DomainError('Related tasks must belong to this project.'); }
+      catch { throw new DomainError('Related tasks must belong to this workspace.'); }
     };
     return {
       ...input,
@@ -83,8 +83,8 @@ function projectRoutes(projects: ProjectResolver) {
       ...(input.blockedByIds ? { blockedByIds: input.blockedByIds.map(relationId) } : {}),
     };
   };
-  app.get('/state', async c => c.json({ ...await c.get('service').snapshot(), projects: await projects.list() }));
-  app.get('/project', async c => c.json((await c.get('service').snapshot()).project));
+  app.get('/state', async c => c.json({ ...await c.get('service').snapshot(), workspaces: await workspaces.list() }));
+  app.get('/workspace', async c => c.json((await c.get('service').snapshot()).workspace));
   app.get('/settings', async c => c.json((await c.get('service').snapshot()).settings));
   app.get('/runtime', async c => c.json((await c.get('service').snapshot()).runtime));
   app.get('/attention', async c => {
@@ -292,8 +292,8 @@ function projectRoutes(projects: ProjectResolver) {
   return app;
 }
 
-export function createHttpApp(projects: ProjectResolver, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string; access?: HttpRequestAccess } = {}) {
-  void artifacts; // Legacy artifact bytes are served through each project's service; the store stays injectable for tests.
+export function createHttpApp(workspaces: WorkspaceResolver, artifacts: ArtifactStore, options: { port?: number; ready?: () => boolean; staticRoot?: string; access?: HttpRequestAccess } = {}) {
+  void artifacts; // Legacy artifact bytes are served through each workspace's service; the store stays injectable for tests.
   const app = new Hono();
   const hosts = new Set([`127.0.0.1:${options.port ?? 4310}`, `localhost:${options.port ?? 4310}`, '127.0.0.1:5173', 'localhost:5173']);
   app.use('/api/*', async (c, next) => {
@@ -329,22 +329,22 @@ export function createHttpApp(projects: ProjectResolver, artifacts: ArtifactStor
     return c.json({ error: 'The local server could not complete this request.' }, 500);
   });
   app.get('/api/health', c => c.json({ ok: true }));
-  // Workspace resources: the project list and lifecycle. Registered before the project mounts so
-  // `/api/projects` is never interpreted as a default-project resource.
-  app.get('/api/projects', async c => c.json(await projects.list()));
-  app.post('/api/projects', async c => c.json(await projects.create(createProjectSchema.parse(await c.req.json())), 201));
-  app.get('/api/projects/:project', async c => c.json(await projects.project(c.req.param('project'))));
-  app.patch('/api/projects/:project', async c => {
-    const input = updateProjectSchema.parse(await c.req.json());
-    const service = projects.resolve(c.req.param('project'));
-    if (input.identifier !== undefined) await projects.renameIdentifier(c.req.param('project'), input.identifier);
-    await service.updateSettings({ ...(input.name !== undefined ? { projectName: input.name } : {}), ...(input.repositoryPath !== undefined ? { repositoryPath: input.repositoryPath } : {}) });
-    return c.json((await service.snapshot()).project);
+  // Workspace resources: the workspace list and lifecycle. Registered before the workspace mounts so
+  // `/api/workspaces` is never interpreted as a default-workspace resource.
+  app.get('/api/workspaces', async c => c.json(await workspaces.list()));
+  app.post('/api/workspaces', async c => c.json(await workspaces.create(createWorkspaceSchema.parse(await c.req.json())), 201));
+  app.get('/api/workspaces/:workspace', async c => c.json(await workspaces.workspace(c.req.param('workspace'))));
+  app.patch('/api/workspaces/:workspace', async c => {
+    const input = updateWorkspaceSchema.parse(await c.req.json());
+    const service = workspaces.resolve(c.req.param('workspace'));
+    if (input.identifier !== undefined) await workspaces.renameIdentifier(c.req.param('workspace'), input.identifier);
+    await service.updateSettings({ ...(input.name !== undefined ? { workspaceName: input.name } : {}), ...(input.repositoryPath !== undefined ? { repositoryPath: input.repositoryPath } : {}) });
+    return c.json((await service.snapshot()).workspace);
   });
-  app.post('/api/projects/:project/archive', async c => { emptyMutationSchema.parse(await c.req.json()); return c.json(await projects.archive(c.req.param('project'))); });
-  app.post('/api/projects/:project/restore', async c => { emptyMutationSchema.parse(await c.req.json()); return c.json(await projects.restore(c.req.param('project'))); });
-  const routes = projectRoutes(projects);
-  app.route('/api/projects/:project', routes);
+  app.post('/api/workspaces/:workspace/archive', async c => { emptyMutationSchema.parse(await c.req.json()); return c.json(await workspaces.archive(c.req.param('workspace'))); });
+  app.post('/api/workspaces/:workspace/restore', async c => { emptyMutationSchema.parse(await c.req.json()); return c.json(await workspaces.restore(c.req.param('workspace'))); });
+  const routes = workspaceRoutes(workspaces);
+  app.route('/api/workspaces/:workspace', routes);
   app.route('/api', routes);
   app.all('/api/*', c => c.json({ error: 'API route not found.' }, 404));
   app.use('/*', serveStatic({ root: options.staticRoot ?? resolve('dist') }));

@@ -6,13 +6,13 @@ import { serve } from '@hono/node-server';
 import { chromium, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { LocalWorktreeProvider, type AgentAdapter, type AgentRequest, type AgentResult } from '../src/runtime';
 import { createHttpApp } from '../src/server/http-app';
-import { singleProjectResolver } from '../src/server/project-registry';
+import { singleWorkspaceResolver } from '../src/server/workspace-registry';
 import { LocalArtifactStore } from '../src/server/local-artifacts';
 import { LocalChiefCommands } from '../src/server/local-chief-commands';
 import { SqliteRepository } from '../src/server/sqlite-repository';
 import { TaskService } from '../src/server/task-service';
 
-// Real browser, HTTP, and SQLite; controlled providers never execute project commands.
+// Real browser, HTTP, and SQLite; controlled providers never execute workspace commands.
 class ControlledAdapter implements AgentAdapter {
   calls: { request: AgentRequest; finish: (text: string) => void; fail: (error: Error) => void }[] = [];
   constructor(readonly provider: 'claude' | 'codex') {}
@@ -30,20 +30,20 @@ const outputRoot = await mkdtemp(resolve('.muon/validation/chief-model-'));
 const repositoryPath = join(outputRoot, 'repository');
 await mkdir(repositoryPath);
 await writeFile(join(repositoryPath, 'README.md'), '# Chief model browser fixture\n');
-const scope = { workspaceId: 'chief-model-browser', projectId: 'isolated-project', userId: 'test-owner' };
+const scope = { accountId: 'chief-model-browser', workspaceId: 'isolated-workspace', userId: 'test-owner' };
 const databasePath = join(outputRoot, 'muon.sqlite');
 const repository = new SqliteRepository(databasePath);
-await repository.initialize(scope, { id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId, name: 'Chief model fixture', identifier: 'CM', repositoryPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
+await repository.initialize(scope, { id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId, name: 'Chief model fixture', identifier: 'CM', repositoryPath }, { defaultProvider: 'claude', dispatcherEnabled: false, maxConcurrentAgents: 1 });
 const claude = new ControlledAdapter('claude');
 const codex = new ControlledAdapter('codex');
 const artifacts = new LocalArtifactStore(join(outputRoot, 'artifacts'));
 const port = Number(process.env.MUON_CHIEF_MODEL_BROWSER_PORT ?? 4334);
 const url = `http://127.0.0.1:${port}`;
 const chiefCommands = new LocalChiefCommands({ apiUrl: url, scope });
-const service = new TaskService({ scope, repository, artifacts, chiefCommands, workspaces: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
+const service = new TaskService({ scope, repository, artifacts, chiefCommands, worktrees: new LocalWorktreeProvider(join(outputRoot, 'worktrees')), adapters: { claude, codex } });
 await service.initialize();
 service.start();
-const app = createHttpApp(singleProjectResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
+const app = createHttpApp(singleWorkspaceResolver(service), artifacts, { port, staticRoot: resolve('dist'), access: chiefCommands });
 const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 await once(server, 'listening');
 const checks: string[] = [];
@@ -220,7 +220,7 @@ try {
   await writeFile(join(outputRoot, 'report.json'), JSON.stringify({ succeeded, checks, errors, screenshots, outputRoot }, null, 2));
   await writeFile(join(outputRoot, 'run.log'), `${log.join('\n')}\n`);
   if (succeeded) {
-    await writeFile(resolve('docs/chief-model-validation.md'), `# Chief model browser validation\n\nPassed ${new Date().toISOString()}.\n\nDedicated headless Chromium with isolated SQLite and real HTTP. Provider responses are controlled; this does not test authenticated Claude execution. No project commands, user browser tabs, or user database were used.\n\n${checks.map(message => `- ${message}`).join('\n')}\n\n## Evidence\n\n- [Run log](${join(outputRoot, 'run.log')})\n- [JSON report](${join(outputRoot, 'report.json')})\n${screenshots.map(path => `- [${path.split('/').at(-1)}](${path})`).join('\n')}\n\nRerun: \`pnpm run build && pnpm exec tsx scripts/chief-model-browser-check.ts\`. Install Chromium once with \`pnpm exec playwright install chromium\`.\n`);
+    await writeFile(resolve('docs/chief-model-validation.md'), `# Chief model browser validation\n\nPassed ${new Date().toISOString()}.\n\nDedicated headless Chromium with isolated SQLite and real HTTP. Provider responses are controlled; this does not test authenticated Claude execution. No workspace commands, user browser tabs, or user database were used.\n\n${checks.map(message => `- ${message}`).join('\n')}\n\n## Evidence\n\n- [Run log](${join(outputRoot, 'run.log')})\n- [JSON report](${join(outputRoot, 'report.json')})\n${screenshots.map(path => `- [${path.split('/').at(-1)}](${path})`).join('\n')}\n\nRerun: \`pnpm run build && pnpm exec tsx scripts/chief-model-browser-check.ts\`. Install Chromium once with \`pnpm exec playwright install chromium\`.\n`);
   }
   console.log(JSON.stringify({ succeeded, outputRoot, checks: checks.length, errors }));
 }

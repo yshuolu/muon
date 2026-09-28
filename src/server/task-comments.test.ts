@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentProcessUnreapedError, type AgentAdapter, type AgentProvider, type AgentRequest, type AgentResult, type WorkspaceProvider } from '../runtime';
+import { AgentProcessUnreapedError, type AgentAdapter, type AgentProvider, type AgentRequest, type AgentResult, type WorktreeProvider } from '../runtime';
 import { assetReference } from '../shared/asset-references';
 import type { Scope, Task } from '../shared/types';
 import { AssetService } from './asset-service';
@@ -64,7 +64,7 @@ class ControlledAdapter implements AgentAdapter {
   }
 }
 
-const scope: Scope = { workspaceId: 'workspace', projectId: 'project', userId: 'owner' };
+const scope: Scope = { accountId: 'workspace', workspaceId: 'workspace', userId: 'owner' };
 interface Fixture {
   repo: SqliteRepository;
   service: TaskService;
@@ -78,17 +78,17 @@ const fixtures: Fixture[] = [];
 async function fixture(maxConcurrentAgents = 2): Promise<Fixture> {
   const repo = new SqliteRepository(':memory:');
   await repo.initialize(scope, {
-    id: scope.projectId, workspaceId: scope.workspaceId, ownerUserId: scope.userId,
+    id: scope.workspaceId, accountId: scope.accountId, ownerUserId: scope.userId,
     name: 'Task discussion tests', identifier: 'MUO', repositoryPath: '/test/repository',
   }, { maxConcurrentAgents, dispatcherEnabled: false, defaultProvider: 'claude' });
-  const workspaces: WorkspaceProvider = {
+  const worktrees: WorktreeProvider = {
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => [{ path: 'src/app.ts', status: 'M', additions: 4, deletions: 1 }]),
   };
   const artifacts: ArtifactStore = { importFile: vi.fn(async () => '/api/artifacts/test.log'), read: vi.fn(async () => undefined) };
   const claude = new ControlledAdapter('claude');
   const codex = new ControlledAdapter('codex');
-  const options: ServiceOptions = { scope, repository: repo, artifacts, workspaces, adapters: { claude, codex } };
+  const options: ServiceOptions = { scope, repository: repo, artifacts, worktrees, adapters: { claude, codex } };
   const service = new TaskService(options);
   await service.initialize();
   const result = { repo, service, services: [service], options, claude, codex };
@@ -400,7 +400,7 @@ describe('Task follow-up comments', () => {
     await dispatch(f, false);
     await f.service.commentOnTask(task.id, { content: 'Explain this result in its original worktree.', requestId: randomUUID() });
     await expect(f.service.updateSettings({ repositoryPath: '/different/repository' })).rejects.toThrow('pending agent replies');
-    expect((await f.repo.project(scope)).repositoryPath).toBe('/test/repository');
+    expect((await f.repo.workspace(scope)).repositoryPath).toBe('/test/repository');
     expect((await f.service.getTask(task.id)).followUp?.status).toBe('queued');
   });
 
@@ -515,8 +515,8 @@ describe('Task follow-up comments', () => {
     };
     const assets = new AssetService({ repository: f.repo, storage });
     f.options.assets = assets;
-    const materializeInputs = vi.fn<NonNullable<WorkspaceProvider['materializeInputs']>>(async (workspace, inputs) => inputs.map(input => ({ id: input.id, name: input.name, path: `${workspace.path}/.muon-cache/inputs/${input.id}/${input.name}` })));
-    f.options.workspaces.materializeInputs = materializeInputs;
+    const materializeInputs = vi.fn<NonNullable<WorktreeProvider['materializeInputs']>>(async (workspace, inputs) => inputs.map(input => ({ id: input.id, name: input.name, path: `${workspace.path}/.muon-cache/inputs/${input.id}/${input.name}` })));
+    f.options.worktrees.materializeInputs = materializeInputs;
     const brief = await assets.upload(scope, { name: 'approved-brief.md', data: Buffer.from('Approved implementation requirements.') });
     const discussionAsset = await assets.upload(scope, { name: 'question.md', data: Buffer.from('Explain this comparison without expanding implementation scope.') });
     const privateAsset = await assets.upload({ ...scope, userId: 'another-owner' }, { name: 'private.md', data: Buffer.from('Not authorized for this owner.') });

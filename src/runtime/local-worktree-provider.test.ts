@@ -45,17 +45,17 @@ describe('LocalWorktreeProvider', () => {
 
   it('lists the task branch’s own commits, then rebases them onto the checked-out branch and fast-forwards it', async () => {
     const provider = new LocalWorktreeProvider(root);
-    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
-    await writeFile(join(workspace.path, 'feature.txt'), 'feature\n');
-    await git(workspace.path, 'add', '.');
-    await git(workspace.path, 'commit', '-m', 'Add the feature');
-    await writeFile(join(workspace.path, 'notes.txt'), 'left uncommitted\n');
+    const worktree = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
+    await writeFile(join(worktree.path, 'feature.txt'), 'feature\n');
+    await git(worktree.path, 'add', '.');
+    await git(worktree.path, 'commit', '-m', 'Add the feature');
+    await writeFile(join(worktree.path, 'notes.txt'), 'left uncommitted\n');
     // The owner keeps working on main in the meantime.
     await writeFile(join(repository, 'other.txt'), 'main moved on\n');
     await git(repository, 'add', '.');
     await git(repository, 'commit', '-m', 'Main moves on');
-    expect((await provider.commits(workspace)).map(commit => commit.subject)).toEqual(['Add the feature']);
-    const result = await provider.integrate({ ...workspace, message: 'MUO-1: Finish the feature' });
+    expect((await provider.commits(worktree)).map(commit => commit.subject)).toEqual(['Add the feature']);
+    const result = await provider.integrate({ ...worktree, message: 'MUO-1: Finish the feature' });
     expect(result.branch).toBe(await git(repository, 'branch', '--show-current'));
     expect(result.commits.map(commit => commit.subject)).toEqual(['Add the feature', 'MUO-1: Finish the feature']);
     expect(await git(repository, 'rev-parse', 'HEAD')).toBe(result.headAfter);
@@ -63,38 +63,38 @@ describe('LocalWorktreeProvider', () => {
     expect(await readFile(join(repository, 'feature.txt'), 'utf8')).toBe('feature\n');
     expect(await readFile(join(repository, 'notes.txt'), 'utf8')).toBe('left uncommitted\n');
     expect(await git(repository, 'status', '--porcelain')).toBe('');
-    expect(await provider.commits(workspace)).toEqual([]);
-    expect(await git(workspace.path, 'branch', '--show-current')).toBe('muon/task-1');
+    expect(await provider.commits(worktree)).toEqual([]);
+    expect(await git(worktree.path, 'branch', '--show-current')).toBe('muon/task-1');
   });
 
   it('refuses to integrate over a dirty or detached checkout and aborts a conflicting rebase untouched', async () => {
     const provider = new LocalWorktreeProvider(root);
-    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
-    await writeFile(join(workspace.path, 'source.txt'), 'task version\n');
-    await git(workspace.path, 'commit', '-am', 'Task edits source');
+    const worktree = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
+    await writeFile(join(worktree.path, 'source.txt'), 'task version\n');
+    await git(worktree.path, 'commit', '-am', 'Task edits source');
     await writeFile(join(repository, 'source.txt'), 'owner draft\n');
-    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow(`uncommitted changes on ${await git(repository, 'branch', '--show-current')}`);
+    await expect(provider.integrate({ ...worktree, message: 'MUO-1: Task' })).rejects.toThrow(`uncommitted changes on ${await git(repository, 'branch', '--show-current')}`);
     await git(repository, 'commit', '-am', 'Owner edits source');
     const before = await git(repository, 'rev-parse', 'HEAD');
-    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow('hit conflicts');
+    await expect(provider.integrate({ ...worktree, message: 'MUO-1: Task' })).rejects.toThrow('hit conflicts');
     expect(await git(repository, 'rev-parse', 'HEAD')).toBe(before);
-    expect(await git(workspace.path, 'log', '--format=%s', '-1')).toBe('Task edits source');
-    expect(await git(workspace.path, 'status', '--porcelain')).toBe('');
+    expect(await git(worktree.path, 'log', '--format=%s', '-1')).toBe('Task edits source');
+    expect(await git(worktree.path, 'status', '--porcelain')).toBe('');
     await git(repository, 'checkout', '--detach', '--quiet');
-    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow('not on a branch');
+    await expect(provider.integrate({ ...worktree, message: 'MUO-1: Task' })).rejects.toThrow('not on a branch');
   });
 
   it('includes committed, staged, unstaged and untracked changes from the original base', async () => {
     const provider = new LocalWorktreeProvider(root);
-    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-diff' });
-    await writeFile(join(workspace.path, 'source.txt'), 'changed\nsecond\n');
-    await git(workspace.path, 'add', 'source.txt');
-    await git(workspace.path, 'commit', '-m', 'Agent commit');
-    await writeFile(join(workspace.path, 'staged.txt'), 'staged\n');
-    await git(workspace.path, 'add', 'staged.txt');
-    await writeFile(join(workspace.path, 'source.txt'), 'changed\nsecond\nthird\n');
-    await writeFile(join(workspace.path, 'untracked\tfile.txt'), 'one\ntwo');
-    const files = await provider.changedFiles(workspace);
+    const worktree = await provider.ensure({ repositoryPath: repository, taskId: 'task-diff' });
+    await writeFile(join(worktree.path, 'source.txt'), 'changed\nsecond\n');
+    await git(worktree.path, 'add', 'source.txt');
+    await git(worktree.path, 'commit', '-m', 'Agent commit');
+    await writeFile(join(worktree.path, 'staged.txt'), 'staged\n');
+    await git(worktree.path, 'add', 'staged.txt');
+    await writeFile(join(worktree.path, 'source.txt'), 'changed\nsecond\nthird\n');
+    await writeFile(join(worktree.path, 'untracked\tfile.txt'), 'one\ntwo');
+    const files = await provider.changedFiles(worktree);
     expect(files).toEqual(expect.arrayContaining([
       { path: 'source.txt', status: 'M', additions: 3, deletions: 1 },
       { path: 'staged.txt', status: 'A', additions: 1, deletions: 0 },
@@ -104,10 +104,10 @@ describe('LocalWorktreeProvider', () => {
 
   it('does not follow untracked symlinks or miscount binary files', async () => {
     const provider = new LocalWorktreeProvider(root);
-    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-links' });
-    await symlink(join(repository, 'source.txt'), join(workspace.path, 'link.txt'));
-    await writeFile(join(workspace.path, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
-    expect(await provider.changedFiles(workspace)).toEqual([
+    const worktree = await provider.ensure({ repositoryPath: repository, taskId: 'task-links' });
+    await symlink(join(repository, 'source.txt'), join(worktree.path, 'link.txt'));
+    await writeFile(join(worktree.path, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
+    expect(await provider.changedFiles(worktree)).toEqual([
       { path: 'binary.bin', status: 'A', additions: 0, deletions: 0 },
       { path: 'link.txt', status: 'A', additions: 0, deletions: 0 },
     ]);
@@ -118,9 +118,9 @@ describe('LocalWorktreeProvider', () => {
     await expect(provider.ensure({ repositoryPath: repository, taskId: '../escape' })).rejects.toThrow('Invalid task ID');
     await mkdir(join(repository, 'child'));
     await expect(provider.ensure({ repositoryPath: join(repository, 'child'), taskId: 'valid' })).rejects.toThrow('repository root');
-    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'valid' });
-    await expect(provider.changedFiles({ path: repository, baseCommit: workspace.baseCommit })).rejects.toThrow('Muon-owned');
-    await expect(provider.changedFiles({ path: workspace.path, baseCommit: '--help' })).rejects.toThrow('verified base commit');
+    const worktree = await provider.ensure({ repositoryPath: repository, taskId: 'valid' });
+    await expect(provider.changedFiles({ path: repository, baseCommit: worktree.baseCommit })).rejects.toThrow('Muon-owned');
+    await expect(provider.changedFiles({ path: worktree.path, baseCommit: '--help' })).rejects.toThrow('verified base commit');
   });
 
   it('refuses branches not created by Muon and preserves existing work', async () => {
@@ -180,7 +180,7 @@ describe('LocalWorktreeProvider', () => {
     await writeFile(join(source.path, 'source.txt'), 'replacement content\n');
     await expect(provider.exportChanges({ ...source, maxBytes: 64 })).rejects.toThrow(/exceeds.*no partial patch/);
     await expect(provider.exportChanges({ ...source, path: repository })).rejects.toThrow('Muon-owned');
-    await expect(provider.exportChanges({ ...source, branch: 'wrong' })).rejects.toThrow('saved task workspace');
+    await expect(provider.exportChanges({ ...source, branch: 'wrong' })).rejects.toThrow('saved task worktree');
     await git(source.path, 'checkout', '-b', 'external-branch');
     await expect(provider.exportChanges(source)).rejects.toThrow('branch changed outside Muon');
     expect(await readFile(join(source.path, 'source.txt'), 'utf8')).toBe('replacement content\n');
@@ -248,8 +248,8 @@ describe('LocalWorktreeProvider.initializeRepository', () => {
     expect(await git(plain, 'log', '--format=%s')).toBe('Initial commit recorded by Muon');
     expect(await git(plain, 'ls-files')).toBe('src/index.ts');
     expect(await git(plain, 'status', '--porcelain')).toBe('');
-    const workspace = await provider.ensure({ repositoryPath: plain, taskId: 'plain-task' });
-    expect(await readFile(join(workspace.path, 'src', 'index.ts'), 'utf8')).toBe('export const ok = true;\n');
+    const worktree = await provider.ensure({ repositoryPath: plain, taskId: 'plain-task' });
+    expect(await readFile(join(worktree.path, 'src', 'index.ts'), 'utf8')).toBe('export const ok = true;\n');
     await provider.initializeRepository(plain);
     expect(await git(plain, 'rev-list', '--count', 'HEAD')).toBe('1');
     await provider.initializeRepository(repository);

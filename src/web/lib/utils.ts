@@ -19,5 +19,5 @@ export function attentionNeedsAction(item: Attention, snapshot: AppSnapshot) {
 }
 
 export function visibleAttention(snapshot: AppSnapshot) {
-  return snapshot.attention.filter(item => attentionNeedsAction(item, snapshot) || (['completed', 'project_completed'].includes(item.kind) && !item.readAt));
+  return snapshot.attention.filter(item => attentionNeedsAction(item, snapshot) || (['completed', 'workspace_completed'].includes(item.kind) && !item.readAt));
 }

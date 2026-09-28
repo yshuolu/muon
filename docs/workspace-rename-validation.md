@@ -1,0 +1,13 @@
+# Workspace rename validation
+
+Validated on September 27, 2026 (UTC).
+
+The folder-bound unit that owns tasks, settings, the chief of staff, attention, and the library is now a **workspace** (it was a project). The tenant above it is an **account** (it was called a workspace), and the Git checkouts tasks run in are **worktrees** everywhere in the code (the runtime used to call them workspaces). "Project" is reserved for a future grouping of tasks inside a workspace and no longer appears in the product, the API, the CLI, or the code.
+
+- `pnpm run typecheck` passed.
+- `pnpm test -- --run` passed.
+- `pnpm run build` passed. Vite reports its existing bundle-size advisory for the main chunk.
+- Values never changed, only names: the identity scope still returns `local-workspace` for the account and `local-project` for the first workspace, so every existing row, asset directory, artifact directory, worktree, URL, and library tab key resolves as before.
+- SQLite schema version 5 renames the `projects` table to `workspaces` and, in every table, `workspace_id` to `account_id` before `project_id` to `workspace_id`; SQLite 3.51 rewrites the composite keys, foreign keys, and indexes. Task, asset, and workspace payloads get `accountId`/`workspaceId`, asset visibility `project` becomes `workspace`, and workspace-completion attention rows get the `workspace_completed` kind and `workspace:<id>:completed` id in both column and payload. Repository tests open real version 1 and version 4 database files built from the legacy DDL with rows in every table and check the migrated version, the absence of any `project` in `sqlite_master`, clean `foreign_key_check`/`integrity_check`, every record readable under the new scope with no `projectId` key, the renamed unique constraint, foreign keys still enforced, and a stable version on reopen; a version 6 file is refused.
+- Routes are `/api/workspaces` and `/api/workspaces/:workspace/…` (the unprefixed `/api/…` still addresses the default workspace); the chief launcher freezes `MUON_WORKSPACE`; the CLI has `workspaces list|create|archive|restore`, `muon workspace`, and `--workspace`/`MUON_WORKSPACE`; the web app lives at `/workspaces/<id>/<view>`. Old `/projects` URLs, routes, commands, and `MUON_PROJECT` are gone by decision.
+- Live: the API was started against a copy of the real database first; both workspaces (AgentSky, AgentRouter) listed with their tasks, chief history, planning chats, and library intact, then against the real data directory. The browser sidebar reads "Workspaces" with "Add workspace"; settings say "Workspace settings".

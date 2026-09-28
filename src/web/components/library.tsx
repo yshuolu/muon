@@ -164,7 +164,7 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
           <span className="status-pill">{LIBRARY_KIND_LABELS[kind]} · {asset.mediaType}</span>
           <span className="status-pill">{ORIGIN_LABELS[asset.origin]}{asset.sourcePath && <> from <code>{asset.sourcePath}</code></>}</span>
           <span className="status-pill">{formatAssetSize(asset.sizeBytes)}</span>
-          <span className="status-pill">{asset.visibility === 'project' ? 'Project' : asset.ownerUserId === snapshot.scope.userId ? 'Private to you' : 'Private'}</span>
+          <span className="status-pill">{asset.visibility === 'workspace' ? 'Workspace' : asset.ownerUserId === snapshot.scope.userId ? 'Private to you' : 'Private'}</span>
           <span className="detail-updated" title={new Date(asset.createdAt).toLocaleString()}>Added {relativeTime(asset.createdAt).toLowerCase()}</span>
         </div>
         {tasks.length > 0 && <div className="library-document-refs"><span>Referenced by</span>{tasks.map(task => <button key={task.id} onClick={() => onOpenTask(task)}><StatusIcon status={task.status} size={13} /><span className="task-identifier">{task.identifier}</span>{task.title}<ChevronRight size={12} /></button>)}</div>}
@@ -182,21 +182,21 @@ function DocumentPane({ assetId, snapshot, active, onOpenTask, onClose, onLoaded
 
 /**
  * A full-screen reader layered over the workspace the way a task opens. Every document opened becomes a tab;
- * tabs are remembered per project in this browser and stay open while the reader is closed.
+ * tabs are remembered per workspace in this browser and stay open while the reader is closed.
  */
 export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTask }: { assetId: string; snapshot: AppSnapshot; onClose: () => void; onSelect: (assetId: string) => void; onOpenTask: (task: Task) => void }) {
-  const projectId = snapshot.project.id;
-  const [tabs, setTabs] = useState<string[]>(() => openTab(loadTabs(projectId), assetId));
+  const workspaceId = snapshot.workspace.id;
+  const [tabs, setTabs] = useState<string[]>(() => openTab(loadTabs(workspaceId), assetId));
   const [names, setNames] = useState<Record<string, Asset>>({});
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preparingRevision, setPreparingRevision] = useState(false);
   useEffect(() => { setTabs(current => openTab(current, assetId)); }, [assetId]);
-  useEffect(() => { saveTabs(projectId, tabs); }, [projectId, tabs]);
+  useEffect(() => { saveTabs(workspaceId, tabs); }, [workspaceId, tabs]);
   function close(id: string) {
     const next = closeTab(tabs, id, assetId);
     setTabs(next.tabs);
-    saveTabs(projectId, next.tabs);
+    saveTabs(workspaceId, next.tabs);
     if (next.active === null) onClose();
     else if (next.active !== assetId) onSelect(next.active);
   }
@@ -204,7 +204,7 @@ export function LibraryDocument({ assetId, snapshot, onClose, onSelect, onOpenTa
   function replace(id: string, latest: string) {
     const next = replaceTab(tabs, id, latest);
     setTabs(next);
-    saveTabs(projectId, next);
+    saveTabs(workspaceId, next);
     if (id === assetId) onSelect(latest);
   }
   async function revise(current: Asset) {

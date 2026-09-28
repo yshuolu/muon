@@ -1,9 +1,9 @@
-import { projectApiPrefix } from './project';
+import { workspaceApiPrefix } from './workspace';
 
 export { assetPreviewKind, type AssetPreviewKind } from '../../shared/asset-kinds';
 
 export function assetContentUrl(id: string, download = false): string {
-  return `${projectApiPrefix()}/assets/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`;
+  return `${workspaceApiPrefix()}/assets/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`;
 }
 
 export function formatAssetSize(bytes: number): string {
@@ -13,7 +13,7 @@ export function formatAssetSize(bytes: number): string {
 }
 
 export function isAssetImageUrl(src: string | undefined): boolean {
-  return typeof src === 'string' && /^\/api\/(projects\/[A-Za-z0-9_.%~-]+\/)?assets\/[A-Za-z0-9_-]+\/content$/.test(src);
+  return typeof src === 'string' && /^\/api\/(workspaces\/[A-Za-z0-9_.%~-]+\/)?assets\/[A-Za-z0-9_-]+\/content$/.test(src);
 }
 
 interface MarkdownTree {
