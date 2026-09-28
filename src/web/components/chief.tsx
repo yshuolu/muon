@@ -13,7 +13,7 @@ import { MentionTextarea } from './mention-textarea';
 const PROVIDER_LABELS: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
 const PROVIDER_SYMBOLS: Record<Provider, string> = { claude: '✳', codex: '⌘' };
 const FALLBACK_CONFIG: Record<Provider, { model: string; thinking: string; bypassPermissions: boolean }> = {
-  claude: { model: 'claude-fable-5-1[1m]', thinking: 'max', bypassPermissions: true }, codex: { model: 'gpt-6-astra', thinking: 'ultra', bypassPermissions: true },
+  claude: { model: 'claude-fable-5-1[1m]', thinking: 'high', bypassPermissions: true }, codex: { model: 'gpt-6-astra', thinking: 'high', bypassPermissions: true },
 };
 /** Claude Code accepts short aliases; Codex uses the configured model or an explicit identifier. */
 const MODEL_ALIASES: Record<Provider, string[]> = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };

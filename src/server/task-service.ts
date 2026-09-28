@@ -106,8 +106,8 @@ export class TaskService implements Dispatcher {
   async snapshot(): Promise<AppSnapshot> {
     const [workspace, settings, tasks, attention, messages, pending] = await Promise.all([this.repo.workspace(this.scope), this.repo.settings(this.scope), this.repo.tasks(this.scope), this.repo.attention(this.scope), this.repo.messages(this.scope), this.repo.pendingChief(this.scope)]);
     const config = {
-      claude: { model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]', thinking: process.env.MUON_CLAUDE_EFFORT ?? 'max', bypassPermissions: process.env.MUON_AGENT_BYPASS_PERMISSIONS !== '0' },
-      codex: { model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra', thinking: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra', bypassPermissions: process.env.MUON_AGENT_BYPASS_PERMISSIONS !== '0' },
+      claude: { model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]', thinking: process.env.MUON_CLAUDE_EFFORT ?? 'high', bypassPermissions: process.env.MUON_AGENT_BYPASS_PERMISSIONS !== '0' },
+      codex: { model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra', thinking: process.env.MUON_CODEX_REASONING_EFFORT ?? 'high', bypassPermissions: process.env.MUON_AGENT_BYPASS_PERMISSIONS !== '0' },
     } as const;
     return { scope: this.scope, workspace, settings, tasks, attention, messages, runtime: { activeRuns: this.active.size, chiefRunning: this.chiefActive || !!pending, chiefActivity: this.chiefActive ? this.chiefActivity : null, providers: this.availability, config, demo: !!this.options.demo } };
   }

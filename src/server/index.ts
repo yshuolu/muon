@@ -25,14 +25,14 @@ const assets = new AssetService({ repository, storage: new LocalAssetStorage(res
 const adapters = demo ? { claude: new DemoAdapter('claude'), codex: new DemoAdapter('codex') } : {
   claude: new ClaudeCodeAdapter(process.env.MUON_CLAUDE_EXECUTABLE, {
     model: process.env.MUON_CLAUDE_MODEL ?? 'claude-fable-5-1[1m]',
-    effort: process.env.MUON_CLAUDE_EFFORT ?? 'max',
+    effort: process.env.MUON_CLAUDE_EFFORT ?? 'high',
     allowedNetworkDomains: process.env.MUON_CLAUDE_ALLOWED_DOMAINS?.split(',').map(domain => domain.trim()).filter(Boolean),
     allowLocalBinding: process.env.MUON_CLAUDE_ALLOW_LOCAL_SERVERS === '1',
     bypassPermissions: bypassAgentPermissions,
   }),
   codex: new CodexAdapter(process.env.MUON_CODEX_EXECUTABLE, {
     model: process.env.MUON_CODEX_MODEL ?? 'gpt-6-astra',
-    reasoningEffort: process.env.MUON_CODEX_REASONING_EFFORT ?? 'ultra',
+    reasoningEffort: process.env.MUON_CODEX_REASONING_EFFORT ?? 'high',
     bypassPermissions: bypassAgentPermissions,
   }),
 };

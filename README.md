@@ -142,13 +142,13 @@ Choose **Configure SOUL** in the Chief composer to edit the Chief's per-workspac
 | `MUON_REPOSITORY_PATH` | empty | Repository path for the first workspace when none exists yet; existing workspaces take precedence |
 | `MUON_CLAUDE_EXECUTABLE` | `claude` | Claude Code executable |
 | `MUON_CLAUDE_MODEL` | `claude-fable-5-1[1m]` | Claude Code model |
-| `MUON_CLAUDE_EFFORT` | `max` | Claude Code thinking effort |
+| `MUON_CLAUDE_EFFORT` | `high` | Claude Code thinking effort |
 | `MUON_CLAUDE_ALLOWED_DOMAINS` | `registry.npmjs.org` | Legacy allowlist used when agent permission bypass is disabled |
 | `MUON_AGENT_BYPASS_PERMISSIONS` | enabled | Set to `0` to retain provider sandbox and approval restrictions; enabled runs Claude with `--dangerously-skip-permissions` and Codex with `danger-full-access` |
 | `MUON_CLAUDE_ALLOW_LOCAL_SERVERS` | unset | Set to `1` when approved Claude tasks need to start a local preview/test server |
 | `MUON_CODEX_EXECUTABLE` | workspace-managed Codex CLI | Optional override for a specific Codex executable |
 | `MUON_CODEX_MODEL` | `gpt-6-astra` | Codex model |
-| `MUON_CODEX_REASONING_EFFORT` | `ultra` | Codex reasoning effort |
+| `MUON_CODEX_REASONING_EFFORT` | `high` | Codex reasoning effort |
 | `MUON_REVIEW_EFFORT` | `high` | Thinking effort for Library document reviews, whichever agent runs them |
 | `MUON_DEMO` | unset | Set to `1` for the isolated demo |
 | `PORT` | `4310` | Hono port; update the Vite proxy if changing it during development |

@@ -91,7 +91,7 @@ export function TaskDetail({ task, snapshot, onClose, onRefresh, onSelect, onSub
   const parent = snapshot.tasks.find(t => t.id === task.parentId);
   const isGroup = task.kind === 'group';
   const conversationLayout = !isGroup && (tab === 'comments' || tab === 'plan' && Boolean(plan));
-  const agentConfig = snapshot.runtime.config?.[task.provider] ?? (task.provider === 'claude' ? { model: 'claude-fable-5-1[1m]', thinking: 'max', bypassPermissions: true } : { model: 'gpt-6-astra', thinking: 'ultra', bypassPermissions: true });
+  const agentConfig = snapshot.runtime.config?.[task.provider] ?? (task.provider === 'claude' ? { model: 'claude-fable-5-1[1m]', thinking: 'high', bypassPermissions: true } : { model: 'gpt-6-astra', thinking: 'high', bypassPermissions: true });
   const waiting = queueReasons(task, snapshot);
   const unstarted = ['backlog', 'todo'].includes(task.status) && task.phase === 'idle';
   const ended = task.status === 'done' || task.status === 'canceled';

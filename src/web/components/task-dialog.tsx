@@ -43,7 +43,7 @@ export function TaskDialog({ open, onOpenChange, snapshot, parent, initialTitle,
         <label>Task type<select value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="coding">Coding task</option><option value="group">Task group</option></select></label>
         <label>Status<select value={status} onChange={e => setStatus(e.target.value as 'backlog' | 'todo')}><option value="todo">{kind === 'group' ? 'Todo — track subtasks' : 'Todo — ready to dispatch'}</option><option value="backlog">Backlog — save for later</option></select></label>
         {kind === 'coding' && <label>Agent<select value={provider} onChange={e => { setProvider(e.target.value as Provider); setEffort(null); }}><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label>}
-        {kind === 'coding' && <label>Thinking<EffortSelect className="" provider={provider} value={effort} defaultLevel={snapshot.runtime.config?.[provider]?.thinking ?? (provider === 'claude' ? 'max' : 'ultra')} label="Thinking effort" onChange={setEffort} /></label>}
+        {kind === 'coding' && <label>Thinking<EffortSelect className="" provider={provider} value={effort} defaultLevel={snapshot.runtime.config?.[provider]?.thinking ?? 'high'} label="Thinking effort" onChange={setEffort} /></label>}
         <label>Priority<select value={priority} onChange={e => setPriority(Number(e.target.value) as Priority)}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
       <TaskRelations tasks={snapshot.tasks} parentId={parentId} onParentChange={parent ? undefined : setParentId} blockedByIds={blockedByIds} onDependenciesChange={setBlockedByIds} />
