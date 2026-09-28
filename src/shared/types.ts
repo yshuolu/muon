@@ -69,6 +69,12 @@ export interface Evidence {
   runId?: string;
 }
 export interface ChangedFile { path: string; status: string; additions: number; deletions: number }
+export interface TaskCommit { sha: string; subject: string; authoredAt: string }
+/** How the task's commits reached the repository's checked-out branch after verification, or why they did not. */
+export interface TaskIntegration {
+  status: 'integrated' | 'failed'; branch?: string; headBefore?: string; headAfter?: string;
+  commits?: TaskCommit[]; integratedAt?: string; attemptedAt?: string; error?: string;
+}
 export interface Activity { id: string; text: string; createdAt: string }
 export interface AgentRun {
   id: string; phase: 'planning' | 'building' | 'verification' | 'discussion'; provider: Provider;
@@ -85,6 +91,9 @@ export interface Task {
   activity: Activity[]; summary: string; createdAt: string; updatedAt: string;
   completedAt?: string; version: number; runId?: string; sessionId?: string;
   worktree?: { path: string; branch: string; baseCommit: string };
+  /** The task branch's commits not yet on the repository's branch, refreshed after each run. */
+  commits?: TaskCommit[];
+  integration?: TaskIntegration;
   error?: string;
   runs?: AgentRun[];
   planDiscussion?: PlanDiscussionMessage[];

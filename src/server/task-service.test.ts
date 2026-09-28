@@ -63,6 +63,8 @@ async function fixture(maxConcurrentAgents = 1): Promise<Fixture> {
   const workspaces: WorkspaceProvider = {
     ensure: vi.fn(async ({ taskId }) => ({ path: `/test/worktrees/${taskId}`, branch: `muon/${taskId}`, baseCommit: 'a'.repeat(40) })),
     changedFiles: vi.fn(async () => [{ path: 'src/app.ts', status: 'M', additions: 4, deletions: 1 }]),
+    commits: vi.fn(async () => [{ sha: 'c'.repeat(40), subject: 'Implement the task detail', authoredAt: '2026-09-27T10:00:00Z' }]),
+    integrate: vi.fn(async () => ({ branch: 'main', headBefore: 'a'.repeat(40), headAfter: 'd'.repeat(40), commits: [{ sha: 'd'.repeat(40), subject: 'Implement the task detail', authoredAt: '2026-09-27T10:00:00Z' }] })),
     exportChanges: vi.fn(async (workspace) => ({ format: 'git-patch' as const, baseCommit: workspace.baseCommit, headCommit: workspace.baseCommit, sha256: 'f'.repeat(64), patchEncoding: 'utf8' as const, patch: 'diff --git a/src/dependency.ts b/src/dependency.ts\n+export const dependency = 42;\n', files: [{ path: 'src/dependency.ts', status: 'M', additions: 1, deletions: 0 }] })),
   };
   const artifacts: ArtifactStore = {
@@ -704,6 +706,33 @@ describe('TaskService workflow', () => {
     expect((await f.repo.attention(scope)).filter(item => item.kind === expectedKind)).toHaveLength(1);
     expect(f.workspaces.ensure).toHaveBeenCalledTimes(3);
     expect(new Set(vi.mocked(f.workspaces.ensure).mock.calls.map(([input]) => input.taskId)).size).toBe(1);
+  });
+
+  it('integrates verified work into the repository branch and records the commit stack, with a retry after failure', async () => {
+    const f = await fixture();
+    const { task, call } = await prepareVerification(f);
+    expect((await f.service.getTask(task.id)).commits).toMatchObject([{ subject: 'Implement the task detail' }]);
+    call.finish(verification('passed'));
+    const saved = await waitForState(f, task.id, 'done');
+    await eventually(async () => (await f.service.getTask(task.id)).integration?.status === 'integrated', 'integration');
+    const integrated = await f.service.getTask(task.id);
+    expect(f.workspaces.integrate).toHaveBeenCalledWith({ ...saved.worktree, message: `${task.identifier}: Implement the task detail` });
+    expect(integrated.integration).toMatchObject({ status: 'integrated', branch: 'main', headAfter: 'd'.repeat(40), commits: [{ sha: 'd'.repeat(40) }] });
+    expect(integrated.activity.at(-1)?.text).toBe('Integrated 1 commit into main: rebased onto it and fast-forwarded.');
+    await expect(f.service.integrateTask(task.id)).rejects.toMatchObject({ status: 409 });
+
+    const g = await fixture();
+    vi.mocked(g.workspaces.integrate!).mockRejectedValueOnce(new Error('The repository has uncommitted changes on main. Commit or stash them, then integrate again.'));
+    const other = await prepareVerification(g);
+    other.call.finish(verification('passed'));
+    await waitForState(g, other.task.id, 'done');
+    await eventually(async () => (await g.service.getTask(other.task.id)).integration?.status === 'failed', 'failed integration');
+    const failed = await g.service.getTask(other.task.id);
+    expect(failed.integration?.error).toContain('uncommitted changes');
+    expect(failed.status).toBe('done');
+    expect(failed.activity.at(-1)?.text).toContain('did not happen');
+    const retried = await g.service.integrateTask(other.task.id);
+    expect(retried.integration?.status).toBe('integrated');
   });
 
   it('persists three distinct succeeded coding runs and their approved RFC association', async () => {

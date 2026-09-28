@@ -56,8 +56,27 @@ export interface WorkspaceChanges {
   files: ChangedFile[];
 }
 
+export interface TaskCommit { sha: string; subject: string; authoredAt: string }
+
+export interface IntegrationResult {
+  /** The branch checked out in the owner's repository that now contains the task's commits. */
+  branch: string;
+  headBefore: string;
+  headAfter: string;
+  /** The task's commits as they now appear on that branch, oldest first. */
+  commits: TaskCommit[];
+}
+
 export interface WorkspaceProvider {
   validateRepository?(repositoryPath: string): Promise<void>;
+  /** The task branch's own commits (not yet on the repository's checked-out branch), oldest first. */
+  commits?(input: TaskWorkspace): Promise<TaskCommit[]>;
+  /**
+   * Commits leftover work on the task branch, rebases the branch onto the repository's checked-out branch, and
+   * fast-forwards that branch. Rejects, leaving everything as it was, when the checkout is dirty or detached or
+   * the rebase conflicts.
+   */
+  integrate?(input: TaskWorkspace & { message: string }): Promise<IntegrationResult>;
   /** Turns a plain folder into a repository with an initial commit of its current contents, at the owner's request. */
   initializeRepository?(repositoryPath: string): Promise<void>;
   ensure(input: { repositoryPath: string; taskId: string; baseRef?: string }): Promise<TaskWorkspace>;

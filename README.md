@@ -42,6 +42,7 @@ Open **http://127.0.0.1:4310**. Development runs React on 5173 and Hono on 4310;
 4. The task pauses in **Needs your approval** (the RFC is written and waits for you) and releases its agent slot. **Attention** points you to the RFC. Review it the way you review a Library document: the RFC opens with an outline of its sections, and selecting a passage offers **Comment**, while **On RFC** comments on the whole plan. Comments collect in the sidebar, where you can edit or delete them until they are sent; **Revise RFC · N comments** sends them all in one planning turn. The agent answers each comment beside it (Answered, Changed, or Declined) and returns the next RFC version, keeping every earlier version and its comments. Repeat as needed, then approve the exact latest revision. Approval waits while comments are unsent.
 5. The approved task queues for **Building**, then **Verification**, reusing its worktree and provider session. Muon validates the worktree identity before each phase.
 6. Passing verification creates a **Done** task with test steps, final summary, retained output files and screenshots/recordings when provided, and Git-derived changed files. Failures and unrun checks become **Blocked** and appear in Attention; their retained files remain available.
+7. Verified work lands on your branch. The agent commits on the task branch as it builds (anything left uncommitted becomes one final commit named after the task); Muon then rebases those commits onto the branch checked out in your repository and fast-forwards it, so `main` moves without a merge commit. The **Changes** tab shows the commit stack with its integration status. If your checkout has uncommitted changes, is not on a branch, or the rebase conflicts, nothing is touched: the task stays Done with the reason recorded, and **Integrate again** retries once you have resolved it.
 
 Send a task comment to follow up with its agent. Muon interrupts active work, waits for shutdown, delivers the message in a read-only turn using the same session and worktree, and saves the final reply as a comment before resuming the prior phase. Questions on Done or Blocked tasks preserve their state and evidence. Request a new RFC for changed scope; it still needs owner approval before implementation. Comments and delivery failures remain saved for retry. Unstarted-task comments become planning context; canceled tasks and groups do not accept follow-ups.
 
@@ -176,6 +177,7 @@ TypeScript, React, Tailwind CSS 4, shadcn-style Radix primitives, Hono, and Node
 - [Library access, @ mentions, and thinking effort validation](docs/library-mentions-validation.md)
 - [Task scope editing validation](docs/task-scope-edit-validation.md)
 - [RFC review validation](docs/rfc-review-validation.md)
+- [Task integration validation](docs/integration-validation.md)
 - [Conversation scrolling behavior and validation](docs/conversation-scroll-validation.md)
 
 ```sh

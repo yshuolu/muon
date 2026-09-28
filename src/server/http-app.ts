@@ -216,6 +216,11 @@ function projectRoutes(projects: ProjectResolver) {
     const body = planCommentSchema.parse(await c.req.json());
     return c.json(await service.commentOnPlan((await taskByReference(service, c.req.param('id'))).id, body.planId, body.content, { anchor: body.anchor, revise: body.revise }));
   });
+  app.post('/tasks/:id/integrate', async c => {
+    const service = c.get('service');
+    emptyMutationSchema.parse(await c.req.json());
+    return c.json(await service.integrateTask((await taskByReference(service, c.req.param('id'))).id));
+  });
   app.post('/tasks/:id/plan-discussion/revise', async c => {
     const service = c.get('service');
     const body = reviewSchema.parse(await c.req.json());

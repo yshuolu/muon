@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, DocumentReview, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, Project, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment } from '../shared/types';
+import type { AgentRun, AppSnapshot, Asset, AssetComment, AssetCommentAnchor, AssetCommentThread, Attention, CommentOnTaskInput, CreateTaskInput, DependencyInput, DocumentReview, Evidence, PlanDiscussionMessage, PlanningChat, PlanningChatMessage, Project, PlanningChatSummary, Provider, RetryTaskInput, Scope, Settings, Task, TaskComment, TaskCommit } from '../shared/types';
 import { assetPreviewKind } from '../shared/asset-kinds';
 import { AgentProcessUnreapedError, type AgentAdapter, type ScratchFile, type TaskWorkspace, type WorkspaceProvider } from '../runtime';
 import { ConflictError, DomainError, type ArtifactStore, type ChiefCommandGateway, type ChiefCommandSession, type Dispatcher, type Repository } from './ports';
@@ -1202,8 +1202,9 @@ export class TaskService implements Dispatcher {
     }
     if (phase === 'building') {
       const changedFiles = await this.options.workspaces.changedFiles(worktree);
+      const commits = await this.workspaceCommits(worktree);
       await this.mutateTask(task.id, latest => this.runIsCurrent(latest, task.runId, signal) ? {
-        patch: { summary: result.text, changedFiles, status: 'todo', phase: 'verification', runId: undefined, sessionId: result.sessionId ?? latest.sessionId }, activity: 'Implementation finished. Verification queued.',
+        patch: { summary: result.text, changedFiles, commits, status: 'todo', phase: 'verification', runId: undefined, sessionId: result.sessionId ?? latest.sessionId }, activity: 'Implementation finished. Verification queued.',
       } : undefined);
       return;
     }
@@ -1242,22 +1243,59 @@ export class TaskService implements Dispatcher {
       }
     }
     const changedFiles = await this.options.workspaces.changedFiles(worktree);
+    const commits = await this.workspaceCommits(worktree);
     const testEvidence = evidence.filter(item => item.kind === 'test');
     const verified = testEvidence.some(item => item.result === 'passed') && !testEvidence.some(item => item.result === 'failed' || item.result === 'skipped');
     const error = verified ? undefined : failedAttachments ? `Verification requires attention: ${failedAttachments} evidence attachment${failedAttachments === 1 ? '' : 's'} could not be stored. Test steps, results, and available assets were retained. Inspect the evidence before retrying.` : 'Verification did not pass all reported tests. Inspect the evidence, then retry verification, fix the implementation, or request a new RFC.';
     const saved = await this.mutateTask(task.id, latest => this.runIsCurrent(latest, task.runId, signal) ? {
-      patch: { evidence: [...latest.evidence, ...evidence], changedFiles, summary: [verification.summary, ...outputReferences].join('\n\n'), status: verified ? 'done' : 'blocked', phase: verified ? 'complete' : 'verification', runId: undefined, sessionId: result.sessionId ?? latest.sessionId, completedAt: verified ? now() : undefined, error }, activity: verified ? 'Verification passed. Task completed; branch retained for review.' : 'Verification requires attention.',
+      patch: { evidence: [...latest.evidence, ...evidence], changedFiles, commits, summary: [verification.summary, ...outputReferences].join('\n\n'), status: verified ? 'done' : 'blocked', phase: verified ? 'complete' : 'verification', runId: undefined, sessionId: result.sessionId ?? latest.sessionId, completedAt: verified ? now() : undefined, error }, activity: verified ? 'Verification passed. Task completed; branch retained for review.' : 'Verification requires attention.',
     } : undefined);
     if (!saved.runId && !signal.aborted && saved.status === (verified ? 'done' : 'blocked')) await this.notify(saved, verified ? 'completed' : 'blocked', verified ? verification.summary : saved.error!);
+    // Verified work lands on the owner's branch right away; a failure is recorded on the task for a retry.
+    if (verified && saved.status === 'done' && !saved.runId && !signal.aborted) await this.integrate(saved);
+  }
+  private async workspaceCommits(worktree: TaskWorkspace): Promise<TaskCommit[] | undefined> {
+    if (!this.options.workspaces.commits) return undefined;
+    try { return await this.options.workspaces.commits(worktree); } catch { return undefined; }
+  }
+  /** Rebases the task's commits onto the repository's checked-out branch and fast-forwards it, recording the commit stack. */
+  private async integrate(task: Task): Promise<Task> {
+    if (!task.worktree || !this.options.workspaces.integrate) return task;
+    const attemptedAt = now();
+    try {
+      const result = await this.options.workspaces.integrate({ ...task.worktree, message: `${task.identifier}: ${task.title}` });
+      const count = result.commits.length;
+      return await this.mutateTask(task.id, () => ({
+        patch: { commits: result.commits, integration: { status: 'integrated', branch: result.branch, headBefore: result.headBefore, headAfter: result.headAfter, commits: result.commits, integratedAt: now() } },
+        activity: `Integrated ${count} ${count === 1 ? 'commit' : 'commits'} into ${result.branch}: rebased onto it and fast-forwarded.`,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return await this.mutateTask(task.id, latest => ({
+        patch: { integration: { status: 'failed', error: message, attemptedAt, commits: latest.integration?.commits } },
+        activity: `Integration into the repository branch did not happen: ${message}`,
+      }));
+    }
+  }
+  /** Retries integration for a completed task, for example after the owner committed or stashed their own changes. */
+  async integrateTask(id: string) {
+    const task = await this.getTask(id);
+    if (task.ownerUserId !== this.scope.userId) throw new DomainError('Only the task owner may integrate its commits.', 403);
+    if (task.kind === 'group' || task.status !== 'done' || !task.worktree) throw new DomainError('Only completed coding tasks with a worktree can be integrated.', 409);
+    if (task.integration?.status === 'integrated') throw new DomainError(`This task is already integrated into ${task.integration.branch}.`, 409);
+    if (this.active.has(id)) throw new DomainError('Wait for the running agent to finish before integrating.', 409);
+    if (!this.options.workspaces.integrate) throw new DomainError('This workspace provider cannot integrate task branches.', 503);
+    return this.integrate(task);
   }
   private async fail(id: string, runId: string, error: unknown) {
     const task = await this.getTask(id);
     if (task.runId !== runId || task.status === 'canceled') return;
     let changedFiles = task.changedFiles;
     if (task.worktree) try { changedFiles = await this.options.workspaces.changedFiles(task.worktree); } catch { /* Preserve the primary execution failure. */ }
+    const commits = task.worktree ? await this.workspaceCommits(task.worktree) : undefined;
     const message = error instanceof Error ? error.message : String(error);
     const saved = await this.mutateTask(id, latest => latest.runId === runId && latest.status !== 'canceled' ? {
-      patch: { status: 'blocked', runId: undefined, changedFiles, error: message, sessionId: this.active.get(id)?.sessionId ?? latest.sessionId,
+      patch: { status: 'blocked', runId: undefined, changedFiles, ...(commits ? { commits } : {}), error: message, sessionId: this.active.get(id)?.sessionId ?? latest.sessionId,
         ...(latest.followUp ? { followUp: { ...latest.followUp, status: 'failed', error: message } } : {}),
       }, activity: 'Agent stopped; owner attention needed.', runStatus: 'failed',
     } : undefined);

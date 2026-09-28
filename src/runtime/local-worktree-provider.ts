@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { ChangedFile, TaskWorkspace, WorkspaceProvider } from './contracts.js';
+import type { ChangedFile, IntegrationResult, TaskCommit, TaskWorkspace, WorkspaceProvider } from './contracts.js';
 import { exportWorktreeChanges } from './local-worktree-export.js';
 import { ASSET_INPUT_DIRECTORY, materializeAssetInputs } from './local-asset-inputs.js';
 
@@ -32,6 +32,24 @@ async function exists(path: string): Promise<boolean> {
 async function gitCommonDirectory(path: string): Promise<string> {
   const directory = (await git(path, ['rev-parse', '--git-common-dir'])).trim();
   return realpath(resolve(path, directory));
+}
+
+/** `git log` output with NUL-separated fields, one commit per line. */
+function parseLog(output: string): TaskCommit[] {
+  return output.split('\n').filter(Boolean).map(line => {
+    const [sha, subject, authoredAt] = line.split('\0');
+    return { sha, subject: subject ?? '', authoredAt: authoredAt ?? '' };
+  });
+}
+
+/** Commits and rebases need an identity; fall back to Muon's when the owner configured none. */
+async function commitIdentity(path: string): Promise<string[]> {
+  const identity: string[] = [];
+  for (const [key, fallback] of [['user.name', 'Muon'], ['user.email', 'muon@localhost']] as const) {
+    const configured = await git(path, ['config', '--get', key]).catch(() => '');
+    if (!configured.trim()) identity.push('-c', `${key}=${fallback}`);
+  }
+  return identity;
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -67,13 +85,55 @@ export class LocalWorktreeProvider implements WorkspaceProvider {
     if (top !== undefined && top !== path) throw new Error('This folder is inside another Git repository. Choose that repository root instead.');
     if (top === undefined) await git(path, ['init', '--quiet']);
     try { await git(path, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']); return; } catch { /* No commits yet. */ }
-    const identity: string[] = [];
-    for (const [key, fallback] of [['user.name', 'Muon'], ['user.email', 'muon@localhost']] as const) {
-      const configured = await git(path, ['config', '--get', key]).catch(() => '');
-      if (!configured.trim()) identity.push('-c', `${key}=${fallback}`);
-    }
+    const identity = await commitIdentity(path);
     await git(path, ['add', '--all']);
     await git(path, [...identity, 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Initial commit recorded by Muon']);
+  }
+
+  /** A task workspace this provider created, re-validated against its saved manifest before Git touches it. */
+  private async ownedWorkspace(input: { path: string; baseCommit: string }, purpose: string): Promise<{ path: string; manifest: Manifest }> {
+    if (!/^[0-9a-f]{40,64}$/.test(input.baseCommit)) throw new Error('A verified base commit is required.');
+    const root = await realpath(this.root);
+    const path = await realpath(input.path);
+    if (!inside(root, path)) throw new Error(`${purpose} must target a Muon-owned worktree.`);
+    const manifest = JSON.parse(await readFile(join(path, '..', 'workspace.json'), 'utf8')) as Manifest;
+    if (manifest.path !== path || manifest.baseCommit !== input.baseCommit || manifest.commonDirectory !== await gitCommonDirectory(path)) throw new Error(`${purpose} does not match the saved task workspace.`);
+    if ((await git(path, ['symbolic-ref', '--short', 'HEAD'])).trim() !== manifest.branch) throw new Error('Worktree branch changed outside Muon; review it before continuing.');
+    return { path, manifest };
+  }
+
+  async commits(input: TaskWorkspace): Promise<TaskCommit[]> {
+    const { path, manifest } = await this.ownedWorkspace(input, 'Commit inspection');
+    const target = (await git(manifest.repositoryPath, ['symbolic-ref', '--short', '--quiet', 'HEAD']).catch(() => '')).trim();
+    // The task's own commits: everything on the branch that the owner's checked-out branch does not have yet.
+    const range = target && target !== manifest.branch ? ['HEAD', '--not', `refs/heads/${target}`] : [`${input.baseCommit}..HEAD`];
+    return parseLog(await git(path, ['log', '--reverse', '--format=%H%x00%s%x00%aI', ...range, '--']));
+  }
+
+  async integrate(input: TaskWorkspace & { message: string }): Promise<IntegrationResult> {
+    const { path, manifest } = await this.ownedWorkspace(input, 'Integration');
+    const repositoryPath = manifest.repositoryPath;
+    const target = (await git(repositoryPath, ['symbolic-ref', '--short', '--quiet', 'HEAD']).catch(() => '')).trim();
+    if (!target) throw new Error('The repository checkout is not on a branch. Check out the branch that should receive this task, then integrate again.');
+    if (target === manifest.branch) throw new Error('The repository has the task branch checked out. Check out your main branch, then integrate again.');
+    if ((await git(repositoryPath, ['status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error(`The repository has uncommitted changes on ${target}. Commit or stash them, then integrate again.`);
+    const identity = await commitIdentity(path);
+    // Work the agent left uncommitted becomes one final commit; Muon's managed input copies never do.
+    const pathspec = ['--', '.', `:(exclude)${ASSET_INPUT_DIRECTORY}`];
+    if ((await git(path, ['status', '--porcelain', ...pathspec])).trim()) {
+      await git(path, ['add', '--all', ...pathspec]);
+      await git(path, [...identity, 'commit', '--quiet', '--no-verify', '-m', input.message]);
+    }
+    const headBefore = (await git(repositoryPath, ['rev-parse', '--verify', `refs/heads/${target}^{commit}`])).trim();
+    try { await git(path, [...identity, 'rebase', '--quiet', `refs/heads/${target}`]); }
+    catch (error) {
+      await git(path, ['rebase', '--abort']).catch(() => undefined);
+      throw new Error(`Rebasing onto ${target} hit conflicts. Resolve them in the task worktree (${path}) and integrate again. ${error instanceof Error ? error.message.split('\n').find(line => line.startsWith('CONFLICT')) ?? '' : ''}`.trim());
+    }
+    const commits = parseLog(await git(path, ['log', '--reverse', '--format=%H%x00%s%x00%aI', `refs/heads/${target}..HEAD`, '--']));
+    await git(repositoryPath, ['merge', '--ff-only', '--quiet', manifest.branch]);
+    const headAfter = (await git(repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    return { branch: target, headBefore, headAfter, commits };
   }
 
   private async validateExport(input: TaskWorkspace): Promise<Manifest> {

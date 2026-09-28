@@ -1357,3 +1357,16 @@ mark.doc-comment.pulse { background: color-mix(in oklch, var(--warning) 60%, tra
 .plan-version-link { align-self: flex-start; font-size: 11px; color: var(--muted-foreground); text-decoration: underline; text-underline-offset: 3px; }
 .plan-agent-note { cursor: default; }
 .plan-agent-note .markdown { font-size: 13px; line-height: 1.6; }
+
+/* Commit stack on the Changes tab */
+.commit-stack { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.commit-stack .files-summary { flex-wrap: wrap; gap: 8px 14px; }
+.commit-integration { font-size: 12px; color: var(--muted-foreground); }
+.commit-integration.integrated { color: var(--success); }
+.commit-integration.failed { color: var(--destructive); }
+.commit-stack ol { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+.commit-stack li { display: flex; align-items: center; gap: 12px; padding: 8px 12px; font-size: 13px; border-top: 1px solid var(--border); }
+.commit-stack li:first-child { border-top: 0; }
+.commit-stack li code { font-size: 11px; color: var(--muted-foreground); }
+.commit-stack li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-stack li time { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }

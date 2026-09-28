@@ -43,6 +43,47 @@ describe('LocalWorktreeProvider', () => {
     expect(await git(first.path, 'branch', '--show-current')).toBe('muon/task-1');
   });
 
+  it('lists the task branch’s own commits, then rebases them onto the checked-out branch and fast-forwards it', async () => {
+    const provider = new LocalWorktreeProvider(root);
+    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
+    await writeFile(join(workspace.path, 'feature.txt'), 'feature\n');
+    await git(workspace.path, 'add', '.');
+    await git(workspace.path, 'commit', '-m', 'Add the feature');
+    await writeFile(join(workspace.path, 'notes.txt'), 'left uncommitted\n');
+    // The owner keeps working on main in the meantime.
+    await writeFile(join(repository, 'other.txt'), 'main moved on\n');
+    await git(repository, 'add', '.');
+    await git(repository, 'commit', '-m', 'Main moves on');
+    expect((await provider.commits(workspace)).map(commit => commit.subject)).toEqual(['Add the feature']);
+    const result = await provider.integrate({ ...workspace, message: 'MUO-1: Finish the feature' });
+    expect(result.branch).toBe(await git(repository, 'branch', '--show-current'));
+    expect(result.commits.map(commit => commit.subject)).toEqual(['Add the feature', 'MUO-1: Finish the feature']);
+    expect(await git(repository, 'rev-parse', 'HEAD')).toBe(result.headAfter);
+    expect(await git(repository, 'log', '--format=%s', '-4')).toBe('MUO-1: Finish the feature\nAdd the feature\nMain moves on\nInitial');
+    expect(await readFile(join(repository, 'feature.txt'), 'utf8')).toBe('feature\n');
+    expect(await readFile(join(repository, 'notes.txt'), 'utf8')).toBe('left uncommitted\n');
+    expect(await git(repository, 'status', '--porcelain')).toBe('');
+    expect(await provider.commits(workspace)).toEqual([]);
+    expect(await git(workspace.path, 'branch', '--show-current')).toBe('muon/task-1');
+  });
+
+  it('refuses to integrate over a dirty or detached checkout and aborts a conflicting rebase untouched', async () => {
+    const provider = new LocalWorktreeProvider(root);
+    const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-1' });
+    await writeFile(join(workspace.path, 'source.txt'), 'task version\n');
+    await git(workspace.path, 'commit', '-am', 'Task edits source');
+    await writeFile(join(repository, 'source.txt'), 'owner draft\n');
+    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow(`uncommitted changes on ${await git(repository, 'branch', '--show-current')}`);
+    await git(repository, 'commit', '-am', 'Owner edits source');
+    const before = await git(repository, 'rev-parse', 'HEAD');
+    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow('hit conflicts');
+    expect(await git(repository, 'rev-parse', 'HEAD')).toBe(before);
+    expect(await git(workspace.path, 'log', '--format=%s', '-1')).toBe('Task edits source');
+    expect(await git(workspace.path, 'status', '--porcelain')).toBe('');
+    await git(repository, 'checkout', '--detach', '--quiet');
+    await expect(provider.integrate({ ...workspace, message: 'MUO-1: Task' })).rejects.toThrow('not on a branch');
+  });
+
   it('includes committed, staged, unstaged and untracked changes from the original base', async () => {
     const provider = new LocalWorktreeProvider(root);
     const workspace = await provider.ensure({ repositoryPath: repository, taskId: 'task-diff' });
